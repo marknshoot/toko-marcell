@@ -37,13 +37,22 @@ const CATEGORIES = [
 function App() {
 
   const [selectedCategory, setSelectedCategory] = useState("All");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [cartCount, setCartCount] = useState(0);
 
-  const visibleProducts = 
+  let visibleProducts = 
     selectedCategory == "All" 
       ? MOCK_PRODUCTS 
       : MOCK_PRODUCTS.filter(
         (product) => product.category === selectedCategory
       )
+
+  const q = searchQuery.trim().toLowerCase();
+  if (q !== "") {
+    visibleProducts = visibleProducts.filter((product) =>
+      product.title.toLowerCase().includes(q)
+    );
+  }
 
   return (
     <div className="app">
@@ -51,7 +60,7 @@ function App() {
         <a href="/" className="logo"> Toko Marcell </a>
         <nav className="nav">
           <a href="#catalog">Shop</a>
-          <a href="#cart" className="cart-link">Cart (0)</a>
+          <a href="#cart" className="cart-link">Cart ({cartCount})</a>
         </nav>
       </header>
 
@@ -72,8 +81,8 @@ function App() {
             <input
               type="search"
               placeholder="Search products…"
-              disabled
-              readOnly
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
             />
             <button type="button" disabled> Search </button>
           </div>
@@ -92,13 +101,25 @@ function App() {
           </div>
 
           <div className="product-grid">
-            {visibleProducts.map((product) => (
-              <article key={product.id} className="product-card">
-                <div className="product-img" aria-hidden="true" />
-                <p className="product-title">{product.title}</p>
-                <p className="product-price">{formatRp(product.priceIdr)}</p>
-              </article>
-            ))}
+            {visibleProducts.length === 0 
+              ? (
+                <p className="empty-message"> No products found. Try another search.</p>
+              ) 
+              : visibleProducts.map((product) => (
+                <article key={product.id} className="product-card">
+                  <div className="product-img" />
+                  <p className="product-title">{product.title}</p>
+                  <p className="product-price">{formatRp(product.priceIdr)}</p>
+                  <button
+                    type="button"
+                    className="button"
+                    onClick={() => setCartCount(cartCount+1)}
+                  >
+                    Add
+                  </button>
+                </article>
+              ))
+            }
           </div>
 
           <div className="pager">
