@@ -1,121 +1,118 @@
-import { useState } from 'react'
-import reactLogo from './assets/react.svg'
-import viteLogo from './assets/vite.svg'
-import heroImg from './assets/hero.png'
 import './App.css'
+import { formatRp } from "./lib/formatRp";
+import { useState } from 'react';
+
+const MOCK_PRODUCTS = [
+  {
+    id: "1",
+    title: "Cotton Tee",
+    priceIdr: 129000,
+    category: "Tops",
+  },
+  {
+    id: "2",
+    title: "Linen Shirt",
+    priceIdr: 249000,
+    category: "Tops",
+  },
+  {
+    id: "3",
+    title: "Chino Pants",
+    priceIdr: 299000,
+    category: "Bottoms",
+  },
+  {
+    id: "4",
+    title: "Canvas Tote",
+    priceIdr: 99000,
+    category: "Accessories",
+  },
+];
+
+const CATEGORIES = [
+  "All",
+  ...new Set(MOCK_PRODUCTS.map((p) => p.category)),
+];
 
 function App() {
-  const [count, setCount] = useState(0)
+
+  const [selectedCategory, setSelectedCategory] = useState("All");
+
+  const visibleProducts = 
+    selectedCategory == "All" 
+      ? MOCK_PRODUCTS 
+      : MOCK_PRODUCTS.filter(
+        (product) => product.category === selectedCategory
+      )
 
   return (
-    <>
-      <section id="center">
-        <div className="hero">
-          <img src={heroImg} className="base" width="170" height="179" alt="" />
-          <img src={reactLogo} className="framework" alt="React logo" />
-          <img src={viteLogo} className="vite" alt="Vite logo" />
-        </div>
-        <div>
-          <h1>Get started</h1>
-          <p>
-            Edit <code>src/App.jsx</code> and save to test <code>HMR</code>
-          </p>
-        </div>
-        <button
-          type="button"
-          className="counter"
-          onClick={() => setCount((count) => count + 1)}
-        >
-          Count is {count}
-        </button>
-      </section>
+    <div className="app">
+      <header className="site-header">
+        <a href="/" className="logo"> Toko Marcell </a>
+        <nav className="nav">
+          <a href="#catalog">Shop</a>
+          <a href="#cart" className="cart-link">Cart (0)</a>
+        </nav>
+      </header>
 
-      <div className="ticks"></div>
+      <main>
+        <section className="hero">
+          <p className="eyebrow">Single-brand shop</p>
+          <h1>Toko Marcell</h1>
+          <p className="hero-text"> Short pitch about everyday pieces and demo checkout.</p>
+          <div className="hero-actions">
+            <a className="button" href="#catalog">Shop collection</a>
+          </div>
+        </section>
 
-      <section id="next-steps">
-        <div id="docs">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#documentation-icon"></use>
-          </svg>
-          <h2>Documentation</h2>
-          <p>Your questions, answered</p>
-          <ul>
-            <li>
-              <a href="https://vite.dev/" target="_blank">
-                <img className="logo" src={viteLogo} alt="" />
-                Explore Vite
-              </a>
-            </li>
-            <li>
-              <a href="https://react.dev/" target="_blank">
-                <img className="button-icon" src={reactLogo} alt="" />
-                Learn more
-              </a>
-            </li>
-          </ul>
-        </div>
-        <div id="social">
-          <svg className="icon" role="presentation" aria-hidden="true">
-            <use href="/icons.svg#social-icon"></use>
-          </svg>
-          <h2>Connect with us</h2>
-          <p>Join the Vite community</p>
-          <ul>
-            <li>
-              <a href="https://github.com/vitejs/vite" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#github-icon"></use>
-                </svg>
-                GitHub
-              </a>
-            </li>
-            <li>
-              <a href="https://chat.vite.dev/" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#discord-icon"></use>
-                </svg>
-                Discord
-              </a>
-            </li>
-            <li>
-              <a href="https://x.com/vite_js" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#x-icon"></use>
-                </svg>
-                X.com
-              </a>
-            </li>
-            <li>
-              <a href="https://bsky.app/profile/vite.dev" target="_blank">
-                <svg
-                  className="button-icon"
-                  role="presentation"
-                  aria-hidden="true"
-                >
-                  <use href="/icons.svg#bluesky-icon"></use>
-                </svg>
-                Bluesky
-              </a>
-            </li>
-          </ul>
-        </div>
-      </section>
+        <section id="catalog" className="catalog">
+          <h2>Shop</h2>
 
-      <div className="ticks"></div>
-      <section id="spacer"></section>
-    </>
+          <div className="search-row">
+            <input
+              type="search"
+              placeholder="Search products…"
+              disabled
+              readOnly
+            />
+            <button type="button" disabled> Search </button>
+          </div>
+
+          <div className="chips">
+            {CATEGORIES.map((cat) => (
+              <button
+                key={cat}
+                type="button"
+                className={selectedCategory === cat ? "chip chip-on" : "chip"}
+                onClick={() => setSelectedCategory(cat)}
+              >
+                {cat}
+              </button>
+            ))}
+          </div>
+
+          <div className="product-grid">
+            {visibleProducts.map((product) => (
+              <article key={product.id} className="product-card">
+                <div className="product-img" aria-hidden="true" />
+                <p className="product-title">{product.title}</p>
+                <p className="product-price">{formatRp(product.priceIdr)}</p>
+              </article>
+            ))}
+          </div>
+
+          <div className="pager">
+            <button type="button" disabled>{"< Prev"}</button>
+            <span>Page 1 of N</span>
+            <button type="button" disabled>{"Next>"}</button>
+          </div>
+        </section>
+      </main>
+
+      <footer className="site-footer">
+        <p>Made by Marcell Hermawan Kristianto</p>
+      </footer>
+    </div>
   )
 }
 
