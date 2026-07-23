@@ -1,6 +1,7 @@
 import './App.css'
 import { formatRp } from "./lib/formatRp";
 import { useState } from 'react';
+import ProductCard from './components/ProductCard';
 
 const MOCK_PRODUCTS = [
   {
@@ -106,18 +107,13 @@ function App() {
                 <p className="empty-message"> No products found. Try another search.</p>
               ) 
               : visibleProducts.map((product) => (
-                <article key={product.id} className="product-card">
-                  <div className="product-img" />
-                  <p className="product-title">{product.title}</p>
-                  <p className="product-price">{formatRp(product.priceIdr)}</p>
-                  <button
-                    type="button"
-                    className="button"
-                    onClick={() => setCartCount(cartCount+1)}
-                  >
-                    Add
-                  </button>
-                </article>
+                <ProductCard
+                  key={product.id}
+                  title={product.title}
+                  priceIdr={product.priceIdr}
+                  category={product.category}
+                  onAdd={() => setCartCount(cartCount + 1)}
+                />
               ))
             }
           </div>
