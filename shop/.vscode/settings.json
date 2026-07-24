@@ -1,0 +1,51 @@
+{
+  // --- Editor ---
+  "editor.quickSuggestions": {
+    "strings": true
+  },
+
+  // --- Performance (Remote SSH / low RAM) ---
+  "files.watcherExclude": {
+    "**/.git/objects/**": true,
+    "**/.git/subtree-cache/**": true,
+    "**/node_modules/**": true,
+    "**/.next/**": true,
+    "**/dist/**": true,
+    "**/build/**": true,
+    "**/.turbo/**": true
+  },
+  "search.exclude": {
+    "**/node_modules": true,
+    "**/.next": true,
+    "**/dist": true,
+    "**/package-lock.json": true
+  },
+  "files.exclude": {
+    "**/.next": true
+  },
+
+  // --- Tailwind IntelliSense (limit work) ---
+  "tailwindCSS.includeLanguages": {
+    "javascript": "javascript",
+    "javascriptreact": "javascript"
+  },
+  "tailwindCSS.files.exclude": [
+    "**/.git/**",
+    "**/node_modules/**",
+    "**/.next/**",
+    "**/dist/**",
+    "**/manual/toko-marcell/**"
+  ],
+  // Prefer scanning app source only (Tailwind v4 entry)
+  "tailwindCSS.experimental.configFile": "src/app/globals.css",
+
+  // Don't force every CSS file into Tailwind mode (saves work)
+  // Open globals.css as CSS; IntelliSense still works in className strings
+  "files.associations": {
+    "**/globals.css": "tailwindcss"
+  },
+
+  // TypeScript: less aggressive on large trees
+  "typescript.tsserver.maxTsServerMemory": 1024,
+  "typescript.disableAutomaticTypeAcquisition": true
+}

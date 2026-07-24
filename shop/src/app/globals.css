@@ -1,0 +1,65 @@
+@import "tailwindcss";
+
+/*
+  Vercel / Geist-inspired light palette
+  Sources: vercel.com aesthetic + Geist design system (high-contrast grays)
+  Font: Geist (layout.js)
+*/
+:root {
+  /* Core — Vercel light UI */
+  --vercel-bg: #fafafa; /* page canvas (accents-1 style) */
+  --vercel-surface: #ffffff; /* cards, header */
+  --vercel-recessed: #f2f2f2; /* soft fills, input-ish surfaces */
+  --vercel-border: #eaeaea; /* classic Vercel hairline */
+  --vercel-ink: #171717; /* primary text + CTA (Geist ink) */
+  --vercel-muted: #666666; /* secondary text (accents-5 style) */
+  --vercel-muted-2: #999999; /* tertiary / placeholders */
+  --vercel-hover: #000000; /* pure black hover on CTA (optional stark) */
+
+  /* App aliases (same names as before so layout/page keep working) */
+  --color-bg: var(--vercel-bg);
+  --color-surface: var(--vercel-surface);
+  --color-ink: var(--vercel-ink);
+  --color-muted: var(--vercel-muted);
+  --color-border: var(--vercel-border);
+  --color-brand: var(--vercel-ink);
+  --color-brand-dark: var(--vercel-hover);
+  --color-brand-light: var(--vercel-muted);
+  --color-brand-soft: var(--vercel-recessed);
+  --color-cta: var(--vercel-ink);
+  --color-cta-hover: var(--vercel-hover);
+  --color-demo-bg: var(--vercel-recessed);
+  --color-demo-text: var(--vercel-muted);
+
+  --background: var(--color-bg);
+  --foreground: var(--color-ink);
+  --primary: var(--color-cta);
+  --primary-dark: var(--color-cta-hover);
+}
+
+@theme inline {
+  --color-background: var(--color-bg);
+  --color-foreground: var(--color-ink);
+  --color-surface: var(--color-surface);
+  --color-muted: var(--color-muted);
+  --color-border: var(--color-border);
+  --color-brand: var(--color-brand);
+  --color-brand-dark: var(--color-brand-dark);
+  --color-brand-light: var(--color-brand-light);
+  --color-brand-soft: var(--color-brand-soft);
+  --color-cta: var(--color-cta);
+  --color-cta-hover: var(--color-cta-hover);
+  --font-sans: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+}
+
+body {
+  background: var(--color-bg);
+  color: var(--color-ink);
+  font-family: var(--font-sans);
+}
+
+.gradient-text {
+  color: var(--color-muted);
+  -webkit-text-fill-color: unset;
+  background: none;
+}
