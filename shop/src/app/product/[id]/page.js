@@ -1,4 +1,3 @@
-import Link from "next/link";
 import { notFound } from "next/navigation";
 import { formatRp } from "../../../lib/formatRp";
 import { MOCK_PRODUCTS } from "../../../lib/mockProducts";

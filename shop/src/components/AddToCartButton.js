@@ -1,9 +1,10 @@
 "use client";
 
-import { useCart } from "./CartProvider";
+import { CartContext } from "./CartProvider";
+import { useContext } from "react";
 
 export default function AddToCartButton() {
-  const { addToCart } = useCart();
+  const { addToCart } = useContext(CartContext);
 
   return (
     <button
