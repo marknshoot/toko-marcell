@@ -6,7 +6,7 @@ export const MOCK_PRODUCTS = [
     category: "Tops",
   },
   {
-      id: "2",
+    id: "2",
     title: "Linen Shirt",
     priceIdr: 249000,
     category: "Tops",

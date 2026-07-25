@@ -57,9 +57,3 @@ body {
   color: var(--color-ink);
   font-family: var(--font-sans);
 }
-
-.gradient-text {
-  color: var(--color-muted);
-  -webkit-text-fill-color: unset;
-  background: none;
-}
