@@ -23,7 +23,7 @@ export default async function ProductPage({ params }) {
                 <p className="mt-4 text-lg text-foreground">
                     {formatRp(product.priceIdr)}
                 </p>
-                <AddToCartButton />
+                <AddToCartButton product={product}/>
             </div>
         </main>
     );
