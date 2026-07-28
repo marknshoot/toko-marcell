@@ -18,23 +18,23 @@ export function CartProvider({ children }) {
             }
             }
         } catch {
-            // ignore bad data
+            
         } finally {
             setHasLoaded(true);
         }
-    }, []); // empty = once on client
+    }, []); 
 
 
     const cartCount = items.reduce((sum, item) => sum + item.qty, 0);
 
-    function addToCart(product) {
+    function addToCart(product, q) {
         setItems((prev) => {
         const existing = prev.find((item) => item.id === product.id);
 
         if (existing) {
             return prev.map((item) =>
             item.id === product.id
-                ? { ...item, qty: item.qty + 1 }
+                ? { ...item, qty: item.qty + q }
                 : item
             );
         }
@@ -45,7 +45,7 @@ export function CartProvider({ children }) {
             id: product.id,
             title: product.title,
             priceIdr: product.priceIdr,
-            qty: 1,
+            qty: q,
             },
         ];
         });
