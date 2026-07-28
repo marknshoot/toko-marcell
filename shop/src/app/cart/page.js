@@ -1,12 +1,31 @@
 "use client";
 
 import Link from "next/link";
-import { useContext } from "react";
+import { useContext, useState } from "react";
+import { useRouter } from "next/navigation"
 import { CartContext } from "../../components/CartProvider";
 import { formatRp } from "../../lib/formatRp";
 
 export default function CartPage() {
   const { items, cartCount, increaseQty, decreaseQty, removeItem, subtotal } = useContext(CartContext);
+  const router = useRouter();
+  const [checkoutError, setCheckoutError] = useState("");
+
+  function handleCheckout() {
+    if (cartCount === 0) {
+      setCheckoutError("Your cart is empty. Cannot checkout.");
+
+      setTimeout(() => {
+          setCheckoutError("");
+        }, 3000
+      ); 
+
+      return;
+    }
+
+    setCheckoutError("");
+    router.push("/checkout");
+}
 
   return (
     <main className="py-12">
@@ -60,19 +79,38 @@ export default function CartPage() {
               ))}
             </ul>
 
-            <div className="mt-6 flex justify-between border-t border-border pt-4">
+            <div className="mt-6 flex justify-between border-y border-border py-4 ">
               <span className="text-muted">Subtotal</span>
               <span className="font-semibold">{formatRp(subtotal)}</span>
             </div>
           </>
         )}
+        <div className="mt-4 pt-10">
+           <div className="relative">
+              {checkoutError && (
+                <p className="absolute bottom-full right-0 mb-2 text-sm text-muted">
+                  {checkoutError}
+                </p>
+              )}
 
-        <Link
-          href="/#catalog"
-          className="mt-6 inline-block text-sm font-medium text-foreground no-underline hover:underline"
-        >
-          Continue shopping
-        </Link>
+            <div className="flex items-start justify-between gap-4">
+              <Link
+                href="/#catalog"
+                className="text-sm font-medium text-foreground no-underline hover:underline"
+              >
+                Continue shopping
+              </Link>
+
+              <button
+                type="button"
+                onClick={handleCheckout}
+                className="rounded-full bg-cta px-6 py-3 text-sm font-medium text-white"
+              >
+                Checkout
+              </button>
+            </div>
+          </div>
+        </div>
       </div>
     </main>
   );

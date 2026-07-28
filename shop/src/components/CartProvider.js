@@ -79,13 +79,18 @@ export function CartProvider({ children }) {
         (sum, item) => sum + item.priceIdr * item.qty, 0
     );
 
+    function clearCart() {
+        // Keep same [] reference if already empty — avoids extra re-renders
+        setItems((prev) => (prev.length === 0 ? prev : []));
+    }
+
     useEffect(() => {
         if (!hasLoaded) return; // important!
         localStorage.setItem("toko-cart", JSON.stringify(items));
     }, [items, hasLoaded]);
 
     return (
-        <CartContext.Provider value={{ items, cartCount, addToCart, increaseQty, decreaseQty, removeItem, subtotal }}>
+        <CartContext.Provider value={{ items, cartCount, addToCart, increaseQty, decreaseQty, removeItem, subtotal, clearCart }}>
         {children}
         </CartContext.Provider>
     );
