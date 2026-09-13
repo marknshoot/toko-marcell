@@ -1,0 +1,32 @@
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: toko
+      POSTGRES_PASSWORD: toko
+      POSTGRES_DB: toko
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toko -d toko"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  api:
+    build:
+      context: .
+      dockerfile: dockerfile
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql://toko:toko@db:5432/toko
+      CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  pgdata:

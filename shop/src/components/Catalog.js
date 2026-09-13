@@ -1,23 +1,47 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import ProductCard from "./ProductCard";
-import { MOCK_PRODUCTS } from "../lib/mockProducts"
+import { getProducts } from "../lib/api";
 
 const CATEGORIES = ["All", "Tops", "Bottoms", "Accessories"];
 
 export default function Catalog() {
   const [selectedCategory, setSelectedCategory] = useState("All");
   const [searchQuery, setSearchQuery] = useState("");
-  const [cartCount, setCartCount] = useState(0);
+  const [products, setProducts] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
 
-  let visibleProducts =
-    selectedCategory === "All"
-      ? MOCK_PRODUCTS
-      : MOCK_PRODUCTS.filter(
-          (product) => product.category === selectedCategory
-        );
+  useEffect(() => {
+    let cancelled = false;
 
+    async function load() {
+      setLoading(true);
+      setError(null);
+      try {
+        const data = await getProducts({ category: selectedCategory });
+        if (!cancelled) {
+          setProducts(data.items);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError("Could not load products");
+        }
+      } finally {
+        if (!cancelled) {
+          setLoading(false);
+        }
+      }
+    }
+
+    load();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedCategory]);
+
+  let visibleProducts = products;
   const q = searchQuery.trim().toLowerCase();
   if (q !== "") {
     visibleProducts = visibleProducts.filter((product) =>
@@ -67,11 +91,15 @@ export default function Catalog() {
         </div>
 
         <div className="mt-6 grid grid-cols-2 gap-3">
-          {visibleProducts.length === 0 ? (
+          {loading ? (
+            <p className="text-muted">Loading…</p>
+          ) : error ? (
+            <p className="text-muted">{error}</p>
+          ) : visibleProducts.length === 0 ? (
             <p className="text-muted">No products found.</p>
           ) : (
             visibleProducts.map((product) => (
-              <ProductCard 
+              <ProductCard
                 key={product.id}
                 id={product.id}
                 title={product.title}
