@@ -4,26 +4,24 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ProductCard from "./ProductCard";
 import ProductCardSkeleton from "./ProductCardSkeleton";
-import { getProducts, getCategories, postEvent } from "../lib/api";
+import { getProducts, searchProducts, getCategories, postEvent } from "../lib/api";
 
 const PAGE_SIZE = 24;
+const DEBOUNCE_MS = 250;
 
-// One definition of "does this product match the query", shared by the grid and by
-// the search event, so the reported result count cannot disagree with what the
-// shopper actually sees.
-function matchesQuery(product, query) {
-  return product.title.toLowerCase().includes(query);
-}
-
-// Build the page URL from the current filter + page. URLSearchParams is the same
-// tool lib/api.js uses for the API query — here it builds the *page* URL instead.
-function buildUrl(department, page) {
+// Build the page URL from the current state. URLSearchParams is the same tool
+// lib/api.js uses for API queries — here it builds the *page* URL. Defaults are
+// omitted, so "/" means "no filter, page 1, no query".
+function buildUrl({ department, page, q }) {
   const params = new URLSearchParams();
-  if (department !== "All") {
+  if (department && department !== "All") {
     params.set("department", department);
   }
-  if (page > 1) {
+  if (page && page > 1) {
     params.set("page", String(page));
+  }
+  if (q) {
+    params.set("q", q);
   }
   const query = params.toString();
   return query ? `/?${query}` : "/";
@@ -33,13 +31,15 @@ export default function Catalog() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // The URL is the single source of truth for filter + page. Nothing here is
-  // duplicated in useState, so the browser Back button, a shared link and a
-  // page refresh all show the same thing.
+  // The URL is the single source of truth for what is being shown. Nothing here
+  // is duplicated in useState, so Back, refresh and a shared link all agree.
   const department = searchParams.get("department") || "All";
   const page = Math.max(1, Number(searchParams.get("page")) || 1);
+  const urlQuery = searchParams.get("q") || "";
 
-  const [searchQuery, setSearchQuery] = useState("");
+  // The input is the one exception, and deliberately so: what you are typing must
+  // appear instantly, while the *request* waits for a pause. Two values, two jobs.
+  const [searchInput, setSearchInput] = useState(urlQuery);
   const [products, setProducts] = useState([]);
   const [total, setTotal] = useState(0);
   const [departments, setDepartments] = useState([]);
@@ -48,36 +48,11 @@ export default function Catalog() {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  const [debouncedQuery, setDebouncedQuery] = useState("");
-
+  // Keep the input in step when the URL changes from somewhere else (Back button,
+  // a pasted link, a chip click that clears the query).
   useEffect(() => {
-    const timer = setTimeout(() => {
-      setDebouncedQuery(searchQuery);
-    }, 200); // 200ms debounce delay
-    
-    return () => clearTimeout(timer);
-  }, [searchQuery]);
-
-  const query = debouncedQuery.trim().toLowerCase();
-
-  // Search event (M2). Fires once per distinct query, after the typing pause.
-  //
-  // `resultsCount` counts matches among the products currently loaded, not the
-  // whole catalog: the filtering still happens in the browser. When search moves
-  // to the server (Phase 5) this becomes the API's real result count — only then
-  // does zero-result rate mean anything.
-  const lastLoggedQuery = useRef("");
-  useEffect(() => {
-    if (query === "" || query === lastLoggedQuery.current) {
-      return;
-    }
-    lastLoggedQuery.current = query;
-    postEvent({
-      eventType: "search",
-      query: debouncedQuery.trim(),
-      resultsCount: products.filter((product) => matchesQuery(product, query)).length,
-    });
-  }, [query, debouncedQuery, products]);
+    setSearchInput(urlQuery);
+  }, [urlQuery]);
 
   // Facets: fetched once — they describe the catalog, not the current page.
   useEffect(() => {
@@ -103,7 +78,27 @@ export default function Catalog() {
     };
   }, []);
 
-  // Items: refetched whenever the filter or the page changes.
+  // Typing pause -> URL. This is where the debounce finally earns its keep: each
+  // request is now a server search, so without it every keystroke would be one.
+  // A new search also resets to page 1, for the same reason a chip does.
+  useEffect(() => {
+    const trimmed = searchInput.trim();
+    if (trimmed === urlQuery) {
+      return;
+    }
+
+    const timer = setTimeout(() => {
+      router.replace(buildUrl({ department, page: 1, q: trimmed }), { scroll: false });
+    }, DEBOUNCE_MS);
+
+    return () => clearTimeout(timer);
+  }, [searchInput, urlQuery, department, router]);
+
+  // Search event bookkeeping: which query has already been reported.
+  const lastLoggedQuery = useRef("");
+
+  // Items: server search when there is a query, plain catalog otherwise. Both
+  // return the same envelope, so the grid and the pager do not care which one ran.
   useEffect(() => {
     let cancelled = false;
 
@@ -111,20 +106,31 @@ export default function Catalog() {
       setLoading(true);
       setError(null);
       try {
-        const data = await getProducts({
-          department,
-          limit: PAGE_SIZE,
-          offset: (page - 1) * PAGE_SIZE,
-        });
+        const offset = (page - 1) * PAGE_SIZE;
+        const data = urlQuery
+          ? await searchProducts({ q: urlQuery, department, limit: PAGE_SIZE, offset })
+          : await getProducts({ department, limit: PAGE_SIZE, offset });
+
         if (!cancelled) {
           setProducts(data.items);
           setTotal(data.total);
+
+          // Search event (M2), fired from the response we are about to render so
+          // the count is the one the shopper sees. A separate effect would fire on
+          // the render where `urlQuery` changed but the fetch had not returned yet,
+          // reporting the *previous* query's total.
+          if (urlQuery && urlQuery !== lastLoggedQuery.current) {
+            lastLoggedQuery.current = urlQuery;
+            postEvent({ eventType: "search", query: urlQuery, resultsCount: data.total });
+          }
 
           // A stale link can point past the end (e.g. ?department=Girls&page=99).
           // Snap to the last real page instead of showing an empty grid.
           const lastPage = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
           if (data.items.length === 0 && data.total > 0 && page > lastPage) {
-            router.replace(buildUrl(department, lastPage), { scroll: false });
+            router.replace(buildUrl({ department, page: lastPage, q: urlQuery }), {
+              scroll: false,
+            });
           }
         }
       } catch (err) {
@@ -142,21 +148,21 @@ export default function Catalog() {
     return () => {
       cancelled = true;
     };
-  }, [department, page, router]);
+  }, [department, page, urlQuery, router]);
 
   function selectDepartment(name) {
     // changing the filter must go back to page 1, otherwise page 40 of a
     // 5-page department would show nothing
-    router.push(buildUrl(name, 1), { scroll: false });
+    router.push(buildUrl({ department: name, page: 1, q: urlQuery }), { scroll: false });
   }
 
   function goToPage(nextPage) {
-    router.push(buildUrl(department, nextPage), { scroll: false });
+    router.push(buildUrl({ department, page: nextPage, q: urlQuery }), { scroll: false });
   }
 
-  let visibleProducts = products;
-  if (query !== "") {
-    visibleProducts = visibleProducts.filter((product) => matchesQuery(product, query));
+  function clearQuery() {
+    setSearchInput("");
+    router.replace(buildUrl({ department, page: 1, q: "" }), { scroll: false });
   }
 
   return (
@@ -169,18 +175,29 @@ export default function Catalog() {
           Shop
         </h2>
         <p className="mt-2 text-muted">
-          {total > 0
-            ? `${total.toLocaleString()} products · filter by department or type to search`
-            : "Filter by department or type to search (updates as you type)."}
+          {urlQuery
+            ? `${total.toLocaleString()} result${total === 1 ? "" : "s"} for “${urlQuery}”`
+            : `${total.toLocaleString()} products · filter by department or search`}
         </p>
 
-        <input
-          type="search"
-          placeholder="Try: jeans, sneakers, dress, watch…"
-          value={searchQuery}
-          onChange={(event) => setSearchQuery(event.target.value)}
-          className="mt-6 w-full rounded-full border border-border bg-surface px-4 py-2.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
-        />
+        <div className="mt-6 flex gap-2">
+          <input
+            type="search"
+            placeholder="Try: levis 501, white sneakers, waterproof jacket…"
+            value={searchInput}
+            onChange={(event) => setSearchInput(event.target.value)}
+            className="w-full rounded-full border border-border bg-surface px-4 py-2.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
+          />
+          {searchInput ? (
+            <button
+              type="button"
+              onClick={clearQuery}
+              className="shrink-0 rounded-full border border-border bg-surface px-4 py-2.5 text-xs font-medium text-muted"
+            >
+              Clear
+            </button>
+          ) : null}
+        </div>
 
         <div className="mt-4 flex flex-wrap gap-2">
           {[{ name: "All", count: null }, ...departments].map((dept) => {
@@ -217,10 +234,12 @@ export default function Catalog() {
             </>
           ) : error ? (
             <p className="text-muted">{error}</p>
-          ) : visibleProducts.length === 0 ? (
-            <p className="text-muted">No products found.</p>
+          ) : products.length === 0 ? (
+            <p className="text-muted">
+              {urlQuery ? `Nothing matched “${urlQuery}”.` : "No products found."}
+            </p>
           ) : (
-            visibleProducts.map((product) => (
+            products.map((product) => (
               <ProductCard
                 key={product.id}
                 id={product.id}

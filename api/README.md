@@ -53,6 +53,8 @@ The `seed` service is behind a compose profile, so it never starts with `up`.
 | `GET` | `/events/summary` | funnel KPIs computed from the events table. `since_days` (default 30) |
 | `POST` | `/checkout/confirm` | turn a cart into a paid order → `201` with a token · `400` unknown asin · `422` bad body |
 | `GET` | `/orders/{token}` | read an order back · `404` unknown token |
+| `GET` | `/search` | BM25 search. `q` (1–100 chars), `limit` 1–24, `offset`, `department=`, `category=` |
+| `POST` | `/search/reindex` | rebuild the in-memory search index (needed after reseeding) |
 
 `/products` returns an envelope, never a bare array:
 
@@ -205,7 +207,55 @@ The button disables while the request is in flight, but a real system wants an
 Rates are `null`, never `0.0`, when a denominator is missing — an empty events table cannot
 produce a misleading "0% conversion".
 
+## Search (M3/M4 — the lexical baseline)
+
+`GET /search?q=…` ranks the catalog with **BM25** over title, brand, category, department,
+features and description. It is in-process and hand-written (`search.py`, no dependency): the
+plan asks for an in-process BM25 baseline (PLAN §6), and a baseline is only worth having if it
+is *real*, because the hybrid ranker has to beat something honest.
+
+| | |
+|---|---|
+| Scoring | Robertson & Zaragoza BM25, `k1=1.5`, `b=0.75`, IDF with `+1` smoothing |
+| Fields | weighted term frequencies: title 3.0 · brand 2.0 · category 1.5 · department 1.0 · features 1.0 · description 0.5 |
+| Tokenizer | lowercase → accent folding → alphanumeric → stopwords → plural folding |
+| Index | built lazily on the first search (1.5 s for 6,000 docs), then ~17–50 ms per query |
+| Response | `{items, total, limit, offset, query, mode, deduped, took_ms}` + a `score` per item |
+| Filters | `department=`, `category=` — resolved to a set of ids before ranking |
+
+`mode` is part of the response because this endpoint is meant to become **hybrid**
+(BM25 + embeddings): the UI and the eval harness should be able to tell which ranker produced
+a result set without inferring it from a deployment.
+
+**Duplicate titles are removed** (`deduped: true`). 842 of the 6,000 products (14%) are
+variants sharing a title with a different ASIN, so without this a query like `jeans` returns
+the same title twice inside the top 10. Dedupe happens *before* pagination, so `total` counts
+results a shopper can actually reach. Fuzzy near-duplicate handling belongs to the diversity@k
+step, not here.
+
+`POST /search/reindex` rebuilds the in-memory index — needed after
+`docker compose run --rm seed`, because the index lives for the life of the process.
+
+### What BM25 does and does not do (measured)
+
+```
+'levis 501'                 64 results   → the actual 501s, four distinct variants
+'waterproof jacket'        351 results   → raincoats and watertight shells
+'shoes for women'         3543 results   → women's shoes
+'white sneakers'           511 results   → canvas sneakers, Converse
+'zzzz'                       0 results   → 0.05 ms
+```
+
+Working: exact terms and product IDs, attribute words, plurals (`shoes` and `shoe` score
+identically after folding).
+
+Not working, by construction: typos, synonyms, and conversational queries. That gap is exactly
+what the embedding half of hybrid search adds — which is why the baseline is measured *first*,
+so the improvement becomes a number rather than a claim.
+
 ## Not built yet (planned, in order)
 
-Search (`/search`, hybrid BM25 + embeddings) · recommendations (`/recs`, cold-start →
-popular) · copilot with tools. All of them live here, in Python — never in Next.
+Search · embeddings half of hybrid search (pgvector, `vector(384)` column is already in the
+schema) · the ≥30-query eval with Recall@10 / nDCG@10 against this BM25 baseline (M5–M6) ·
+recommendations (`/recs`, cold-start → popular) · copilot with tools. All of them live here,
+in Python — never in Next.

@@ -41,6 +41,25 @@ export async function getCategories() {
   return response.json();
 }
 
+// Server-side search. This replaced a client-side filter over the 24 items already
+// on screen, which meant "search" could only ever find what you had already
+// scrolled past.
+export async function searchProducts({ q, department, limit = 24, offset = 0 } = {}) {
+  const params = new URLSearchParams();
+  params.set("q", q);
+  params.set("limit", String(limit));
+  params.set("offset", String(offset));
+  if (department && department !== "All") {
+    params.set("department", department);
+  }
+
+  const response = await fetch(`${API_URL}/search?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error("Could not search products");
+  }
+  return response.json();
+}
+
 // Checkout confirm. Unlike postEvent, this DOES throw: it is the authoritative
 // step, so the UI must know whether the order really exists before it tells the
 // shopper anything.

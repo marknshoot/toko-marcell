@@ -1,11 +1,14 @@
 import os
 import secrets
+import time
 from typing import Literal
 
 import psycopg
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
+
+from search import BM25Index, get_index, reset_index
 
 app = FastAPI(title="Toko Marcell API")
 
@@ -634,4 +637,122 @@ def get_order(token: str):
         "itemCount": item_count,
         "createdAt": created_at.isoformat(),
         "items": items,
+    }
+
+
+# ── Search (M3/M4: the lexical baseline) ──────────────────────────────────────
+
+def build_search_index() -> BM25Index:
+    """Read the catalog and build the BM25 index. Built once, lazily (see
+    search.get_index) so a database problem cannot stop the API from booting."""
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, title, brand, category, department, features, description
+                FROM products
+                """
+            )
+            rows = cur.fetchall()
+
+    index = BM25Index()
+    for product_id, title, brand, category, department, features, description in rows:
+        index.add(
+            product_id,
+            {
+                "title": title or "",
+                "brand": brand or "",
+                "category": category or "",
+                "department": department or "",
+                "features": " ".join(features or []),
+                "description": description or "",
+            },
+            dedupe_key=(title or "").strip().lower(),
+        )
+    index.build()
+    print(f"[search] BM25 index built: {index.size} documents")
+    return index
+
+
+@app.post("/search/reindex", status_code=202)
+def reindex_search():
+    """Rebuild the in-memory index.
+
+    The index is cached for the life of the process, so a newly seeded catalog is
+    invisible until this is called (or the container restarts). Kept as an
+    endpoint because "why are my new products not searchable" is a confusing hour
+    otherwise.
+    """
+    reset_index()
+    index = get_index(build_search_index)
+    return {"documents": index.size, "mode": "bm25"}
+
+
+@app.get("/search")
+def search_products(
+    q: str = Query(min_length=1, max_length=100),
+    limit: int = Query(24, ge=1, le=24),
+    offset: int = Query(0, ge=0),
+    department: str | None = None,
+    category: str | None = None,
+):
+    """Lexical search over title, brand, category, features and description.
+
+    `mode` is part of the response because this endpoint is meant to become
+    hybrid (BM25 + embeddings). The UI and the eval harness should be able to tell
+    which ranker produced a result set without inferring it from a deployment.
+    """
+    started = time.perf_counter()
+    index = get_index(build_search_index)
+
+    # Resolve the facet to a set of ids once, so ranking stays in-memory.
+    allowed = None
+    if department or category:
+        filters, params = [], []
+        if department:
+            filters.append("department = %s")
+            params.append(department)
+        if category:
+            filters.append("category = %s")
+            params.append(category)
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT id FROM products WHERE {' AND '.join(filters)}",
+                    params,
+                )
+                allowed = {row[0] for row in cur.fetchall()}
+
+    # Rank everything, dedupe, then cut the page: dedupe before pagination is what
+    # keeps `total` equal to the number of results a shopper could actually reach.
+    ranked = index.rank(q, allowed=allowed, dedupe=True)
+    total = len(ranked)
+    hits = ranked[offset : offset + limit]
+
+    items = []
+    if hits:
+        ids = [product_id for product_id, _ in hits]
+        scores = dict(hits)
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {PRODUCT_COLUMNS} FROM products WHERE id = ANY(%s)",
+                    (ids,),
+                )
+                rows = cur.fetchall()
+        by_id = {row[0]: row_to_product(row) for row in rows}
+        for product_id in ids:  # SQL does not preserve order: rebuild it from the ranking
+            product = by_id.get(product_id)
+            if product:
+                items.append({**product, "score": scores[product_id]})
+
+    return {
+        "items": items,
+        "total": total,
+        "limit": limit,
+        "offset": offset,
+        "query": q,
+        "mode": "bm25",
+        "deduped": True,
+        "took_ms": round((time.perf_counter() - started) * 1000, 2),
     }
