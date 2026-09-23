@@ -1,0 +1,9 @@
+# Ignore the raw + generated dataset files.
+#
+# They are large (raw ~2.8 GB) and fully reproducible:
+#   bash pipelines/download_data.sh
+#   python3 pipelines/build_catalog.py
+#
+# Only this file and the pipeline scripts are committed.
+raw/
+processed/
