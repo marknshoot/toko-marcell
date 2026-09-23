@@ -1,12 +1,25 @@
 "use client";
 
 import Link from "next/link";
-import { useContext } from "react";
+import { useContext, useEffect, useRef } from "react";
 import { CartContext } from "@/components/CartProvider";
+import { postEvent } from "@/lib/api";
 import { formatRp } from "@/lib/formatRp";
 
 export default function CheckoutPage() {
   const { items, cartCount, subtotal } = useContext(CartContext);
+
+  // Checkout started (M2b). The cart is loaded from localStorage in an effect, so
+  // on the first render `cartCount` is still 0 — this fires on the first render
+  // where the cart is actually non-empty, and the ref makes it fire only once.
+  const startedLogged = useRef(false);
+  useEffect(() => {
+    if (startedLogged.current || cartCount === 0) {
+      return;
+    }
+    startedLogged.current = true;
+    postEvent({ eventType: "checkout_start", qty: cartCount, priceIdr: subtotal });
+  }, [cartCount, subtotal]);
 
   if (cartCount === 0) {
     return (

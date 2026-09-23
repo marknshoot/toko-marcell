@@ -3,10 +3,18 @@
 import Link from "next/link";
 import { useContext } from "react";
 import { CartContext } from "@/components/CartProvider";
+import { postEvent } from "@/lib/api";
 import { formatRp } from "@/lib/formatRp";
 
 export default function QrisPage() {
   const { cartCount, subtotal } = useContext(CartContext);
+
+  // Purchase (M2). Fired on the click, not on the success page: the cart is
+  // cleared when /checkout/success mounts, so by then the amount is gone. The
+  // request uses keepalive (see postEvent) to survive the navigation.
+  function handlePaid() {
+    postEvent({ eventType: "purchase_mock", qty: cartCount, priceIdr: subtotal });
+  }
 
   if (cartCount === 0) {
     return (
@@ -61,6 +69,7 @@ export default function QrisPage() {
           </Link>
           <Link
             href="/checkout/success"
+            onClick={handlePaid}
             className="inline-flex w-fit rounded-full bg-cta px-6 py-3 text-sm font-medium text-white no-underline"
           >
             I have paid (demo)

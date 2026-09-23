@@ -49,6 +49,8 @@ The `seed` service is behind a compose profile, so it never starts with `up`.
 | `GET` | `/products` | paginated catalog. `limit` 1–24 (default 24), `offset` ≥ 0, `department=`, `category=` |
 | `GET` | `/products/{id}` | one product · `404` missing · `422` id not an integer |
 | `GET` | `/categories` | facets with real counts: departments + top 24 category names |
+| `POST` | `/events` | record one funnel event → `201` · `422` if malformed |
+| `GET` | `/events/summary` | funnel KPIs computed from the events table. `since_days` (default 30) |
 
 `/products` returns an envelope, never a bare array:
 
@@ -118,8 +120,53 @@ Notes and deliberate choices:
   tool (Alembic) is still a MUST item — see PLAN §5 B3. Until then, `init_db()` is the
   single place that owns the schema.
 
+## Events (funnel, M2/M2b)
+
+One row per shopper action. `session_id` groups the actions of one visit — it is an
+**anonymous id generated in the browser** (`sessionStorage` + `crypto.randomUUID()`),
+**not a login**. No accounts exist in v1 (BRD BR-9) and none are needed: this id is the
+only identity the funnel requires, and it identifies a visit, not a person. No names, no
+emails, no PII.
+
+Allowed `event_type` values — anything else is rejected with `422`:
+
+| Event | Fired by | Extra fields |
+|---|---|---|
+| `view_product` | `TrackView` on the PDP mount | `asin` |
+| `search` | debounced query in the catalog | `query`, `results_count` |
+| `add_to_cart` | `CartProvider.addToCart` (covers every entry point) | `asin`, `qty`, `price_idr` |
+| `checkout_start` | first render of `/checkout` with a non-empty cart | `qty`, `price_idr` |
+| `purchase_mock` | "I have paid" click on `/checkout/qris` | `qty`, `price_idr` |
+
+```bash
+curl -s -X POST localhost:8001/events -H 'Content-Type: application/json' \
+  -d '{"event_type":"view_product","session_id":"sess-abc12345","asin":"B000YXC2LI"}'
+curl -s localhost:8001/events/summary | python3 -m json.tool
+```
+
+The frontend posts events **fire-and-forget**: `postEvent()` never throws and the UI never
+waits on it, because losing a data point is cheaper than breaking a purchase. It uses
+`keepalive: true` so a request still completes when the page navigates away in the same tick
+(add-to-cart then redirect, or "I have paid" → success).
+
+### How to read the numbers honestly
+
+`/events/summary` returns its own `caveats` array. Two matter:
+
+1. **`search_to_pdp` is a session-level proxy** — a session that both searched and viewed a
+   product. The product *click* is not recorded as its own event yet, so it is not a
+   click-through rate.
+2. **`purchase_mock` is browser-asserted.** Until checkout is confirmed server-side (B5),
+   "paid" is a claim from the client. That is why the QRIS screen says *demo*.
+3. **`results_count` for `search` counts matches among the products currently loaded**, not the
+   whole catalog, because filtering is still client-side. Zero-result rate becomes a real
+   metric only when `/search` moves to the server (Phase 5).
+
+Rates are `null`, never `0.0`, when a denominator is missing — an empty events table cannot
+produce a misleading "0% conversion".
+
 ## Not built yet (planned, in order)
 
 Search (`/search`, hybrid BM25 + embeddings) · recommendations (`/recs`, cold-start →
-popular) · events (`session_id` funnel) · server-side checkout confirm · copilot with
-tools. All of them live here, in Python — never in Next.
+popular) · server-side checkout confirm (B5) · copilot with tools. All of them live here, in
+Python — never in Next.

@@ -1,6 +1,7 @@
 "use client";
 
 import { createContext, useState, useEffect } from "react";
+import { postEvent } from "../lib/api";
 
 export const CartContext = createContext(null);
 
@@ -28,6 +29,15 @@ export function CartProvider({ children }) {
     const cartCount = items.reduce((sum, item) => sum + item.qty, 0);
 
     function addToCart(product, q) {
+        // Funnel event (M2). Fired here because this is the single place a cart
+        // line is created, so every entry point is covered by construction.
+        postEvent({
+            eventType: "add_to_cart",
+            asin: product.asin,
+            qty: q,
+            priceIdr: product.priceIdr,
+        });
+
         setItems((prev) => {
         const existing = prev.find((item) => item.id === product.id);
 

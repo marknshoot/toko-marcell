@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ProductCard from "./ProductCard";
 import ProductCardSkeleton from "./ProductCardSkeleton";
-import { getProducts, getCategories } from "../lib/api";
+import { getProducts, getCategories, postEvent } from "../lib/api";
 
 const PAGE_SIZE = 24;
+
+// One definition of "does this product match the query", shared by the grid and by
+// the search event, so the reported result count cannot disagree with what the
+// shopper actually sees.
+function matchesQuery(product, query) {
+  return product.title.toLowerCase().includes(query);
+}
 
 // Build the page URL from the current filter + page. URLSearchParams is the same
 // tool lib/api.js uses for the API query — here it builds the *page* URL instead.
@@ -50,6 +57,27 @@ export default function Catalog() {
     
     return () => clearTimeout(timer);
   }, [searchQuery]);
+
+  const query = debouncedQuery.trim().toLowerCase();
+
+  // Search event (M2). Fires once per distinct query, after the typing pause.
+  //
+  // `resultsCount` counts matches among the products currently loaded, not the
+  // whole catalog: the filtering still happens in the browser. When search moves
+  // to the server (Phase 5) this becomes the API's real result count — only then
+  // does zero-result rate mean anything.
+  const lastLoggedQuery = useRef("");
+  useEffect(() => {
+    if (query === "" || query === lastLoggedQuery.current) {
+      return;
+    }
+    lastLoggedQuery.current = query;
+    postEvent({
+      eventType: "search",
+      query: debouncedQuery.trim(),
+      resultsCount: products.filter((product) => matchesQuery(product, query)).length,
+    });
+  }, [query, debouncedQuery, products]);
 
   // Facets: fetched once — they describe the catalog, not the current page.
   useEffect(() => {
@@ -127,11 +155,8 @@ export default function Catalog() {
   }
 
   let visibleProducts = products;
-  const q = debouncedQuery.trim().toLowerCase();
-  if (q !== "") {
-    visibleProducts = visibleProducts.filter((product) =>
-      product.title.toLowerCase().includes(q)
-    );
+  if (query !== "") {
+    visibleProducts = visibleProducts.filter((product) => matchesQuery(product, query));
   }
 
   return (

@@ -4,6 +4,7 @@ import { formatRp } from "../../../lib/formatRp";
 import { getProduct } from "../../../lib/api";
 import AddToCartButton from "@/components/AddToCartButton";
 import ProductImage from "@/components/ProductImage";
+import TrackView from "@/components/TrackView";
 
 // Dynamic <title>/description per product. This calls getProduct again, but Next
 // dedupes identical fetches within one request, so FastAPI is hit once.
@@ -45,6 +46,7 @@ export default async function ProductPage({ params }) {
 
     return (
         <main className="py-12">
+            <TrackView asin={product.asin} priceIdr={product.priceIdr} />
             <div className="mx-auto max-w-4xl px-7">
                 <Link
                     href="/#catalog"

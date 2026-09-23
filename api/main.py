@@ -1,8 +1,10 @@
 import os
+from typing import Literal
 
 import psycopg
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
+from pydantic import BaseModel, Field
 
 app = FastAPI(title="Toko Marcell API")
 
@@ -63,6 +65,27 @@ INDEXES: list[tuple[str, str]] = [
     #     USING hnsw (embedding vector_cosine_ops);
 ]
 
+# ── Funnel events (M2/M2b) ────────────────────────────────────────────────────
+# One row per shopper action, grouped into a visit by `session_id`: an anonymous
+# id generated in the browser, NOT a login. It is the only identity this demo
+# has, and it is enough to compute per-session funnel rates (PLAN §4).
+EVENTS_SCHEMA: list[tuple[str, str]] = [
+    ("id", "BIGSERIAL PRIMARY KEY"),
+    ("session_id", "TEXT NOT NULL"),
+    ("event_type", "TEXT NOT NULL"),
+    ("asin", "TEXT"),
+    ("query", "TEXT"),
+    ("results_count", "INTEGER"),
+    ("qty", "INTEGER"),
+    ("price_idr", "INTEGER"),
+    ("created_at", "TIMESTAMPTZ NOT NULL DEFAULT now()"),
+]
+
+EVENTS_INDEXES: list[tuple[str, str]] = [
+    ("events_session_idx", "events (session_id)"),
+    ("events_type_created_idx", "events (event_type, created_at DESC)"),
+]
+
 # Derived, so the SELECT can never drift from the table definition. `embedding` is
 # excluded by construction: 384 floats per product would bloat every response and
 # the storefront never needs them.
@@ -76,6 +99,39 @@ def _enable_pgvector(cur) -> bool:
         return False
     cur.execute("CREATE EXTENSION IF NOT EXISTS vector")
     return True
+
+
+def _ensure_table(cur, table: str, columns, indexes):
+    """CREATE TABLE from a column list, then add whatever an existing one is missing.
+
+    Same additive pattern as products: `CREATE TABLE IF NOT EXISTS` is a no-op on a
+    table that already exists, so a column added later would silently never appear
+    and every query would fail with `column "..." does not exist` — which reads like
+    a broken query rather than a missing migration.
+    """
+    col_defs = ",\n                    ".join(f"{name} {ddl}" for name, ddl in columns)
+    cur.execute(
+        f"""
+        CREATE TABLE IF NOT EXISTS {table} (
+            {col_defs}
+        )
+        """
+    )
+
+    cur.execute(
+        "SELECT column_name FROM information_schema.columns WHERE table_name = %s",
+        (table,),
+    )
+    existing = {row[0] for row in cur.fetchall()}
+
+    added = [name for name, _ in columns if name not in existing]
+    for name in added:
+        cur.execute(f"ALTER TABLE {table} ADD COLUMN {name} {dict(columns)[name]}")
+    if added:
+        print(f"[init_db] added missing columns to {table}: {', '.join(added)}")
+
+    for idx_name, idx_target in indexes:
+        cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_target}")
 
 
 def init_db():
@@ -138,6 +194,8 @@ def init_db():
 
             for idx_name, idx_target in INDEXES:
                 cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_target}")
+
+            _ensure_table(cur, "events", EVENTS_SCHEMA, EVENTS_INDEXES)
 
             conn.commit()
 
@@ -251,3 +309,143 @@ def get_product(product_id: int):
         raise HTTPException(status_code=404, detail="Product not found")
 
     return row_to_product(row)
+
+
+# ── Events (M2 / M2b) ─────────────────────────────────────────────────────────
+
+class EventIn(BaseModel):
+    """One shopper action. Pydantic rejects anything malformed with a 422, so the
+    events table cannot fill up with misspelled event names."""
+
+    event_type: Literal[
+        "view_product",
+        "search",
+        "add_to_cart",
+        "checkout_start",
+        "purchase_mock",
+    ]
+    session_id: str = Field(min_length=8, max_length=64)
+    asin: str | None = Field(default=None, max_length=32)
+    query: str | None = Field(default=None, max_length=200)
+    results_count: int | None = Field(default=None, ge=0)
+    qty: int | None = Field(default=None, ge=1, le=99)
+    price_idr: int | None = Field(default=None, ge=0)
+
+
+@app.post("/events", status_code=201)
+def create_event(event: EventIn):
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO events
+                    (session_id, event_type, asin, query, results_count, qty, price_idr)
+                VALUES (%s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+                """,
+                (
+                    event.session_id,
+                    event.event_type,
+                    event.asin,
+                    event.query,
+                    event.results_count,
+                    event.qty,
+                    event.price_idr,
+                ),
+            )
+            event_id = cur.fetchone()[0]
+            conn.commit()
+
+    return {"id": event_id, "event_type": event.event_type}
+
+
+def rate(numerator, denominator):
+    """None instead of a fake 0.0 when there is no denominator yet."""
+    if not denominator:
+        return None
+    return round(numerator / denominator, 4)
+
+
+@app.get("/events/summary")
+def events_summary(since_days: int = Query(30, ge=1, le=365)):
+    """Funnel KPIs from PLAN §4, computed from the events table.
+
+    Two caveats that affect how these numbers should be read — they are returned
+    with the payload rather than hidden in a comment:
+      * `search_to_pdp` is a session-level proxy (a session that both searched and
+        viewed a product), not a click-through rate: the click itself is not
+        recorded as its own event yet.
+      * `purchase_mock` is asserted by the browser. Once checkout is confirmed
+        server-side (B5) it becomes authoritative.
+    """
+    window = "created_at > now() - make_interval(days => %s)"
+
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT event_type, COUNT(*), COUNT(DISTINCT session_id)
+                FROM events WHERE {window}
+                GROUP BY event_type
+                """,
+                (since_days,),
+            )
+            by_type = {}
+            sessions_by_step = {}
+            events_total = 0
+            for event_type, count, sessions in cur.fetchall():
+                by_type[event_type] = count
+                sessions_by_step[event_type] = sessions
+                events_total += count
+
+            cur.execute(
+                f"""
+                SELECT COUNT(*), COUNT(*) FILTER (WHERE results_count = 0)
+                FROM events WHERE event_type = 'search' AND {window}
+                """,
+                (since_days,),
+            )
+            searches, zero_result = cur.fetchone()
+
+            cur.execute(
+                f"""
+                SELECT COUNT(*) FROM (
+                    SELECT session_id FROM events
+                    WHERE event_type = 'search' AND {window}
+                    INTERSECT
+                    SELECT session_id FROM events
+                    WHERE event_type = 'view_product' AND {window}
+                ) AS searched_and_viewed
+                """,
+                (since_days, since_days),
+            )
+            search_to_pdp_sessions = cur.fetchone()[0]
+
+    viewed = sessions_by_step.get("view_product", 0)
+    added = sessions_by_step.get("add_to_cart", 0)
+    started = sessions_by_step.get("checkout_start", 0)
+    purchased = sessions_by_step.get("purchase_mock", 0)
+    searched = sessions_by_step.get("search", 0)
+
+    return {
+        "since_days": since_days,
+        "events_total": events_total,
+        "by_type": by_type,
+        "sessions_by_step": sessions_by_step,
+        "rates": {
+            "view_to_cart": rate(added, viewed),
+            "cart_to_checkout": rate(started, added),
+            "checkout_to_purchase": rate(purchased, started),
+            "view_to_purchase": rate(purchased, viewed),
+            "search_to_pdp": rate(search_to_pdp_sessions, searched),
+        },
+        "search": {
+            "total": searches,
+            "zero_result": zero_result,
+            "zero_result_rate": rate(zero_result, searches),
+        },
+        "caveats": [
+            "search_to_pdp is a session-level proxy (search + view_product in one session)",
+            "purchase_mock is browser-asserted until checkout is confirmed server-side (B5)",
+        ],
+    }

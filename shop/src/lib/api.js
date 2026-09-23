@@ -1,3 +1,5 @@
+import { getSessionId } from "./session";
+
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
 export async function getProducts({ department, limit = 24, offset = 0 } = {}) {
@@ -37,4 +39,36 @@ export async function getCategories() {
     throw new Error("Could not load categories");
   }
   return response.json();
+}
+
+// Fire-and-forget telemetry: the funnel events in PLAN §4.
+//
+// It never throws and never returns anything the UI waits on. A failed event must
+// not break shopping — losing a data point is cheaper than losing a sale.
+export async function postEvent({ eventType, asin, query, resultsCount, qty, priceIdr }) {
+  const sessionId = getSessionId();
+  if (!sessionId) {
+    return; // no browser (server render) — there is nothing to record
+  }
+
+  try {
+    await fetch(`${API_URL}/events`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      // keepalive lets the request finish even when the page navigates away in
+      // the same tick (add_to_cart then redirect, or "I have paid" -> success).
+      keepalive: true,
+      body: JSON.stringify({
+        event_type: eventType,
+        session_id: sessionId,
+        asin: asin ?? null,
+        query: query ?? null,
+        results_count: resultsCount ?? null,
+        qty: qty ?? null,
+        price_idr: priceIdr ?? null,
+      }),
+    });
+  } catch (err) {
+    // best effort by design
+  }
 }
