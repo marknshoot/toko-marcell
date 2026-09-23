@@ -13,7 +13,7 @@ const geist = Geist({
 
 export const metadata = {
   title: "Toko Marcell",
-  description: "Single brand shop demo",
+  description: "6,000-product fashion catalog with hybrid search, session recommendations and a QRIS demo checkout.",
 };
 
 export default function RootLayout({ children }) {

@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import Catalog from "@/components/Catalog";
 
 export default function Home() {
@@ -6,13 +7,14 @@ export default function Home() {
       <section className="py-12 md:py-16">
         <div className="mx-auto max-w-2xl px-7">
           <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted">
-            Top 1 clothes store
+            Multi-brand fashion · 6,000 products
           </p>
           <h1 className="mt-2 text-7xl font-semibold leading-[1.1] tracking-tight text-foreground md:text-8xl">
             Toko Marcell
           </h1>
           <p className="mt-4 max-w-lg text-base leading-relaxed text-muted md:text-lg md:mt-3">
-            Place where you can find the best value clothes.
+            Browse a 6,000-product fashion catalog with hybrid search, session
+            recommendations and a QRIS demo checkout.
           </p>
           <div className="mt-8">
             <a
@@ -25,7 +27,20 @@ export default function Home() {
         </div>
       </section>
 
-      <Catalog />
+      {/*
+        Catalog reads the filter + page from the URL (useSearchParams), which the
+        App Router can only resolve on the client, so it needs a Suspense
+        boundary. The fallback is what the server sends first.
+      */}
+      <Suspense
+        fallback={
+          <section className="border-t border-border py-12">
+            <div className="mx-auto max-w-2xl px-7 text-muted">Loading…</div>
+          </section>
+        }
+      >
+        <Catalog />
+      </Suspense>
     </main>
   );
 }

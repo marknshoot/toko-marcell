@@ -29,7 +29,7 @@ export default function CartPage() {
 
   return (
     <main className="py-12">
-      <div className="mx-auto max-w-2xl px-7">
+      <div className="mx-auto max-w-6xl px-7">
         <h1 className="text-3xl font-semibold tracking-tight text-foreground">
           Cart ({cartCount})
         </h1>
