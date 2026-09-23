@@ -1,10 +1,11 @@
 import os
+import secrets
 from typing import Literal
 
 import psycopg
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 app = FastAPI(title="Toko Marcell API")
 
@@ -84,6 +85,37 @@ EVENTS_SCHEMA: list[tuple[str, str]] = [
 EVENTS_INDEXES: list[tuple[str, str]] = [
     ("events_session_idx", "events (session_id)"),
     ("events_type_created_idx", "events (event_type, created_at DESC)"),
+]
+
+# ── Orders (B5: server-side checkout confirm) ─────────────────────────────────
+# The client sends {asin, qty} and nothing else. The server prices the order from
+# `products` itself, because a client-supplied total is a client-supplied price:
+# a tampered request could otherwise "pay" Rp 1.
+ORDERS_SCHEMA: list[tuple[str, str]] = [
+    ("id", "BIGSERIAL PRIMARY KEY"),
+    ("token", "TEXT NOT NULL UNIQUE"),
+    ("total_idr", "INTEGER NOT NULL"),
+    ("item_count", "INTEGER NOT NULL"),
+    ("status", "TEXT NOT NULL DEFAULT 'paid'"),
+    ("session_id", "TEXT"),
+    ("created_at", "TIMESTAMPTZ NOT NULL DEFAULT now()"),
+]
+
+ORDER_ITEMS_SCHEMA: list[tuple[str, str]] = [
+    ("id", "BIGSERIAL PRIMARY KEY"),
+    ("order_id", "BIGINT NOT NULL REFERENCES orders(id) ON DELETE CASCADE"),
+    ("asin", "TEXT NOT NULL"),
+    ("title", "TEXT NOT NULL"),
+    ("qty", "INTEGER NOT NULL"),
+    ("unit_price_idr", "INTEGER NOT NULL"),
+]
+
+ORDERS_INDEXES: list[tuple[str, str]] = [
+    ("orders_created_idx", "orders (created_at DESC)"),
+]
+
+ORDER_ITEMS_INDEXES: list[tuple[str, str]] = [
+    ("order_items_order_idx", "order_items (order_id)"),
 ]
 
 # Derived, so the SELECT can never drift from the table definition. `embedding` is
@@ -196,6 +228,10 @@ def init_db():
                 cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_target}")
 
             _ensure_table(cur, "events", EVENTS_SCHEMA, EVENTS_INDEXES)
+            # orders before order_items: the second references the first, and its
+            # index has to be created with it, not with orders.
+            _ensure_table(cur, "orders", ORDERS_SCHEMA, ORDERS_INDEXES)
+            _ensure_table(cur, "order_items", ORDER_ITEMS_SCHEMA, ORDER_ITEMS_INDEXES)
 
             conn.commit()
 
@@ -448,4 +484,154 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
             "search_to_pdp is a session-level proxy (search + view_product in one session)",
             "purchase_mock is browser-asserted until checkout is confirmed server-side (B5)",
         ],
+    }
+
+
+# ── Checkout (B5) ─────────────────────────────────────────────────────────────
+
+class ConfirmItem(BaseModel):
+    """What the client is allowed to say about a line: which product, how many.
+
+    Deliberately no price. The server looks it up.
+    """
+
+    asin: str = Field(min_length=1, max_length=32)
+    qty: int = Field(ge=1, le=99)
+
+
+class ConfirmIn(BaseModel):
+    """The checkout request.
+
+    `session_id` is required, not optional: a purchase that cannot be attributed to
+    a visit is useless to the funnel, and the events table enforces the same rule.
+    Letting it through as null would surface here as a 500 from the database layer
+    instead of a 422 from the edge.
+
+    `extra="forbid"` makes the no-client-price rule explicit: a request that tries
+    to send a total is rejected loudly rather than having the field silently
+    ignored.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    items: list[ConfirmItem] = Field(min_length=1, max_length=50)
+    session_id: str = Field(min_length=8, max_length=64)
+
+
+@app.post("/checkout/confirm", status_code=201)
+def confirm_checkout(payload: ConfirmIn):
+    """Turn a cart into a paid order — the authoritative step.
+
+    Before this existed, "paid" was a client claim and /checkout/success would
+    happily confirm an order to anyone who typed the URL. Now the truth is a row
+    in `orders`, and the success page can only show what the server holds.
+    """
+    wanted = {item.asin: item.qty for item in payload.items}
+
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT asin, title, price_idr FROM products WHERE asin = ANY(%s)",
+                (list(wanted),),
+            )
+            found = {row[0]: (row[1], row[2]) for row in cur.fetchall()}
+
+            unknown = sorted(set(wanted) - set(found))
+            if unknown:
+                # 400, not 404: the request is wrong about the catalog, and the
+                # detail names every bad asin so the bug is fixable from the log.
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"unknown asin(s): {', '.join(unknown)}",
+                )
+
+            lines = [
+                (asin, found[asin][0], qty, found[asin][1])
+                for asin, qty in wanted.items()
+            ]
+            total_idr = sum(qty * unit_price for _, _, qty, unit_price in lines)
+            item_count = sum(qty for _, _, qty, _ in lines)
+
+            token = secrets.token_urlsafe(16)
+            cur.execute(
+                """
+                INSERT INTO orders (token, total_idr, item_count, status, session_id)
+                VALUES (%s, %s, %s, 'paid', %s)
+                RETURNING id
+                """,
+                (token, total_idr, item_count, payload.session_id),
+            )
+            order_id = cur.fetchone()[0]
+
+            for asin, title, qty, unit_price in lines:
+                cur.execute(
+                    """
+                    INSERT INTO order_items (order_id, asin, title, qty, unit_price_idr)
+                    VALUES (%s, %s, %s, %s, %s)
+                    """,
+                    (order_id, asin, title, qty, unit_price),
+                )
+
+            # The purchase event is written HERE, not by the browser: the server
+            # is the only party that knows the order really exists. This is what
+            # makes the funnel's last step authoritative instead of a claim.
+            cur.execute(
+                """
+                INSERT INTO events (session_id, event_type, qty, price_idr)
+                VALUES (%s, 'purchase_mock', %s, %s)
+                """,
+                (payload.session_id, item_count, total_idr),
+            )
+
+            conn.commit()
+
+    return {
+        "token": token,
+        "status": "paid",
+        "total_idr": total_idr,
+        "item_count": item_count,
+        "items": [
+            {"asin": asin, "title": title, "qty": qty, "unit_price_idr": unit_price}
+            for asin, title, qty, unit_price in lines
+        ],
+    }
+
+
+@app.get("/orders/{token}")
+def get_order(token: str):
+    """Read an order back. This is what makes the confirmation page survive a
+    refresh, a new tab, or a different device — the token in the URL is the key."""
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, token, total_idr, item_count, status, created_at
+                FROM orders WHERE token = %s
+                """,
+                (token,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Order not found")
+
+            order_id, token, total_idr, item_count, status, created_at = row
+            cur.execute(
+                """
+                SELECT asin, title, qty, unit_price_idr
+                FROM order_items WHERE order_id = %s ORDER BY id
+                """,
+                (order_id,),
+            )
+            items = [
+                {"asin": asin, "title": title, "qty": qty, "unitPriceIdr": unit_price}
+                for asin, title, qty, unit_price in cur.fetchall()
+            ]
+
+    return {
+        "token": token,
+        "status": status,
+        "totalIdr": total_idr,
+        "itemCount": item_count,
+        "createdAt": created_at.isoformat(),
+        "items": items,
     }

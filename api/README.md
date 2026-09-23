@@ -51,6 +51,8 @@ The `seed` service is behind a compose profile, so it never starts with `up`.
 | `GET` | `/categories` | facets with real counts: departments + top 24 category names |
 | `POST` | `/events` | record one funnel event → `201` · `422` if malformed |
 | `GET` | `/events/summary` | funnel KPIs computed from the events table. `since_days` (default 30) |
+| `POST` | `/checkout/confirm` | turn a cart into a paid order → `201` with a token · `400` unknown asin · `422` bad body |
+| `GET` | `/orders/{token}` | read an order back · `404` unknown token |
 
 `/products` returns an envelope, never a bare array:
 
@@ -149,18 +151,56 @@ waits on it, because losing a data point is cheaper than breaking a purchase. It
 `keepalive: true` so a request still completes when the page navigates away in the same tick
 (add-to-cart then redirect, or "I have paid" → success).
 
-### How to read the numbers honestly
+### Checkout (B5 — the authoritative step)
 
-`/events/summary` returns its own `caveats` array. Two matter:
+Before this existed, "paid" was a claim the browser made, and `/checkout/success` was a
+**static page that confirmed an order to anyone who typed the URL**. Now the truth is a row
+in `orders`, and the confirmation page can only display what the server holds.
+
+```bash
+curl -s -X POST localhost:8001/checkout/confirm -H 'Content-Type: application/json' \
+  -d '{"items":[{"asin":"B000YXC2LI","qty":2}],"session_id":"sess-abc12345"}'
+# → {"token":"...","status":"paid","total_idr":989400,"item_count":2,"items":[...]}
+
+curl -s localhost:8001/orders/<token>
+```
+
+**The rule that matters: the client sends `{asin, qty}` and never a price.** The server looks
+up `products.price_idr` for every line and computes the total itself, so a tampered request
+cannot "pay" Rp 1. `ConfirmIn` sets `extra="forbid"`, which means a request that *tries* to
+send a total is rejected with a `422` instead of being silently ignored — the rule is
+enforced at the edge and visible in the logs.
+
+Other consequences of putting the order on the server:
+
+- The page `/checkout/confirm/[token]` **fetches the order**, so it survives a refresh, a new
+  tab and another device. Without a valid token it renders a 404, not a fake receipt.
+- `purchase_mock` is now written **by the server inside the confirm handler**, because the
+  server is the only party that knows the order exists. The funnel's last step is therefore
+  authoritative, not browser-asserted.
+- `session_id` is **required** on confirm. A purchase that cannot be attributed to a visit is
+  useless to the funnel, and `events.session_id` is `NOT NULL` — allowing null produced a
+  500 from the database layer where a 422 belonged.
+- The cart line gained `asin` for this, so the localStorage key moved to `toko-cart-v2`. A v1
+  cart line has no asin and therefore cannot be priced; the key bump is honest where a silent
+  migration would have produced unpriceable lines.
+
+Known simplification: **confirm is not idempotent.** A double-click would create two orders.
+The button disables while the request is in flight, but a real system wants an
+`Idempotency-Key` header. Worth saying out loud rather than discovering in a demo.
+
+## How to read the funnel numbers honestly
+
+`/events/summary` returns its own `caveats` array. Three matter:
 
 1. **`search_to_pdp` is a session-level proxy** — a session that both searched and viewed a
    product. The product *click* is not recorded as its own event yet, so it is not a
    click-through rate.
-2. **`purchase_mock` is browser-asserted.** Until checkout is confirmed server-side (B5),
-   "paid" is a claim from the client. That is why the QRIS screen says *demo*.
-3. **`results_count` for `search` counts matches among the products currently loaded**, not the
+2. **`results_count` for `search` counts matches among the products currently loaded**, not the
    whole catalog, because filtering is still client-side. Zero-result rate becomes a real
    metric only when `/search` moves to the server (Phase 5).
+3. `purchase_mock` is no longer browser-asserted — it is written by the confirm handler. This
+   one is now trustworthy, which is why it is worth keeping the other two visible.
 
 Rates are `null`, never `0.0`, when a denominator is missing — an empty events table cannot
 produce a misleading "0% conversion".
@@ -168,5 +208,4 @@ produce a misleading "0% conversion".
 ## Not built yet (planned, in order)
 
 Search (`/search`, hybrid BM25 + embeddings) · recommendations (`/recs`, cold-start →
-popular) · server-side checkout confirm (B5) · copilot with tools. All of them live here, in
-Python — never in Next.
+popular) · copilot with tools. All of them live here, in Python — never in Next.

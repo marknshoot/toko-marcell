@@ -11,7 +11,10 @@ export function CartProvider({ children }) {
 
     useEffect(() => {
         try {
-            const raw = localStorage.getItem("toko-cart");
+            // v2: cart lines now carry `asin`, which is what checkout sends to the
+            // server. Old v1 carts have no asin, so the key is bumped instead of
+            // migrating — a cart line that cannot be priced is worse than no cart.
+            const raw = localStorage.getItem("toko-cart-v2");
             if (raw) {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed)) {
@@ -53,6 +56,7 @@ export function CartProvider({ children }) {
             ...prev,
             {
             id: product.id,
+            asin: product.asin,
             title: product.title,
             priceIdr: product.priceIdr,
             qty: q,
@@ -96,7 +100,7 @@ export function CartProvider({ children }) {
 
     useEffect(() => {
         if (!hasLoaded) return; // important!
-        localStorage.setItem("toko-cart", JSON.stringify(items));
+        localStorage.setItem("toko-cart-v2", JSON.stringify(items));
     }, [items, hasLoaded]);
 
     return (

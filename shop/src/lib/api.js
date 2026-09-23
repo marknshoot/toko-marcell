@@ -41,6 +41,42 @@ export async function getCategories() {
   return response.json();
 }
 
+// Checkout confirm. Unlike postEvent, this DOES throw: it is the authoritative
+// step, so the UI must know whether the order really exists before it tells the
+// shopper anything.
+//
+// Note what is sent: {asin, qty} only. The server prices the order from its own
+// catalog, because a client-supplied total is a client-supplied price.
+export async function confirmCheckout(items) {
+  const response = await fetch(`${API_URL}/checkout/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ items, session_id: getSessionId() }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Could not confirm the order");
+  }
+
+  return response.json();
+}
+
+export async function getOrder(token) {
+  const response = await fetch(`${API_URL}/orders/${encodeURIComponent(token)}`);
+
+  // 404 = no such order, so the page can show its own not-found instead of an
+  // order it cannot verify.
+  if (response.status === 404) {
+    return null;
+  }
+
+  if (!response.ok) {
+    throw new Error("Could not load order");
+  }
+
+  return response.json();
+}
+
 // Fire-and-forget telemetry: the funnel events in PLAN §4.
 //
 // It never throws and never returns anything the UI waits on. A failed event must

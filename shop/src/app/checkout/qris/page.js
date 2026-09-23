@@ -1,19 +1,34 @@
 "use client";
 
 import Link from "next/link";
-import { useContext } from "react";
+import { useContext, useState } from "react";
+import { useRouter } from "next/navigation";
 import { CartContext } from "@/components/CartProvider";
-import { postEvent } from "@/lib/api";
+import { confirmCheckout } from "@/lib/api";
 import { formatRp } from "@/lib/formatRp";
 
 export default function QrisPage() {
-  const { cartCount, subtotal } = useContext(CartContext);
+  const { items, cartCount, subtotal } = useContext(CartContext);
+  const router = useRouter();
+  const [paying, setPaying] = useState(false);
+  const [error, setError] = useState(null);
 
-  // Purchase (M2). Fired on the click, not on the success page: the cart is
-  // cleared when /checkout/success mounts, so by then the amount is gone. The
-  // request uses keepalive (see postEvent) to survive the navigation.
-  function handlePaid() {
-    postEvent({ eventType: "purchase_mock", qty: cartCount, priceIdr: subtotal });
+  // "I have paid" is no longer a link to a static success page: it asks the
+  // server to create the order. Only the token that comes back is proof, and the
+  // purchase event is written by the server (see POST /checkout/confirm).
+  async function handlePaid() {
+    setPaying(true);
+    setError(null);
+
+    try {
+      const order = await confirmCheckout(
+        items.map((item) => ({ asin: item.asin, qty: item.qty }))
+      );
+      router.push(`/checkout/confirm/${order.token}`);
+    } catch (err) {
+      setError("Could not confirm the order. Please try again.");
+      setPaying(false);
+    }
   }
 
   if (cartCount === 0) {
@@ -67,13 +82,16 @@ export default function QrisPage() {
           >
             Back to checkout
           </Link>
-          <Link
-            href="/checkout/success"
+          <button
+            type="button"
             onClick={handlePaid}
-            className="inline-flex w-fit rounded-full bg-cta px-6 py-3 text-sm font-medium text-white no-underline"
+            disabled={paying}
+            className="inline-flex w-fit rounded-full bg-cta px-6 py-3 text-sm font-medium text-white disabled:cursor-not-allowed disabled:opacity-60"
           >
-            I have paid (demo)
-          </Link>
+            {paying ? "Confirming…" : "I have paid (demo)"}
+          </button>
+
+          {error ? <p className="mt-3 text-sm text-muted">{error}</p> : null}
         </div>
       </div>
     </main>
