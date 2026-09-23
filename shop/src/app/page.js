@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import Catalog from "@/components/Catalog";
+import CatalogSkeleton from "@/components/CatalogSkeleton";
 
 export default function Home() {
   return (
@@ -32,13 +33,7 @@ export default function Home() {
         App Router can only resolve on the client, so it needs a Suspense
         boundary. The fallback is what the server sends first.
       */}
-      <Suspense
-        fallback={
-          <section className="border-t border-border py-12">
-            <div className="mx-auto max-w-2xl px-7 text-muted">Loading…</div>
-          </section>
-        }
-      >
+      <Suspense fallback={<CatalogSkeleton />}>
         <Catalog />
       </Suspense>
     </main>

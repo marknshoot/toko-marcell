@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ProductCard from "./ProductCard";
+import ProductCardSkeleton from "./ProductCardSkeleton";
 import { getProducts, getCategories } from "../lib/api";
 
 const PAGE_SIZE = 24;
@@ -39,6 +40,16 @@ export default function Catalog() {
   const [error, setError] = useState(null);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
+
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+
+  useEffect(() => {
+    const timer = setTimeout(() => {
+      setDebouncedQuery(searchQuery);
+    }, 200); // 200ms debounce delay
+    
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
   // Facets: fetched once — they describe the catalog, not the current page.
   useEffect(() => {
@@ -116,7 +127,7 @@ export default function Catalog() {
   }
 
   let visibleProducts = products;
-  const q = searchQuery.trim().toLowerCase();
+  const q = debouncedQuery.trim().toLowerCase();
   if (q !== "") {
     visibleProducts = visibleProducts.filter((product) =>
       product.title.toLowerCase().includes(q)
@@ -169,7 +180,16 @@ export default function Catalog() {
 
         <div className="mt-6 grid grid-cols-2 gap-3">
           {loading ? (
-            <p className="text-muted">Loading…</p>
+            // Skeleton cards instead of a "Loading…" line: the grid keeps its
+            // shape, so nothing jumps when the real products arrive.
+            <>
+              <span className="sr-only" role="status">
+                Loading products
+              </span>
+              {Array.from({ length: 6 }, (_, index) => (
+                <ProductCardSkeleton key={index} />
+              ))}
+            </>
           ) : error ? (
             <p className="text-muted">{error}</p>
           ) : visibleProducts.length === 0 ? (
