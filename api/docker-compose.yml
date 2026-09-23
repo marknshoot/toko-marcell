@@ -28,5 +28,30 @@ services:
       db:
         condition: service_healthy
 
+  # Offline job, not a server: it seeds the catalog built by pipelines/build_catalog.py.
+  # It is behind a profile, so `docker compose up` never starts it.
+  #
+  #   docker compose run --rm seed              # upsert the catalog
+  #   docker compose run --rm seed --reset      # wipe + reload (after regenerating)
+  seed:
+    build:
+      context: .
+      dockerfile: dockerfile
+    profiles: ["tools"]
+    # entrypoint + `docker compose run seed --reset` appends the extra flag
+    entrypoint:
+      - python
+      - /pipelines/seed.py
+      - --seed-file=/data/processed/products.jsonl
+    command: []
+    environment:
+      DATABASE_URL: postgresql://toko:toko@db:5432/toko
+    volumes:
+      - ../data:/data:ro
+      - ../pipelines:/pipelines:ro
+    depends_on:
+      db:
+        condition: service_healthy
+
 volumes:
   pgdata:
