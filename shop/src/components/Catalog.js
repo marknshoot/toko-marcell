@@ -170,8 +170,8 @@ export default function Catalog() {
   }
 
   return (
-    <section id="catalog" className="border-t border-border py-12">
-      <div className="mx-auto max-w-2xl px-7">
+    <section id="catalog" className="border-border py-12">
+      <div className="mx-auto max-w-4xl px-7">
         <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted">
           Catalog
         </p>
@@ -224,7 +224,7 @@ export default function Catalog() {
           })}
         </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-3">
+        <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
           {loading ? (
             // Skeleton cards instead of a "Loading…" line: the grid keeps its
             // shape, so nothing jumps when the real products arrive.

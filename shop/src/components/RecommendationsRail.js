@@ -7,13 +7,14 @@ import ProductCard from "./ProductCard";
 export default function RecommendationsRail() {
   const [data, setData] = useState({ items: [], strategy: "cold_popularity" });
   const [loading, setLoading] = useState(true);
+  const [visibleCount, setVisibleCount] = useState(4);
 
   useEffect(() => {
     let cancelled = false;
 
     async function loadRecs() {
       try {
-        const res = await getSessionRecs(4);
+        const res = await getSessionRecs(12);
         if (!cancelled && res && res.items) {
           setData(res);
         }
@@ -38,6 +39,11 @@ export default function RecommendationsRail() {
   }
 
   const isPersonalized = data.strategy === "session_cf";
+  const visibleItems = data.items.slice(0, visibleCount);
+
+  function handleLoadMore() {
+    setVisibleCount((prev) => prev + 4);
+  }
 
   return (
     <section className="border-b border-border bg-surface/50 py-10">
@@ -61,10 +67,22 @@ export default function RecommendationsRail() {
         </div>
 
         <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
-          {data.items.map((product) => (
+          {visibleItems.map((product) => (
             <ProductCard key={product.id} {...product} />
           ))}
         </div>
+
+        {visibleCount < data.items.length ? (
+          <div className="mt-8 flex justify-center">
+            <button
+              type="button"
+              onClick={handleLoadMore}
+              className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-5 py-2 text-xs font-medium text-foreground shadow-xs transition-colors hover:border-foreground hover:bg-surface/80 cursor-pointer"
+            >
+              Load more recommendations ↓
+            </button>
+          </div>
+        ) : null}
       </div>
     </section>
   );

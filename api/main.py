@@ -884,7 +884,7 @@ def recs_popular(
 @app.get("/recs/item/{asin}")
 def recs_item(
     asin: str,
-    limit: int = Query(6, ge=1, le=12),
+    limit: int = Query(6, ge=1, le=24),
 ):
     """Item-to-item recommendations for PDP & Cart (M9).
 
@@ -961,7 +961,7 @@ def recs_item(
 @app.get("/recs/session")
 def recs_session(
     session_id: str = Query(min_length=1, max_length=128),
-    limit: int = Query(6, ge=1, le=12),
+    limit: int = Query(6, ge=1, le=24),
 ):
     """Session-based recommendations (M7).
 
