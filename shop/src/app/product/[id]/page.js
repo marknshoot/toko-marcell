@@ -1,9 +1,10 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { formatRp } from "../../../lib/formatRp";
-import { getProduct } from "../../../lib/api";
+import { getProduct, getItemRecs } from "../../../lib/api";
 import AddToCartButton from "@/components/AddToCartButton";
 import ProductImage from "@/components/ProductImage";
+import ProductCard from "@/components/ProductCard";
 import TrackView from "@/components/TrackView";
 
 // Dynamic <title>/description per product. This calls getProduct again, but Next
@@ -40,6 +41,8 @@ export default async function ProductPage({ params }) {
     if (!product) {
         notFound();
     }
+
+    const recsData = await getItemRecs(product.asin, 4);
 
     const breadcrumb = (product.categoryPath || []).join(" › ");
     const features = product.features || [];
@@ -112,6 +115,26 @@ export default async function ProductPage({ params }) {
                         <p className="mt-3 text-sm leading-relaxed text-muted">
                             {product.description}
                         </p>
+                    </section>
+                ) : null}
+
+                {recsData?.items?.length > 0 ? (
+                    <section className="mt-12 border-t border-border pt-8">
+                        <div className="flex items-baseline justify-between">
+                            <h2 className="text-xs font-semibold uppercase tracking-[0.12em] text-foreground">
+                                Customers Also Viewed
+                            </h2>
+                            <span className="text-xs text-muted">
+                                {recsData.strategy === "item_cf"
+                                    ? "Based on co-purchases & views"
+                                    : "Popular in this category"}
+                            </span>
+                        </div>
+                        <div className="mt-4 grid grid-cols-2 gap-4 sm:grid-cols-4">
+                            {recsData.items.map((rec) => (
+                                <ProductCard key={rec.id} {...rec} />
+                            ))}
+                        </div>
                     </section>
                 ) : null}
             </div>

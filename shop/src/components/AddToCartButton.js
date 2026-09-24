@@ -1,10 +1,14 @@
 "use client";
 
 import { useContext, useState } from "react";
+import { useRouter } from "next/navigation";
 import { CartContext } from "./CartProvider";
 
 export default function AddToCartButton({ product }) {
-  const { addToCart } = useContext(CartContext);
+  const router = useRouter();
+  const { addToCart, items } = useContext(CartContext) || { items: [] };
+  const inCartItem = items?.find((item) => item.id === product.id);
+  const inCartQty = inCartItem ? inCartItem.qty : 0;
 
   // useState returns [value, setter] — must use [ ] not { }
   const [qty, setQty] = useState(1);
@@ -19,6 +23,7 @@ export default function AddToCartButton({ product }) {
 
   function handleAdd() {
     addToCart(product, qty);
+    router.push("/");
   }
 
   return (
@@ -41,12 +46,18 @@ export default function AddToCartButton({ product }) {
         </button>
       </div>
 
+      {inCartQty > 0 ? (
+        <p className="mt-2 text-xs font-medium text-cta">
+          ✓ {inCartQty} currently in your cart
+        </p>
+      ) : null}
+
       <button
         type="button"
         onClick={handleAdd}
-        className="mt-4 rounded-full bg-cta px-6 py-3 text-sm font-medium text-white"
+        className="mt-4 rounded-full bg-cta px-6 py-3 text-sm font-medium text-white transition hover:bg-cta-hover"
       >
-        Add to cart
+        {inCartQty > 0 ? "Add more to cart" : "Add to cart"}
       </button>
     </div>
   );

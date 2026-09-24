@@ -1,6 +1,7 @@
 import { Suspense } from "react";
 import Catalog from "@/components/Catalog";
 import CatalogSkeleton from "@/components/CatalogSkeleton";
+import RecommendationsRail from "@/components/RecommendationsRail";
 
 export default function Home() {
   return (
@@ -27,6 +28,8 @@ export default function Home() {
           </div>
         </div>
       </section>
+
+      <RecommendationsRail />
 
       {/*
         Catalog reads the filter + page from the URL (useSearchParams), which the

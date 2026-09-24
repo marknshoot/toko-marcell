@@ -18,6 +18,7 @@ export function CartProvider({ children }) {
             if (raw) {
             const parsed = JSON.parse(raw);
             if (Array.isArray(parsed)) {
+                // eslint-disable-next-line react-hooks/set-state-in-effect
                 setItems(parsed);
             }
             }
@@ -26,6 +27,24 @@ export function CartProvider({ children }) {
         } finally {
             setHasLoaded(true);
         }
+
+        // Cross-tab sync: when another tab modifies the cart in localStorage,
+        // the browser fires the native "storage" event to keep all tabs in sync.
+        function handleStorage(event) {
+            if (event.key === "toko-cart-v2") {
+                try {
+                    const parsed = event.newValue ? JSON.parse(event.newValue) : [];
+                    if (Array.isArray(parsed)) {
+                        setItems(parsed);
+                    }
+                } catch {
+                    // best effort on malformed payload
+                }
+            }
+        }
+
+        window.addEventListener("storage", handleStorage);
+        return () => window.removeEventListener("storage", handleStorage);
     }, []); 
 
 
@@ -59,6 +78,7 @@ export function CartProvider({ children }) {
             asin: product.asin,
             title: product.title,
             priceIdr: product.priceIdr,
+            imageUrl: product.imageUrl,
             qty: q,
             },
         ];
@@ -89,6 +109,18 @@ export function CartProvider({ children }) {
         setItems((prev) => prev.filter((item) => item.id !== id));
     }
 
+    function updateQty(id, newQty) {
+        const val = parseInt(newQty, 10);
+        if (isNaN(val) || val <= 0) {
+            removeItem(id);
+            return;
+        }
+        const clamped = Math.min(99, Math.max(1, val));
+        setItems((prev) =>
+            prev.map((item) => (item.id === id ? { ...item, qty: clamped } : item))
+        );
+    }
+
     const subtotal = items.reduce(
         (sum, item) => sum + item.priceIdr * item.qty, 0
     );
@@ -104,7 +136,7 @@ export function CartProvider({ children }) {
     }, [items, hasLoaded]);
 
     return (
-        <CartContext.Provider value={{ items, cartCount, addToCart, increaseQty, decreaseQty, removeItem, subtotal, clearCart }}>
+        <CartContext.Provider value={{ items, cartCount, addToCart, increaseQty, decreaseQty, updateQty, removeItem, subtotal, clearCart }}>
         {children}
         </CartContext.Provider>
     );

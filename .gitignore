@@ -11,6 +11,7 @@ out/
 # python bytecode
 __pycache__/
 *.pyc
+.pytest_cache/
 
 # defence in depth: the plan pack is local-only, never commit it
 plan/

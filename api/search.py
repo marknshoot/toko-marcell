@@ -30,6 +30,7 @@ Known simplifications (deliberate, and worth stating out loud)
 """
 
 import math
+import os
 import re
 import threading
 import unicodedata
@@ -92,6 +93,7 @@ class BM25Index:
         self.b = b
         self.doc_ids: list = []
         self.doc_keys: list = []  # optional dedupe key per document (the title)
+        self.id_to_key: dict = {}  # doc_id -> dedupe_key lookup
         self.doc_lengths: dict = {}
         self.postings: dict[str, dict] = defaultdict(dict)  # term -> {doc_index: weighted tf}
         self.avg_length = 0.0
@@ -107,6 +109,7 @@ class BM25Index:
         index = len(self.doc_ids)
         self.doc_ids.append(doc_id)
         self.doc_keys.append(dedupe_key)
+        self.id_to_key[doc_id] = dedupe_key
 
         weighted = Counter()
         length = 0.0
@@ -187,6 +190,19 @@ class BM25Index:
 
         return results
 
+    def dedupe(self, items: list[tuple[int, float]]) -> list[tuple[int, float]]:
+        """Deduplicate a list of (doc_id, score) by dedupe_key, preserving rank order."""
+        seen = set()
+        deduped = []
+        for doc_id, score in items:
+            key = self.id_to_key.get(doc_id)
+            if key:
+                if key in seen:
+                    continue
+                seen.add(key)
+            deduped.append((doc_id, score))
+        return deduped
+
 
 _INDEX = None
 _INDEX_LOCK = threading.Lock()
@@ -211,3 +227,51 @@ def reset_index():
     global _INDEX
     with _INDEX_LOCK:
         _INDEX = None
+
+
+def reciprocal_rank_fusion(
+    rankings: list[list[tuple[int, float]]],
+    k: int = 60,
+) -> list[tuple[int, float]]:
+    """Merge multiple ranked lists using Reciprocal Rank Fusion (RRF).
+
+    RRF score = sum(1 / (k + rank)) for each ranker where the document appears.
+    k=60 is the standard constant from Cormack, Clarke & Buettcher (2009).
+    It avoids the need to calibrate or normalize disparate score distributions
+    (e.g., BM25 scores are unbounded positive numbers, cosine similarity is -1 to 1).
+    """
+    scores = defaultdict(float)
+    for rank_list in rankings:
+        for rank, (doc_id, _) in enumerate(rank_list):
+            scores[doc_id] += 1.0 / (k + rank + 1)
+    return sorted(scores.items(), key=lambda item: (-item[1], item[0]))
+
+
+_EMBED_MODEL = None
+_EMBED_LOCK = threading.Lock()
+
+
+def get_embed_model():
+    """Load the fastembed sentence transformer lazily."""
+    global _EMBED_MODEL
+    if _EMBED_MODEL is None:
+        with _EMBED_LOCK:
+            if _EMBED_MODEL is None:
+                from fastembed import TextEmbedding
+                cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", "/tmp/fastembed_cache")
+                _EMBED_MODEL = TextEmbedding(
+                    model_name="sentence-transformers/all-MiniLM-L6-v2",
+                    cache_dir=cache_dir,
+                )
+    return _EMBED_MODEL
+
+
+def embed_query(query: str) -> list[float] | None:
+    """Generate 384-dim vector for search query. Returns None if embedding fails."""
+    try:
+        model = get_embed_model()
+        vectors = list(model.embed([query]))
+        return [float(x) for x in vectors[0]]
+    except Exception as e:
+        print(f"[search] embed_query failed: {e}")
+        return None

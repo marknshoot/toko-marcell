@@ -26,6 +26,9 @@ services:
     environment:
       DATABASE_URL: postgresql://toko:toko@db:5432/toko
       CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+    volumes:
+      - /home/marcell/.cache/fastembed:/tmp/fastembed_cache:ro
+      - /home/marcell/.cache/huggingface:/root/.cache/huggingface:ro
     depends_on:
       db:
         condition: service_healthy

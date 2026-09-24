@@ -8,7 +8,14 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
-from search import BM25Index, get_index, reset_index
+from search import (
+    BM25Index,
+    get_index,
+    reset_index,
+    reciprocal_rank_fusion,
+    embed_query,
+    tokenize,
+)
 
 app = FastAPI(title="Toko Marcell API")
 
@@ -119,6 +126,15 @@ ORDERS_INDEXES: list[tuple[str, str]] = [
 
 ORDER_ITEMS_INDEXES: list[tuple[str, str]] = [
     ("order_items_order_idx", "order_items (order_id)"),
+]
+
+ITEM_RECS_SCHEMA: list[tuple[str, str]] = [
+    ("asin", "TEXT PRIMARY KEY"),
+    ("recs", "JSONB NOT NULL DEFAULT '[]'::jsonb"),
+]
+
+ITEM_RECS_INDEXES: list[tuple[str, str]] = [
+    ("item_recs_asin_idx", "item_recommendations (asin)"),
 ]
 
 # Derived, so the SELECT can never drift from the table definition. `embedding` is
@@ -235,6 +251,7 @@ def init_db():
             # index has to be created with it, not with orders.
             _ensure_table(cur, "orders", ORDERS_SCHEMA, ORDERS_INDEXES)
             _ensure_table(cur, "order_items", ORDER_ITEMS_SCHEMA, ORDER_ITEMS_INDEXES)
+            _ensure_table(cur, "item_recommendations", ITEM_RECS_SCHEMA, ITEM_RECS_INDEXES)
 
             conn.commit()
 
@@ -498,6 +515,8 @@ class ConfirmItem(BaseModel):
     Deliberately no price. The server looks it up.
     """
 
+    model_config = ConfigDict(extra="forbid")
+
     asin: str = Field(min_length=1, max_length=32)
     qty: int = Field(ge=1, le=99)
 
@@ -529,7 +548,9 @@ def confirm_checkout(payload: ConfirmIn):
     happily confirm an order to anyone who typed the URL. Now the truth is a row
     in `orders`, and the success page can only show what the server holds.
     """
-    wanted = {item.asin: item.qty for item in payload.items}
+    wanted: dict[str, int] = {}
+    for item in payload.items:
+        wanted[item.asin] = wanted.get(item.asin, 0) + item.qty
 
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
@@ -685,7 +706,7 @@ def reindex_search():
     """
     reset_index()
     index = get_index(build_search_index)
-    return {"documents": index.size, "mode": "bm25"}
+    return {"documents": index.size, "mode": "hybrid"}
 
 
 @app.get("/search")
@@ -695,17 +716,31 @@ def search_products(
     offset: int = Query(0, ge=0),
     department: str | None = None,
     category: str | None = None,
+    mode: Literal["hybrid", "bm25", "vector"] = "hybrid",
 ):
-    """Lexical search over title, brand, category, features and description.
+    """Hybrid (BM25 + pgvector cosine similarity), BM25-only, or vector-only search.
 
-    `mode` is part of the response because this endpoint is meant to become
-    hybrid (BM25 + embeddings). The UI and the eval harness should be able to tell
-    which ranker produced a result set without inferring it from a deployment.
+    Fuses lexical term matching (BM25) and dense semantic embeddings (fastembed
+    sentence-transformers/all-MiniLM-L6-v2) using Reciprocal Rank Fusion (RRF, k=60).
     """
     started = time.perf_counter()
+
+    clean_tokens = tokenize(q)
+    if not clean_tokens:
+        return {
+            "items": [],
+            "total": 0,
+            "limit": limit,
+            "offset": offset,
+            "query": q,
+            "mode": mode,
+            "deduped": True,
+            "took_ms": round((time.perf_counter() - started) * 1000, 2),
+        }
+
     index = get_index(build_search_index)
 
-    # Resolve the facet to a set of ids once, so ranking stays in-memory.
+    # Resolve the facet to a set of ids once, so lexical ranking stays in-memory.
     allowed = None
     if department or category:
         filters, params = [], []
@@ -723,16 +758,59 @@ def search_products(
                 )
                 allowed = {row[0] for row in cur.fetchall()}
 
-    # Rank everything, dedupe, then cut the page: dedupe before pagination is what
-    # keeps `total` equal to the number of results a shopper could actually reach.
-    ranked = index.rank(q, allowed=allowed, dedupe=True)
+    bm25_ranked = []
+    if mode in ("bm25", "hybrid"):
+        bm25_ranked = index.rank(q, allowed=allowed, dedupe=False)
+
+    vector_ranked = []
+    if mode in ("vector", "hybrid"):
+        query_vec = embed_query(q)
+        if query_vec is not None:
+            vec_str = "[" + ",".join(f"{x:.6f}" for x in query_vec) + "]"
+            vec_filters = ["embedding IS NOT NULL"]
+            vec_params = [vec_str]
+            if department:
+                vec_filters.append("department = %s")
+                vec_params.append(department)
+            if category:
+                vec_filters.append("category = %s")
+                vec_params.append(category)
+            vec_params.append(vec_str)
+
+            with psycopg.connect(DATABASE_URL) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT id, 1 - (embedding <=> %s::vector) AS similarity
+                        FROM products
+                        WHERE {' AND '.join(vec_filters)}
+                        ORDER BY embedding <=> %s::vector
+                        LIMIT 100
+                        """,
+                        vec_params,
+                    )
+                    vector_ranked = [(row[0], float(row[1])) for row in cur.fetchall()]
+
+    if mode == "bm25":
+        ranked = index.dedupe(bm25_ranked)
+    elif mode == "vector":
+        ranked = index.dedupe(vector_ranked)
+    else:  # hybrid
+        if bm25_ranked and vector_ranked:
+            fused = reciprocal_rank_fusion([bm25_ranked[:100], vector_ranked[:100]], k=60)
+            ranked = index.dedupe(fused)
+        elif vector_ranked:
+            ranked = index.dedupe(vector_ranked)
+        else:
+            ranked = index.dedupe(bm25_ranked)
+
     total = len(ranked)
     hits = ranked[offset : offset + limit]
 
     items = []
     if hits:
         ids = [product_id for product_id, _ in hits]
-        scores = dict(hits)
+        scores = {product_id: score for product_id, score in hits}
         with psycopg.connect(DATABASE_URL) as conn:
             with conn.cursor() as cur:
                 cur.execute(
@@ -752,7 +830,229 @@ def search_products(
         "limit": limit,
         "offset": offset,
         "query": q,
-        "mode": "bm25",
+        "mode": mode,
         "deduped": True,
         "took_ms": round((time.perf_counter() - started) * 1000, 2),
+    }
+
+
+# ── Recommendations (M7 / M8 / M9) ───────────────────────────────────────────
+
+@app.get("/recs/popular")
+def recs_popular(
+    department: str | None = None,
+    limit: int = Query(10, ge=1, le=24),
+):
+    """Bestselling / popular products baseline (M8).
+
+    Ranked by interaction & review volume. Filterable by department.
+    """
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            if department and department != "All":
+                cur.execute(
+                    f"""
+                    SELECT {PRODUCT_COLUMNS}
+                    FROM products
+                    WHERE department = %s
+                    ORDER BY rating_count DESC, avg_rating DESC
+                    LIMIT %s
+                    """,
+                    (department, limit),
+                )
+            else:
+                cur.execute(
+                    f"""
+                    SELECT {PRODUCT_COLUMNS}
+                    FROM products
+                    ORDER BY rating_count DESC, avg_rating DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+            rows = cur.fetchall()
+
+    items = [row_to_product(row) for row in rows]
+    return {
+        "items": items,
+        "count": len(items),
+        "department": department or "All",
+        "strategy": "popularity_baseline",
+    }
+
+
+@app.get("/recs/item/{asin}")
+def recs_item(
+    asin: str,
+    limit: int = Query(6, ge=1, le=12),
+):
+    """Item-to-item recommendations for PDP & Cart (M9).
+
+    Uses offline co-occurrence & graph model from `item_recommendations`.
+    Falls back to same-category popularity if cold or empty.
+    """
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            # 1. Fetch precomputed recs
+            cur.execute(
+                "SELECT recs FROM item_recommendations WHERE asin = %s",
+                (asin,),
+            )
+            row = cur.fetchone()
+            rec_asins = row[0] if row and row[0] else []
+
+            strategy = "item_cf"
+            items = []
+
+            if rec_asins:
+                target_asins = rec_asins[:limit]
+                cur.execute(
+                    f"SELECT {PRODUCT_COLUMNS} FROM products WHERE asin = ANY(%s)",
+                    (target_asins,),
+                )
+                rows = cur.fetchall()
+                by_asin = {r[1]: row_to_product(r) for r in rows}
+                for a in target_asins:
+                    prod = by_asin.get(a)
+                    if prod:
+                        items.append(prod)
+
+            # Fallback if empty or fewer than limit
+            if len(items) < limit:
+                cur.execute(
+                    "SELECT department, category FROM products WHERE asin = %s",
+                    (asin,),
+                )
+                source_prod = cur.fetchone()
+                dept = source_prod[0] if source_prod else "Men"
+                cat = source_prod[1] if source_prod else ""
+
+                cur.execute(
+                    f"""
+                    SELECT {PRODUCT_COLUMNS}
+                    FROM products
+                    WHERE asin != %s AND (category = %s OR department = %s)
+                    ORDER BY rating_count DESC, avg_rating DESC
+                    LIMIT %s
+                    """,
+                    (asin, cat, dept, limit),
+                )
+                fb_rows = cur.fetchall()
+                seen = {item["asin"] for item in items}
+                seen.add(asin)
+                for r in fb_rows:
+                    fb_prod = row_to_product(r)
+                    if fb_prod["asin"] not in seen:
+                        items.append(fb_prod)
+                        seen.add(fb_prod["asin"])
+                        if len(items) >= limit:
+                            break
+                if not rec_asins:
+                    strategy = "category_popularity_fallback"
+
+    return {
+        "asin": asin,
+        "items": items,
+        "count": len(items),
+        "strategy": strategy,
+    }
+
+
+@app.get("/recs/session")
+def recs_session(
+    session_id: str = Query(min_length=1, max_length=128),
+    limit: int = Query(6, ge=1, le=12),
+):
+    """Session-based recommendations (M7).
+
+    Personalizes based on the session's recently viewed/added items from `events`.
+    Falls back to popular baseline if cold.
+    """
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            # Read session's recent product interactions (most recent first)
+            cur.execute(
+                """
+                SELECT asin FROM events
+                WHERE session_id = %s
+                  AND event_type IN ('view_product', 'add_to_cart')
+                  AND asin IS NOT NULL
+                ORDER BY id DESC
+                LIMIT 5
+                """,
+                (session_id,),
+            )
+            seen_asins = [r[0] for r in cur.fetchall()]
+
+            if not seen_asins:
+                # Cold session fallback -> popular
+                cur.execute(
+                    f"""
+                    SELECT {PRODUCT_COLUMNS}
+                    FROM products
+                    ORDER BY rating_count DESC, avg_rating DESC
+                    LIMIT %s
+                    """,
+                    (limit,),
+                )
+                items = [row_to_product(r) for r in cur.fetchall()]
+                return {
+                    "session_id": session_id,
+                    "items": items,
+                    "count": len(items),
+                    "strategy": "cold_popularity",
+                }
+
+            # Warm session: fetch recs for the most recent items
+            cur.execute(
+                """
+                SELECT asin, recs FROM item_recommendations
+                WHERE asin = ANY(%s)
+                """,
+                (seen_asins,),
+            )
+            recs_by_asin = {r[0]: r[1] for r in cur.fetchall()}
+
+            # Blend recommendations, excluding items already seen in session
+            seen_set = set(seen_asins)
+            candidate_asins = []
+            cand_seen = set()
+
+            for viewed in seen_asins:
+                for target in recs_by_asin.get(viewed, []):
+                    if target not in seen_set and target not in cand_seen:
+                        candidate_asins.append(target)
+                        cand_seen.add(target)
+                        if len(candidate_asins) >= limit:
+                            break
+                if len(candidate_asins) >= limit:
+                    break
+
+            # Backfill if needed
+            if len(candidate_asins) < limit:
+                cur.execute(
+                    f"""
+                    SELECT asin FROM products
+                    WHERE asin != ALL(%s)
+                    ORDER BY rating_count DESC
+                    LIMIT %s
+                    """,
+                    (list(seen_set.union(cand_seen)), limit - len(candidate_asins)),
+                )
+                for r in cur.fetchall():
+                    candidate_asins.append(r[0])
+
+            # Hydrate products
+            cur.execute(
+                f"SELECT {PRODUCT_COLUMNS} FROM products WHERE asin = ANY(%s)",
+                (candidate_asins,),
+            )
+            by_asin = {r[1]: row_to_product(r) for r in cur.fetchall()}
+            items = [by_asin[a] for a in candidate_asins if a in by_asin]
+
+    return {
+        "session_id": session_id,
+        "items": items,
+        "count": len(items),
+        "strategy": "session_cf",
     }

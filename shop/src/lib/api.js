@@ -127,3 +127,48 @@ export async function postEvent({ eventType, asin, query, resultsCount, qty, pri
     // best effort by design
   }
 }
+
+// ── Recommendations (M7 / M8 / M9) ───────────────────────────────────────────
+
+export async function getPopularRecs({ department, limit = 10 } = {}) {
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  if (department && department !== "All") {
+    params.set("department", department);
+  }
+  const response = await fetch(`${API_URL}/recs/popular?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error("Could not load popular recommendations");
+  }
+  return response.json();
+}
+
+export async function getItemRecs(asin, limit = 4) {
+  try {
+    const response = await fetch(`${API_URL}/recs/item/${encodeURIComponent(asin)}?limit=${limit}`);
+    if (!response.ok) {
+      return { items: [], count: 0 };
+    }
+    return response.json();
+  } catch {
+    return { items: [], count: 0 };
+  }
+}
+
+export async function getSessionRecs(limit = 4) {
+  const sessionId = getSessionId();
+  if (!sessionId) {
+    return getPopularRecs({ limit });
+  }
+  try {
+    const response = await fetch(
+      `${API_URL}/recs/session?session_id=${encodeURIComponent(sessionId)}&limit=${limit}`
+    );
+    if (!response.ok) {
+      return getPopularRecs({ limit });
+    }
+    return response.json();
+  } catch {
+    return getPopularRecs({ limit });
+  }
+}

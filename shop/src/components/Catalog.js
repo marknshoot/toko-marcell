@@ -40,6 +40,16 @@ export default function Catalog() {
   // The input is the one exception, and deliberately so: what you are typing must
   // appear instantly, while the *request* waits for a pause. Two values, two jobs.
   const [searchInput, setSearchInput] = useState(urlQuery);
+  const [prevUrlQuery, setPrevUrlQuery] = useState(urlQuery);
+
+  // Keep the input in step when the URL changes from somewhere else (Back button,
+  // a pasted link, a chip click that clears the query). Adjusting state during render
+  // avoids cascading effect renders (React 19 pattern).
+  if (urlQuery !== prevUrlQuery) {
+    setPrevUrlQuery(urlQuery);
+    setSearchInput(urlQuery);
+  }
+
   const [products, setProducts] = useState([]);
   const [total, setTotal] = useState(0);
   const [departments, setDepartments] = useState([]);
@@ -47,12 +57,6 @@ export default function Catalog() {
   const [error, setError] = useState(null);
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
-
-  // Keep the input in step when the URL changes from somewhere else (Back button,
-  // a pasted link, a chip click that clears the query).
-  useEffect(() => {
-    setSearchInput(urlQuery);
-  }, [urlQuery]);
 
   // Facets: fetched once — they describe the catalog, not the current page.
   useEffect(() => {

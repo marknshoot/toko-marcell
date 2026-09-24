@@ -8,15 +8,15 @@ import { postEvent } from "../lib/api";
 // It lives in its own component because the PDP is a server component: that code
 // runs on the server, where there is no session id and no browser to report from.
 export default function TrackView({ asin, priceIdr }) {
-  // React runs effects twice on mount in development (StrictMode), which would
-  // double every view. The ref keeps it to one event per page view.
-  const fired = useRef(false);
+  // Track by ASIN so navigation between products records each view,
+  // while development StrictMode double-invocations are prevented.
+  const lastTrackedAsin = useRef(null);
 
   useEffect(() => {
-    if (fired.current) {
+    if (!asin || lastTrackedAsin.current === asin) {
       return;
     }
-    fired.current = true;
+    lastTrackedAsin.current = asin;
     postEvent({ eventType: "view_product", asin, priceIdr });
   }, [asin, priceIdr]);
 
