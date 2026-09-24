@@ -275,3 +275,48 @@ def embed_query(query: str) -> list[float] | None:
     except Exception as e:
         print(f"[search] embed_query failed: {e}")
         return None
+
+
+_IMAGE_EMBED_MODEL = None
+_IMAGE_EMBED_LOCK = threading.Lock()
+
+
+def get_image_embed_model():
+    """Load the fastembed CLIP image model lazily."""
+    global _IMAGE_EMBED_MODEL
+    if _IMAGE_EMBED_MODEL is None:
+        with _IMAGE_EMBED_LOCK:
+            if _IMAGE_EMBED_MODEL is None:
+                from fastembed import ImageEmbedding
+                cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", "/tmp/fastembed_cache")
+                specific_path = None
+                for candidate in [
+                    os.environ.get("CLIP_MODEL_PATH"),
+                    "/tmp/fastembed_cache/models--Qdrant--clip-ViT-B-32-vision",
+                    os.path.expanduser("~/.cache/fastembed/models--Qdrant--clip-ViT-B-32-vision"),
+                ]:
+                    if candidate and os.path.exists(candidate):
+                        specific_path = candidate
+                        break
+
+                kwargs = {"model_name": "Qdrant/clip-ViT-B-32-vision", "cache_dir": cache_dir}
+                if specific_path:
+                    kwargs["specific_model_path"] = specific_path
+
+                _IMAGE_EMBED_MODEL = ImageEmbedding(**kwargs)
+    return _IMAGE_EMBED_MODEL
+
+
+def embed_image_bytes(image_bytes: bytes) -> list[float] | None:
+    """Generate 512-dim CLIP vision embedding for an uploaded image. Returns None if fails."""
+    try:
+        import io
+        from PIL import Image
+        img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        model = get_image_embed_model()
+        vectors = list(model.embed([img]))
+        return [float(x) for x in vectors[0]]
+    except Exception as e:
+        print(f"[search] embed_image_bytes failed: {e}")
+        return None
+

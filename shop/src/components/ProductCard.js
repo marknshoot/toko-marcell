@@ -6,7 +6,7 @@ import { formatRp } from "../lib/formatRp";
 import ProductImage from "./ProductImage";
 import { CartContext } from "./CartProvider";
 
-export default function ProductCard({ id, title, priceIdr, category, brand, imageUrl }) {
+export default function ProductCard({ id, title, priceIdr, category, brand, imageUrl, visualSimilarity }) {
   const { items } = useContext(CartContext) || { items: [] };
   const inCartItem = items?.find((item) => item.id === id);
   const inCartQty = inCartItem ? inCartItem.qty : 0;
@@ -22,6 +22,11 @@ export default function ProductCard({ id, title, priceIdr, category, brand, imag
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" />
               </svg>
               {inCartQty} in cart
+            </span>
+          ) : null}
+          {visualSimilarity ? (
+            <span className="absolute bottom-2 left-2 inline-flex items-center gap-1 rounded-full bg-zinc-900/85 backdrop-blur-sm px-2 py-0.5 text-[10px] font-semibold text-zinc-100 shadow-sm">
+              {Math.round(visualSimilarity * 100)}% match
             </span>
           ) : null}
         </div>

@@ -2,4 +2,5 @@ fastapi
 uvicorn
 psycopg[binary]
 fastembed
-
+python-multipart
+pillow

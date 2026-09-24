@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import ProductCard from "./ProductCard";
 import ProductCardSkeleton from "./ProductCardSkeleton";
-import { getProducts, searchProducts, getCategories, postEvent } from "../lib/api";
+import { getProducts, searchProducts, searchByImage, getCategories, postEvent } from "../lib/api";
 
 const PAGE_SIZE = 24;
 const DEBOUNCE_MS = 250;
@@ -55,6 +55,29 @@ export default function Catalog() {
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
+
+  const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
+  const fileInputRef = useRef(null);
+
+  function handleImageSelect(e) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setImageFile(file);
+    setImagePreview(URL.createObjectURL(file));
+    setSearchInput("");
+  }
+
+  function clearImageSearch() {
+    setImageFile(null);
+    if (imagePreview) {
+      URL.revokeObjectURL(imagePreview);
+      setImagePreview(null);
+    }
+    if (fileInputRef.current) {
+      fileInputRef.current.value = "";
+    }
+  }
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
@@ -110,6 +133,15 @@ export default function Catalog() {
       setLoading(true);
       setError(null);
       try {
+        if (imageFile) {
+          const data = await searchByImage({ file: imageFile, department, limit: PAGE_SIZE });
+          if (!cancelled) {
+            setProducts(data.items);
+            setTotal(data.total);
+          }
+          return;
+        }
+
         const offset = (page - 1) * PAGE_SIZE;
         const data = urlQuery
           ? await searchProducts({ q: urlQuery, department, limit: PAGE_SIZE, offset })
@@ -139,7 +171,7 @@ export default function Catalog() {
         }
       } catch (err) {
         if (!cancelled) {
-          setError("Could not load products");
+          setError(err.message || "Could not load products");
         }
       } finally {
         if (!cancelled) {
@@ -152,7 +184,7 @@ export default function Catalog() {
     return () => {
       cancelled = true;
     };
-  }, [department, page, urlQuery, router]);
+  }, [department, page, urlQuery, imageFile, router]);
 
   function selectDepartment(name) {
     // changing the filter must go back to page 1, otherwise page 40 of a
@@ -179,19 +211,44 @@ export default function Catalog() {
           Shop
         </h2>
         <p className="mt-2 text-muted">
-          {urlQuery
+          {imageFile
+            ? `Showing visual search results for uploaded image (${total.toLocaleString()} products)`
+            : urlQuery
             ? `${total.toLocaleString()} result${total === 1 ? "" : "s"} for “${urlQuery}”`
             : `${total.toLocaleString()} products · filter by department or search`}
         </p>
 
-        <div className="mt-6 flex gap-2">
-          <input
-            type="search"
-            placeholder="Try: levis 501, white sneakers, waterproof jacket…"
-            value={searchInput}
-            onChange={(event) => setSearchInput(event.target.value)}
-            className="w-full rounded-full border border-border bg-surface px-4 py-2.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
-          />
+        <div className="mt-6 flex flex-col gap-3 sm:flex-row sm:items-center">
+          <div className="relative flex-1">
+            <input
+              type="search"
+              placeholder="Try: levis 501, white sneakers, waterproof jacket…"
+              value={searchInput}
+              onChange={(event) => {
+                if (imageFile) clearImageSearch();
+                setSearchInput(event.target.value);
+              }}
+              className="w-full rounded-full border border-border bg-surface pl-4 pr-11 py-2.5 text-sm text-foreground outline-none focus-visible:ring-2 focus-visible:ring-foreground/20"
+            />
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleImageSelect}
+            />
+            <button
+              type="button"
+              onClick={() => fileInputRef.current?.click()}
+              title="Search by image (upload photo)"
+              className="absolute right-3 top-1/2 -translate-y-1/2 rounded-full p-1.5 text-muted transition-colors hover:text-foreground hover:bg-surface-muted"
+            >
+              <svg className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 9a2 2 0 012-2h.93a2 2 0 001.664-.89l.812-1.22A2 2 0 0110.07 4h3.86a2 2 0 011.664.89l.812 1.22A2 2 0 0018.07 7H19a2 2 0 012 2v9a2 2 0 01-2 2H5a2 2 0 01-2-2V9z" />
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 13a3 3 0 11-6 0 3 3 0 016 0z" />
+              </svg>
+            </button>
+          </div>
           {searchInput ? (
             <button
               type="button"
@@ -202,6 +259,25 @@ export default function Catalog() {
             </button>
           ) : null}
         </div>
+
+        {/* Visual search active pill */}
+        {imageFile && imagePreview ? (
+          <div className="mt-3 flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2 text-xs">
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src={imagePreview} alt="Search query" className="h-9 w-9 rounded object-cover border border-border" />
+            <div className="flex-1 truncate">
+              <span className="font-semibold text-foreground">Visual Search active:</span>{" "}
+              <span className="text-muted truncate">{imageFile.name}</span>
+            </div>
+            <button
+              type="button"
+              onClick={clearImageSearch}
+              className="rounded-full bg-surface-muted px-2.5 py-1 text-[11px] font-medium text-muted hover:text-foreground"
+            >
+              ✕ Remove image
+            </button>
+          </div>
+        ) : null}
 
         <div className="mt-4 flex flex-wrap gap-2">
           {[{ name: "All", count: null }, ...departments].map((dept) => {

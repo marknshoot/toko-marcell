@@ -187,3 +187,29 @@ export async function getProductReviews(productId, limit = 10) {
   }
 }
 
+// ── Visual / Image Search ─────────────────────────────────────────────────────
+
+export async function searchByImage({ file, department, limit = 24 }) {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const params = new URLSearchParams();
+  params.set("limit", String(limit));
+  if (department && department !== "All") {
+    params.set("department", department);
+  }
+
+  const response = await fetch(`${API_URL}/search/image?${params.toString()}`, {
+    method: "POST",
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not complete image search");
+  }
+
+  return response.json();
+}
+
+

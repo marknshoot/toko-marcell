@@ -4,7 +4,7 @@ import time
 from typing import Literal
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -14,6 +14,7 @@ from search import (
     reset_index,
     reciprocal_rank_fusion,
     embed_query,
+    embed_image_bytes,
     tokenize,
 )
 
@@ -65,6 +66,7 @@ SCHEMA: list[tuple[str, str]] = [
 # Phase C. Kept out of SCHEMA because it needs the pgvector extension, which a host
 # may not have. If it is missing the catalog still works — only search degrades.
 VECTOR_COLUMN: tuple[str, str] = ("embedding", "vector(384)")
+IMAGE_VECTOR_COLUMN: tuple[str, str] = ("image_embedding", "vector(512)")
 
 INDEXES: list[tuple[str, str]] = [
     ("products_department_idx", "products (department)"),
@@ -233,6 +235,7 @@ def init_db():
             columns = list(SCHEMA)
             if _enable_pgvector(cur):
                 columns.append(VECTOR_COLUMN)
+                columns.append(IMAGE_VECTOR_COLUMN)
             else:
                 print("[init_db] pgvector unavailable — no embedding column, search disabled")
 
@@ -853,6 +856,86 @@ def search_products(
         "deduped": True,
         "took_ms": round((time.perf_counter() - started) * 1000, 2),
     }
+
+
+@app.post("/search/image")
+async def search_by_image(
+    file: UploadFile = File(...),
+    department: str | None = Query(None),
+    limit: int = Query(24, ge=1, le=50),
+):
+    """Visual Search (Search by Image) using multimodal CLIP ViT-B/32 embeddings.
+
+    Accepts an uploaded image file, computes its 512-dim vision embedding,
+    and performs cosine similarity search against `products.image_embedding`
+    using pgvector HNSW index.
+    """
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file must be an image (JPEG, PNG, WEBP, etc.)",
+        )
+
+    contents = await file.read()
+    if len(contents) < 50:
+        raise HTTPException(status_code=400, detail="Image file is too small or corrupted")
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image file exceeds 10MB limit")
+
+    started = time.perf_counter()
+    vec = embed_image_bytes(contents)
+    if not vec:
+        raise HTTPException(
+            status_code=500,
+            detail="Failed to generate image embedding from vision model",
+        )
+    embed_ms = round((time.perf_counter() - started) * 1000, 2)
+
+    vec_literal = "[" + ",".join(f"{x:.6f}" for x in vec) + "]"
+
+    where_clauses = ["image_embedding IS NOT NULL"]
+    params = [vec_literal]
+
+    if department and department != "All":
+        where_clauses.append("department = %s")
+        params.append(department)
+
+    where_sql = " AND ".join(where_clauses)
+    params.extend([vec_literal, limit])
+
+    t_db = time.perf_counter()
+    with psycopg.connect(DATABASE_URL) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT {PRODUCT_COLUMNS},
+                       ROUND((1 - (image_embedding <=> %s::vector))::numeric, 4) AS visual_similarity
+                FROM products
+                WHERE {where_sql}
+                ORDER BY image_embedding <=> %s::vector ASC
+                LIMIT %s
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+    db_ms = round((time.perf_counter() - t_db) * 1000, 2)
+
+    items = []
+    for row in rows:
+        prod = row_to_product(row[:-1])
+        prod["visualSimilarity"] = float(row[-1]) if row[-1] is not None else 0.0
+        items.append(prod)
+
+    return {
+        "items": items,
+        "total": len(items),
+        "limit": limit,
+        "filename": file.filename,
+        "department": department or "All",
+        "took_ms": round((time.perf_counter() - started) * 1000, 2),
+        "timings": {"embed_ms": embed_ms, "db_ms": db_ms},
+    }
+
 
 
 # ── Recommendations (M7 / M8 / M9) ───────────────────────────────────────────
