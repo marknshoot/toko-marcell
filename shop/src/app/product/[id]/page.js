@@ -1,10 +1,11 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { formatRp } from "../../../lib/formatRp";
-import { getProduct, getItemRecs } from "../../../lib/api";
+import { getProduct, getItemRecs, getProductReviews } from "../../../lib/api";
 import AddToCartButton from "@/components/AddToCartButton";
 import ProductImage from "@/components/ProductImage";
 import ProductCard from "@/components/ProductCard";
+import ProductReviews from "@/components/ProductReviews";
 import TrackView from "@/components/TrackView";
 
 // Dynamic <title>/description per product. This calls getProduct again, but Next
@@ -42,7 +43,10 @@ export default async function ProductPage({ params }) {
         notFound();
     }
 
-    const recsData = await getItemRecs(product.asin, 4);
+    const [recsData, reviewsData] = await Promise.all([
+        getItemRecs(product.asin, 4),
+        getProductReviews(product.id, 10),
+    ]);
 
     const breadcrumb = (product.categoryPath || []).join(" › ");
     const features = product.features || [];
@@ -50,7 +54,7 @@ export default async function ProductPage({ params }) {
     return (
         <main className="py-12">
             <TrackView asin={product.asin} priceIdr={product.priceIdr} />
-            <div className="mx-auto max-w-4xl px-7">
+            <div className="mx-auto max-w-6xl px-7">
                 <Link
                     href="/#catalog"
                     className="text-xs text-muted no-underline transition-colors hover:text-foreground"
@@ -117,6 +121,8 @@ export default async function ProductPage({ params }) {
                         </p>
                     </section>
                 ) : null}
+
+                <ProductReviews reviewsData={reviewsData} />
 
                 {recsData?.items?.length > 0 ? (
                     <section className="mt-12 border-t border-border pt-8">

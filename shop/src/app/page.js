@@ -7,7 +7,7 @@ export default function Home() {
   return (
     <main>
       <section className="py-12 md:py-16">
-        <div className="mx-auto max-w-4xl px-7">
+        <div className="mx-auto max-w-6xl px-7">
           <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted">
             Multi-brand fashion · 6,000 products
           </p>

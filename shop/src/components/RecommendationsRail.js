@@ -14,7 +14,7 @@ export default function RecommendationsRail() {
 
     async function loadRecs() {
       try {
-        const res = await getSessionRecs(12);
+        const res = await getSessionRecs(20);
         if (!cancelled && res && res.items) {
           setData(res);
         }
@@ -47,7 +47,7 @@ export default function RecommendationsRail() {
 
   return (
     <section className="border-b border-border bg-surface/50 py-10">
-      <div className="mx-auto max-w-7xl px-7">
+      <div className="mx-auto max-w-6xl px-7">
         <div className="flex flex-col gap-1 sm:flex-row sm:items-baseline sm:justify-between">
           <div className="flex items-center gap-2">
             <h2 className="text-base font-semibold tracking-tight text-foreground md:text-lg">

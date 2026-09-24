@@ -171,7 +171,7 @@ export default function Catalog() {
 
   return (
     <section id="catalog" className="border-border py-12">
-      <div className="mx-auto max-w-4xl px-7">
+      <div className="mx-auto max-w-6xl px-7">
         <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted">
           Catalog
         </p>

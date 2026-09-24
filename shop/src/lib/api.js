@@ -172,3 +172,18 @@ export async function getSessionRecs(limit = 4) {
     return getPopularRecs({ limit });
   }
 }
+
+// ── Reviews ───────────────────────────────────────────────────────────────────
+
+export async function getProductReviews(productId, limit = 10) {
+  try {
+    const response = await fetch(`${API_URL}/products/${productId}/reviews?limit=${limit}`);
+    if (!response.ok) {
+      return null;
+    }
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
