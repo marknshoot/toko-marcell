@@ -17,6 +17,7 @@ from typing import Any
 
 import httpx
 import psycopg
+from fastapi import HTTPException
 
 from agent_tools import (
     get_order_status,
@@ -459,35 +460,34 @@ async def _call_openrouter(
     body: dict[str, Any],
     headers: dict[str, str],
 ) -> dict[str, Any]:
-    """Call OpenRouter with adaptive retry for transient credit / rate-limit errors."""
-    for attempt in range(3):
-        try:
-            resp = await client.post(
-                f"{LLM_BASE_URL}/chat/completions",
-                headers=headers,
-                json=body,
-            )
-            if resp.status_code == 402:
-                # Lower max_tokens to fit in-flight credit window
-                current = body.get("max_tokens", 250)
-                body["max_tokens"] = max(150, current - 50)
-                await asyncio.sleep(1.0)
-                continue
-            resp.raise_for_status()
-            return resp.json()
-        except httpx.HTTPStatusError as e:
-            if e.response.status_code == 402 and attempt < 2:
-                body["max_tokens"] = 180
-                await asyncio.sleep(1.0)
-                continue
-            if attempt == 2:
-                raise e
-            await asyncio.sleep(1.0)
-        except Exception as e:
-            if attempt == 2:
-                raise e
-            await asyncio.sleep(1.0)
-    raise RuntimeError("OpenRouter call failed after retries")
+    """Call OpenRouter LLM. Fails immediately and explicitly with the exact error if API returns 4xx/5xx."""
+    try:
+        resp = await client.post(
+            f"{LLM_BASE_URL}/chat/completions",
+            headers=headers,
+            json=body,
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Gagal menghubungi server OpenRouter LLM: {str(e)}",
+        )
+
+    if resp.status_code == 200:
+        return resp.json()
+
+    # Extract exact error message from OpenRouter
+    err_detail = resp.text
+    try:
+        err_json = resp.json()
+        err_detail = err_json.get("error", {}).get("message", resp.text)
+    except Exception:
+        pass
+
+    raise HTTPException(
+        status_code=502,
+        detail=f"OpenRouter API error ({resp.status_code}): {err_detail}",
+    )
 
 
 async def chat_copilot(
@@ -572,121 +572,16 @@ async def chat_copilot(
 
     tool_calls_executed = []
     executed_tools_results = []
-    assistant_msg = None
 
-    async with httpx.AsyncClient(timeout=25.0) as client:
-        try:
-            res_json = await _call_openrouter(client, req_body, headers)
-            choice = res_json["choices"][0]
-            assistant_msg = choice["message"]
-        except Exception as e:
-            print(f"[agent] Notice: LLM call unavailable ({e}), using deterministic grounded intent planner.")
-            assistant_msg = {"role": "assistant", "content": None, "tool_calls": []}
-            q_lower = latest_msg.lower()
-            tool_calls = []
+    async with httpx.AsyncClient(timeout=30.0) as client:
+        # Node 1: Call LLM Planner
+        res_json = await _call_openrouter(client, req_body, headers)
+        choice = res_json.get("choices", [{}])[0]
+        assistant_msg = choice.get("message")
+        if not assistant_msg:
+            raise HTTPException(status_code=502, detail="Empty response received from OpenRouter LLM")
 
-            if extracted_token:
-                tool_calls.append({
-                    "id": "direct_order_lookup",
-                    "type": "function",
-                    "function": {"name": "get_order_status", "arguments": json.dumps({"token": extracted_token})},
-                })
-            elif any(k in q_lower for k in ["kirim", "pengiriman", "ongkir", "qris", "bayar", "tukar", "garansi", "retur", "kembali", "cod", "jam", "offline"]):
-                tool_calls.append({
-                    "id": "direct_policy_lookup",
-                    "type": "function",
-                    "function": {"name": "lookup_store_policy", "arguments": json.dumps({"query": latest_msg})},
-                })
-            elif any(k in q_lower for k in ["tb ", "bb ", "tinggi", "berat", "size", "ukuran"]):
-                tool_calls.append({
-                    "id": "direct_sizing_lookup",
-                    "type": "function",
-                    "function": {"name": "lookup_store_policy", "arguments": json.dumps({"query": latest_msg})},
-                })
-                if "dickies" in q_lower or "874" in q_lower:
-                    tool_calls.append({
-                        "id": "direct_sizing_reviews",
-                        "type": "function",
-                        "function": {"name": "get_product_reviews", "arguments": json.dumps({"asin": "B0001YRQHQ", "topic": "sizing"})},
-                    })
-            elif any(k in q_lower for k in ["review", "ulasan", "puas", "bintang", "awet", "bahan", "kaku", "tebal", "oz"]):
-                if "dickies" in q_lower or "874" in q_lower:
-                    tool_calls.append({
-                        "id": "direct_reviews_lookup",
-                        "type": "function",
-                        "function": {"name": "get_product_reviews", "arguments": json.dumps({"asin": "B0001YRQHQ", "topic": "durability"})},
-                    })
-                else:
-                    tool_calls.append({
-                        "id": "direct_catalog_search",
-                        "type": "function",
-                        "function": {"name": "search_catalog", "arguments": json.dumps({"query": latest_msg})},
-                    })
-            else:
-                catalog_keywords = [
-                    "cari", "baju", "celana", "kaos", "kemeja", "dress", "sepatu", "hoodie", "jaket",
-                    "rok", "jeans", "outfit", "rekomendasi", "pesta", "formal", "kasual", "santai",
-                    "warna", "hitam", "putih", "levis", "dickies", "carhartt", "under", "budget", "rp", "murah", "beli"
-                ]
-                has_shopping_intent = any(k in q_lower for k in catalog_keywords) or len(q_lower.split()) >= 3
-                if has_shopping_intent:
-                    clean_q = re.sub(r"\b(min|ada|gak|ya|tolong|cariin|dong|di toko|mimin)\b", "", q_lower).strip()
-                    tool_calls.append({
-                        "id": "direct_catalog_search",
-                        "type": "function",
-                        "function": {"name": "search_catalog", "arguments": json.dumps({"query": clean_q or latest_msg})},
-                    })
-                else:
-                    assistant_msg = {
-                        "role": "assistant",
-                        "content": "Halo kak! Ada yang bisa mimin bantu cari di Toko Marcell hari ini? Kakak bisa tanya rekomendasi outfit (misal: 'rekomendasi baju pesta under 300rb'), konsultasi ukuran (TB/BB), info bahan, atau cek status pesanan ya!",
-                    }
-
-        # Node 2: Check if LLM requested Tool Calls
-        if not assistant_msg.get("tool_calls") and not tool_calls:
-            tool_calls = assistant_msg.get("tool_calls", [])
-
-        # Heuristic backfill if model didn't call tool for explicit order token
-        if not tool_calls and extracted_token:
-            tool_calls = [
-                {
-                    "id": "direct_order_lookup",
-                    "type": "function",
-                    "function": {
-                        "name": "get_order_status",
-                        "arguments": json.dumps({"token": extracted_token}),
-                    },
-                }
-            ]
-
-        # Heuristic backfill if image attached but no tool was invoked
-        if not tool_calls and image_url:
-            tool_calls = [
-                {
-                    "id": "direct_image_search",
-                    "type": "function",
-                    "function": {
-                        "name": "search_by_image",
-                        "arguments": json.dumps({"image_url_or_ref": image_url}),
-                    },
-                }
-            ]
-
-        # Heuristic backfill: if user asks for products or clothing availability and model didn't call search
-        if not tool_calls:
-            q_lower = latest_msg.lower()
-            if any(k in q_lower for k in ["ada ", "cari ", "rekomendasi", "celana", "baju", "jaket", "sepatu", "outfit", "dickies", "levi"]):
-                clean_q = re.sub(r"\b(min|ada|gak|ya|tolong|cariin|dong|di toko|mimin)\b", "", q_lower).strip()
-                tool_calls = [
-                    {
-                        "id": "direct_catalog_search",
-                        "type": "function",
-                        "function": {
-                            "name": "search_catalog",
-                            "arguments": json.dumps({"query": clean_q or latest_msg}),
-                        },
-                    }
-                ]
+        tool_calls = assistant_msg.get("tool_calls") or []
 
         if tool_calls:
             # Node 2: Execute all tool calls concurrently with asyncio.gather()
@@ -707,12 +602,7 @@ async def chat_copilot(
             executed_tools_results = raw_results
 
             # Node 3: Synthesizer Fan-In
-            # Append assistant's tool-call request and tool result messages
-            convo_history.append(assistant_msg if assistant_msg.get("tool_calls") else {
-                "role": "assistant",
-                "content": None,
-                "tool_calls": tool_calls,
-            })
+            convo_history.append(assistant_msg)
             for tc, res in zip(tool_calls, executed_tools_results):
                 compact_res = _compact_tool_result(tc["function"]["name"], res.get("result", res))
                 convo_history.append({
@@ -729,96 +619,9 @@ async def chat_copilot(
                 "max_tokens": 260,
                 "temperature": 0.3,
             }
-            try:
-                syn_json = await _call_openrouter(client, syn_body, headers)
-                syn_choice = syn_json["choices"][0]
-                final_reply = syn_choice["message"].get("content", "")
-            except Exception as e:
-                print(f"[agent] Warning: Synthesis LLM call failed ({e}), building grounded response from tool evidence.")
-                reply_parts = ["Halo kak!"]
-
-                # Extract tool results safely upfront
-                order_tool = next((r["result"] for r in executed_tools_results if r.get("name") == "get_order_status"), None)
-                policy_tool = next((r["result"] for r in executed_tools_results if r.get("name") == "lookup_store_policy"), None)
-                review_tool = next((r["result"] for r in executed_tools_results if r.get("name") == "get_product_reviews"), None)
-                detail_tool = next((r["result"] for r in executed_tools_results if r.get("name") == "get_product_details"), None)
-                prods = [p for r in executed_tools_results if isinstance(r.get("result"), list) for p in r["result"] if isinstance(p, dict) and "priceIdr" in p]
-
-                # Check for order lookup
-                if order_tool and order_tool.get("found"):
-                    items_str = ", ".join(f"{it['qty']}x {it['title']}" for it in order_tool.get("items", []))
-                    reply_parts.append(
-                        f"Pesanan dengan token {order_tool['token']} berstatus {order_tool['status'].upper()} "
-                        f"dengan total Rp {order_tool['totalIdr']:,}. Rincian barang: {items_str}."
-                    )
-
-                # 1. Check for sizing consultation
-                msg_lower = latest_msg.lower()
-                if any(w in msg_lower for w in ["tb", "bb", "tinggi", "berat", "size", "ukuran"]):
-                    if "dickies" in msg_lower or "874" in msg_lower:
-                        reply_parts.append(
-                            "Untuk **Dickies 874 Original Fit**, karena bahannya rigid twill tebal (8.5 oz) dan non-stretch (kaku di pinggang), "
-                            "mimin rekomendasikan **naik 1–2 ukuran (ambil Size 32 atau 34)** dari ukuran celana standar ya kak, agar nyaman dan leluasa dipakai bergerak!"
-                        )
-                    elif "505" in msg_lower or "501" in msg_lower:
-                        reply_parts.append(
-                            "Untuk celana **Levi's 501** potongannya regular straight leg dengan button fly (100% cotton). "
-                            "Kalau kakak punya paha lebih berisi, mimin sangat sarankan **Levi's 505 Regular** karena memiliki ruang ekstra di bagian paha dan pinggul!"
-                        )
-                    elif policy_tool and isinstance(policy_tool, list) and policy_tool:
-                        reply_parts.append(f"Rekomendasi ukuran kami: {policy_tool[0].get('content', '')[:300]}")
-
-                # 2. Check for store operations policy (shipping, QRIS, returns)
-                is_policy_query = any(w in msg_lower for w in ["kirim", "pengiriman", "ongkir", "qris", "bayar", "tukar", "garansi", "retur", "kembali"])
-                if is_policy_query and policy_tool and isinstance(policy_tool, list) and policy_tool:
-                    policies_text = " ".join(p.get("content", "") for p in policy_tool).lower()
-                    has_shipping = any(w in msg_lower for w in ["kirim", "pengiriman", "ongkir", "mana"])
-                    has_qris = any(w in msg_lower for w in ["qris", "bayar", "pembayaran"])
-                    has_return = any(w in msg_lower for w in ["tukar", "garansi", "retur", "kembali"])
-
-                    policy_bullets = []
-                    if has_shipping:
-                        policy_bullets.append("Pengiriman diproses langsung dari hub **Jakarta Selatan** (estimasi 1–2 hari Jabodetabek, 3–5 hari luar pulau).")
-                    if has_qris:
-                        policy_bullets.append("Pembayaran bisa instan dan praktis menggunakan **QRIS** (simulasi demo belanja cepat & aman).")
-                    if has_return:
-                        policy_bullets.append("Tersedia **garansi tukar size 7 hari** setelah barang diterima jika ukuran kurang pas.")
-
-                    if policy_bullets:
-                        reply_parts.append("\n".join(f"• {b}" for b in policy_bullets))
-                    else:
-                        top_pol = policy_tool[0]
-                        reply_parts.append(top_pol.get("content", "")[:280])
-
-                # 3. Check for reviews / fabric / durability specs
-                if review_tool and isinstance(review_tool, dict):
-                    avg = review_tool.get("average_rating", 0)
-                    total = review_tool.get("total_reviews", 0)
-                    aspect = review_tool.get("aspect_summary", "")
-
-                    if any(w in msg_lower for w in ["bahan", "kaku", "tebal", "oz", "material", "twill"]):
-                        reply_parts.append(
-                            "Celana Dickies 874 menggunakan bahan **8.5 oz heavyweight twill** (campuran katun dan polyester). "
-                            "Karakteristik bahannya tebal, kokoh, dan awalnya terasa kaku khas workwear original, tapi sangat awet dan tahan sobek bertahun-tahun kak!"
-                        )
-                    if any(w in msg_lower for w in ["review", "ulasan", "puas", "bintang", "awet"]):
-                        reply_parts.append(
-                            f"Dari **{total:,} ulasan pembeli terverifikasi** (rating rata-rata **{avg}/5.0**), mayoritas pembeli sangat puas dengan daya tahan dan kualitas bahannya kak. Catatan penting: {aspect}."
-                        )
-
-                # 4. Check for catalog products
-                if prods and not any(w in msg_lower for w in ["review", "ulasan", "kirim", "qris"]):
-                    reply_parts.append("Berikut rekomendasi terbaik dari katalog Toko Marcell:")
-                    for idx, p in enumerate(prods[:3], 1):
-                        reply_parts.append(f"{idx}. **{p.get('title')}** - Rp {p.get('priceIdr', 0):,}")
-                    reply_parts.append("Mau langsung mimin bantu masukkan ke keranjang kak?")
-
-                # 5. Check for product details
-                if detail_tool and isinstance(detail_tool, dict) and "title" in detail_tool:
-                    feats = ", ".join(detail_tool.get("features", [])[:3])
-                    reply_parts.append(f"Untuk **{detail_tool['title']}** (Rp {detail_tool['priceIdr']:,}): terbuat dari material berkualitas dengan fitur: {feats}.")
-
-                final_reply = "\n\n".join(reply_parts)
+            syn_json = await _call_openrouter(client, syn_body, headers)
+            syn_choice = syn_json.get("choices", [{}])[0]
+            final_reply = syn_choice.get("message", {}).get("content", "")
         else:
             final_reply = assistant_msg.get("content", "")
 
