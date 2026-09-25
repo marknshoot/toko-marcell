@@ -284,6 +284,10 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall sty
      2. Politely refuse in your warm Admin Toko Marcell voice and steer the customer back to fashion.
      Refusal template:
      "Halo kak! Maaf ya, mimin adalah asisten belanja khusus Toko Marcell, jadi mimin hanya bisa membantu seputar koleksi fashion, rekomendasi outfit, panduan ukuran (TB/BB), dan pesanan di toko kami. Yuk tanyakan seputar koleksi baju, celana, atau sepatu impian kakak!"
+8. GREETINGS & CHITCHAT:
+   - When the shopper greets you ("Halo", "Hai", "Selamat pagi/siang/sore/malam", "Hi min"), expresses gratitude ("Terima kasih"), or asks what you can do ("Kamu siapa", "Bisa apa"):
+     1. Do NOT invoke any tools (no search_catalog, no review tools).
+     2. Reply warmly as Admin Toko Marcell, introduce our fashion collections and services (styling, size chart TB/BB, tracking), and invite them to browse.
 """
 
 
@@ -318,69 +322,6 @@ def _get_session_browsing_context(session_id: str | None, db_url: str) -> str:
         return ""
 
 
-def _classify_greeting_or_offtopic(query: str) -> dict[str, Any] | None:
-    """Fast-path classification for greetings, identity questions, or off-topic queries."""
-    clean_q = re.sub(r"[^\w\s]", " ", query).strip().lower()
-    clean_q = re.sub(r"\s+", " ", clean_q)
-
-    # Greetings
-    greetings = [
-        "halo", "hai", "hi", "hello", "hei", "hey",
-        "pagi", "siang", "sore", "malam",
-        "selamat pagi", "selamat siang", "selamat sore", "selamat malam",
-        "assalamualaikum", "halo min", "hai min", "pagi min", "siang min", "sore min", "malam min",
-        "halo mimin", "hai mimin", "pagi mimin", "siang mimin", "sore mimin", "malam mimin",
-        "halo kak", "hai kak", "pagi kak", "siang kak", "sore kak", "malam kak"
-    ]
-    if (
-        clean_q in greetings
-        or any(clean_q.startswith(g + " ") for g in ["halo", "hai", "hi", "hello", "hei", "pagi", "siang", "sore", "malam", "selamat pagi", "selamat siang", "selamat sore", "selamat malam"])
-        or any(clean_q == g for g in greetings)
-    ):
-        return {
-            "type": "greeting",
-            "reply": "Halo kak! Selamat datang di Toko Marcell. Mimin siap bantu rekomendasi outfit, cek ukuran (TB/BB), info bahan, atau cek status pesanan kakak. Mau cari pakaian apa hari ini kak?",
-        }
-
-    # Acknowledgments / casual gratitude
-    if any(clean_q == w or clean_q.startswith(w + " ") for w in ["makasih", "terima kasih", "terimakasih", "thanks", "thank you", "ok", "oke", "siap", "mantap", "sip"]):
-        return {
-            "type": "acknowledgment",
-            "reply": "Sama-sama kak! Kalau ada baju, celana, atau ukuran yang mau ditanyakan lagi ke mimin, langsung chat aja ya 😊",
-        }
-
-    # "What can you do?" / identity
-    if any(phrase in clean_q for phrase in ["kamu siapa", "bisa apa aja", "who are you", "what can you do", "toko apa ini", "bisa apa"]):
-        return {
-            "type": "identity",
-            "reply": "Halo kak! Saya Admin Toko Marcell, asisten pribadi & personal stylist untuk toko fashion kami di Jakarta. Mimin bisa bantu kakak:\n1. Cari baju/celana/sepatu sesuai gaya atau foto\n2. Konsultasi ukuran pas (TB & BB)\n3. Rekomendasi padu padan outfit sesuai budget\n4. Cek bahan, jahitan & review pembeli asli\n5. Cek estimasi pengiriman, garansi tukar size & status pesanan (token QRIS).\nAda yang bisa mimin bantu cari sekarang kak?",
-        }
-
-    # Obvious off-topic, programming/SQL, or prompt injection
-    off_topic_patterns = [
-        # SQL, Databases, Backend
-        r"\b(sql|query\s+sql|database|databases|postgresql|postgres|mysql|sqlite|mongodb|redis)\b",
-        r"(select\s+[\*\w\s,]+from|drop\s+table|insert\s+into|delete\s+from|alter\s+table|create\s+table)",
-        # Programming & Code
-        r"\b(python|javascript|typescript|c\+\+|golang|java|rust|php|bash|linux)\b",
-        r"\b(koding|coding|kodingan|source\s+code|algoritma|algorithm|pseudocode)\b",
-        r"(?:tulis|bikin|buatkan|write|generate|explain)\s+(?:kode|kodingan|code|program|script|function|fungsi|query)",
-        # Math & Academic & General Off-topic
-        r"\b(solve|equation|fibonacci|kalkulus|integral|turunan|rumus\s+fisika|rumus\s+kimia|pr\s+sekolah|tugas\s+kuliah)\b",
-        r"\b(capital\s+of|ibu\s+kota|presiden\s+indonesia|cuaca\s+hari\s+ini|harga\s+saham|crypto|cryptocurrency|bitcoin)\b",
-        # Prompt Injections & Jailbreaks
-        r"(ignore|forget)\s+(all\s+)?(?:previous|prior)\s+instructions",
-        r"\b(system\s+prompt|developer\s+mode|dan\s+mode|jailbreak|prompt\s+injection)\b",
-        r"(act\s+as|pretend\s+you\s+are|kamu\s+sekarang\s+adalah)\s+(an?\s+)?(?:unrestricted|linux|terminal|dan|hacker|bot)",
-    ]
-    for pattern in off_topic_patterns:
-        if re.search(pattern, clean_q):
-            return {
-                "type": "off_topic",
-                "reply": "Halo kak! Mimin adalah asisten belanja khusus Toko Marcell yang bertugas membantu kakak seputar produk fashion, rekomendasi outfit, ukuran (TB/BB), dan pesanan toko kami. Mimin tidak bisa membantu pertanyaan teknis atau pemrograman. Yuk tanyakan seputar koleksi baju, celana, atau outfit impian kakak!",
-            }
-
-    return None
 
 
 def _compact_tool_result(name: str, res: Any) -> Any:
@@ -513,8 +454,7 @@ async def chat_copilot(
 ) -> dict[str, Any]:
     """Run full Toko Marcell AI Copilot turn using Google Gemini (langchain-google-genai):
 
-    Node 0: Guardrail/Greeting Fast-Path
-    Node 1: Gemini Planner & Tool Decision Node
+    Node 1: Gemini Planner, Guardrail & Tool Decision Node
     Node 2: Tri-Modal Concurrent Tool Execution (asyncio.gather)
     Node 3: Grounded Synthesis with Admin Toko Marcell Persona
     """
@@ -531,19 +471,6 @@ async def chat_copilot(
         }
 
     latest_msg = messages[-1].get("content", "")
-
-    # Node 0: Fast-path for greetings or off-topic (across any turn)
-    if not image_url:
-        fast_path = _classify_greeting_or_offtopic(latest_msg)
-        if fast_path:
-            return {
-                "reply": fast_path["reply"],
-                "products": [],
-                "citations": [],
-                "tool_calls": [],
-                "took_ms": round((time.perf_counter() - started) * 1000, 2),
-            }
-
     gemini_key = _get_gemini_key()
     gemini_model = _get_gemini_model()
 
