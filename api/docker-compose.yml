@@ -26,7 +26,12 @@ services:
     environment:
       DATABASE_URL: postgresql://toko:toko@db:5432/toko
       CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+      OPENROUTER_API_KEY: sk-or-v1-placeholder-dummy-key
+      LLM_BASE_URL: https://openrouter.ai/api/v1
+      LLM_MODEL: google/gemini-2.5-flash
+      HF_HUB_CACHE: /tmp/hf_cache
     volumes:
+      - .:/app
       - /home/marcell/.cache/fastembed:/tmp/fastembed_cache:ro
       - /home/marcell/.cache/huggingface:/root/.cache/huggingface:ro
     depends_on:

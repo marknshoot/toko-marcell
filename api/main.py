@@ -156,6 +156,19 @@ REVIEWS_INDEXES: list[tuple[str, str]] = [
     ("reviews_rating_idx", "reviews (rating)"),
 ]
 
+STORE_KNOWLEDGE_SCHEMA: list[tuple[str, str]] = [
+    ("id", "SERIAL PRIMARY KEY"),
+    ("category", "TEXT NOT NULL"),
+    ("title", "TEXT NOT NULL"),
+    ("content", "TEXT NOT NULL"),
+    ("embedding", "vector(384)"),
+]
+
+STORE_KNOWLEDGE_INDEXES: list[tuple[str, str]] = [
+    ("store_knowledge_category_idx", "store_knowledge (category)"),
+    ("store_knowledge_embedding_idx", "store_knowledge USING hnsw (embedding vector_cosine_ops)"),
+]
+
 
 # Derived, so the SELECT can never drift from the table definition. `embedding` is
 # excluded by construction: 384 floats per product would bloat every response and
@@ -274,8 +287,16 @@ def init_db():
             _ensure_table(cur, "order_items", ORDER_ITEMS_SCHEMA, ORDER_ITEMS_INDEXES)
             _ensure_table(cur, "item_recommendations", ITEM_RECS_SCHEMA, ITEM_RECS_INDEXES)
             _ensure_table(cur, "reviews", REVIEWS_SCHEMA, REVIEWS_INDEXES)
+            _ensure_table(cur, "store_knowledge", STORE_KNOWLEDGE_SCHEMA, STORE_KNOWLEDGE_INDEXES)
 
             conn.commit()
+
+        # Seed knowledge documents if empty
+        try:
+            from knowledge_seed import seed_knowledge
+            seed_knowledge(DATABASE_URL)
+        except Exception as e:
+            print(f"[init_db] Warning: knowledge seed error: {e}")
 
 
 init_db()
@@ -598,7 +619,7 @@ def confirm_checkout(payload: ConfirmIn):
             total_idr = sum(qty * unit_price for _, _, qty, unit_price in lines)
             item_count = sum(qty for _, _, qty, _ in lines)
 
-            token = secrets.token_urlsafe(16)
+            token = f"tk_{secrets.token_urlsafe(12)}"
             cur.execute(
                 """
                 INSERT INTO orders (token, total_idr, item_count, status, session_id)
@@ -1241,4 +1262,56 @@ def get_asin_reviews(asin: str, limit: int = Query(10, ge=1, le=50)):
             if cur.fetchone() is None:
                 raise HTTPException(status_code=404, detail="Product not found")
             return _fetch_reviews_for_asin(cur, asin, limit=limit)
+
+
+# ── AI Copilot (Tri-Modal Multi-Agent Orchestrator) ──────────────────────────
+
+class CopilotMessage(BaseModel):
+    role: Literal["user", "assistant", "system"]
+    content: str
+    imageUrl: str | None = None
+
+
+class CopilotChatIn(BaseModel):
+    session_id: str | None = None
+    messages: list[CopilotMessage]
+    image_url: str | None = None
+
+
+@app.post("/copilot/chat")
+async def copilot_chat(payload: CopilotChatIn):
+    """End-to-End Multimodal AI Shopping Copilot (Admin Toko Marcell).
+
+    Covers the 8 core e-commerce use cases:
+    1. Visual Search & Style Matching
+    2. Sizing & Fit Consultation (TB/BB + Brand Deviations)
+    3. Outfit Builder under Budget (Top + Bottom + Shoes <= Budget)
+    4. Fabric, Material & Construction Q&A
+    5. Head-to-Head Product Comparison (A vs B)
+    6. Aspect-Based Social Proof & Review Highlights
+    7. Store Operations, Shipping & QRIS Demo Rules
+    8. Live Order Status Lookup (token-backed)
+    """
+    from agent import chat_copilot
+
+    image_ref = payload.image_url
+    if not image_ref and payload.messages:
+        # Check if the last user message carried an image
+        image_ref = payload.messages[-1].imageUrl
+
+    res = await chat_copilot(
+        messages=[{"role": m.role, "content": m.content} for m in payload.messages],
+        session_id=payload.session_id,
+        image_url=image_ref,
+        db_url=DATABASE_URL,
+    )
+    return res
+
+
+@app.get("/copilot/tools")
+def copilot_tools():
+    """Returns the deterministic tool definitions used by the AI Copilot."""
+    from agent import TOOLS_SCHEMA
+    return {"tools": TOOLS_SCHEMA}
+
 

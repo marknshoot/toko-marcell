@@ -3,6 +3,7 @@ import Link from "next/link";
 import "./globals.css";
 import { CartProvider } from "@/components/CartProvider";
 import CartLink from "@/components/CartLink";
+import CopilotChat from "@/components/CopilotChat";
 
 
 const geist = Geist({
@@ -37,6 +38,8 @@ export default function RootLayout({ children }) {
           </header>
 
           <div className="flex-1">{children}</div>
+
+          <CopilotChat />
 
           <footer className="border-t border-border px-5 py-4 text-sm text-muted">
             Made by Marcell Hermawan Kristianto

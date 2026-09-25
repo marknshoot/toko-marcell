@@ -4,3 +4,5 @@ psycopg[binary]
 fastembed
 python-multipart
 pillow
+httpx
+numpy

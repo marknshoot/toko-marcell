@@ -211,5 +211,36 @@ export async function searchByImage({ file, department, limit = 24 }) {
 
   return response.json();
 }
+// ── AI Copilot (Admin Toko Marcell) ──────────────────────────────────────────
 
+export async function sendCopilotMessage({ messages, imageUrl = null }) {
+  const sessionId = getSessionId();
+  const response = await fetch(`${API_URL}/copilot/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      messages: messages.map((m) => ({
+        role: m.role,
+        content: m.content,
+        imageUrl: m.imageUrl || null,
+      })),
+      image_url: imageUrl,
+    }),
+  });
 
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not reach Toko Marcell Copilot");
+  }
+
+  return response.json();
+}
+
+export async function getCopilotTools() {
+  const response = await fetch(`${API_URL}/copilot/tools`);
+  if (!response.ok) {
+    throw new Error("Could not load copilot tools schema");
+  }
+  return response.json();
+}

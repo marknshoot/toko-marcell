@@ -208,7 +208,40 @@ _INDEX = None
 _INDEX_LOCK = threading.Lock()
 
 
-def get_index(builder):
+def build_search_index(db_url: str | None = None) -> BM25Index:
+    """Read the catalog from PostgreSQL and build the in-process BM25 index."""
+    import psycopg
+    url = db_url or os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
+    with psycopg.connect(url) as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, title, brand, category, department, features, description
+                FROM products
+                """
+            )
+            rows = cur.fetchall()
+
+    index = BM25Index()
+    for product_id, title, brand, category, department, features, description in rows:
+        index.add(
+            product_id,
+            {
+                "title": title or "",
+                "brand": brand or "",
+                "category": category or "",
+                "department": department or "",
+                "features": " ".join(features or []),
+                "description": description or "",
+            },
+            dedupe_key=(title or "").strip().lower(),
+        )
+    index.build()
+    print(f"[search] BM25 index built: {index.size} documents")
+    return index
+
+
+def get_index(builder=None):
     """Build the index once, on first use.
 
     Lazy on purpose: a database problem must not stop the API from booting, and
@@ -218,7 +251,8 @@ def get_index(builder):
     if _INDEX is None:
         with _INDEX_LOCK:
             if _INDEX is None:
-                _INDEX = builder()
+                b = builder or build_search_index
+                _INDEX = b()
     return _INDEX
 
 
