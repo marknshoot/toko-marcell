@@ -277,18 +277,37 @@ def _get_session_browsing_context(session_id: str | None, db_url: str) -> str:
 
 def _classify_greeting_or_offtopic(query: str) -> dict[str, Any] | None:
     """Fast-path classification for greetings, identity questions, or off-topic queries."""
-    q = query.strip().lower()
+    clean_q = re.sub(r"[^\w\s]", " ", query).strip().lower()
+    clean_q = re.sub(r"\s+", " ", clean_q)
 
     # Greetings
-    greetings = ["halo", "hai", "hi", "hello", "hei", "pagi", "siang", "sore", "malam", "selamat pagi", "selamat siang", "selamat sore", "selamat malam"]
-    if q in greetings or q.startswith("halo min") or q.startswith("hai min"):
+    greetings = [
+        "halo", "hai", "hi", "hello", "hei", "hey",
+        "pagi", "siang", "sore", "malam",
+        "selamat pagi", "selamat siang", "selamat sore", "selamat malam",
+        "assalamualaikum", "halo min", "hai min", "pagi min", "siang min", "sore min", "malam min",
+        "halo mimin", "hai mimin", "pagi mimin", "siang mimin", "sore mimin", "malam mimin",
+        "halo kak", "hai kak", "pagi kak", "siang kak", "sore kak", "malam kak"
+    ]
+    if (
+        clean_q in greetings
+        or any(clean_q.startswith(g + " ") for g in ["halo", "hai", "hi", "hello", "hei", "pagi", "siang", "sore", "malam", "selamat pagi", "selamat siang", "selamat sore", "selamat malam"])
+        or any(clean_q == g for g in greetings)
+    ):
         return {
             "type": "greeting",
             "reply": "Halo kak! Selamat datang di Toko Marcell. Mimin siap bantu rekomendasi outfit, cek ukuran (TB/BB), info bahan, atau cek status pesanan kakak. Mau cari pakaian apa hari ini kak?",
         }
 
+    # Acknowledgments / casual gratitude
+    if any(clean_q == w or clean_q.startswith(w + " ") for w in ["makasih", "terima kasih", "terimakasih", "thanks", "thank you", "ok", "oke", "siap", "mantap", "sip"]):
+        return {
+            "type": "acknowledgment",
+            "reply": "Sama-sama kak! Kalau ada baju, celana, atau ukuran yang mau ditanyakan lagi ke mimin, langsung chat aja ya 😊",
+        }
+
     # "What can you do?" / identity
-    if any(phrase in q for phrase in ["kamu siapa", "bisa apa aja", "who are you", "what can you do", "toko apa ini"]):
+    if any(phrase in clean_q for phrase in ["kamu siapa", "bisa apa aja", "who are you", "what can you do", "toko apa ini", "bisa apa"]):
         return {
             "type": "identity",
             "reply": "Halo kak! Saya Admin Toko Marcell, asisten pribadi & personal stylist untuk toko fashion kami di Jakarta. Mimin bisa bantu kakak:\n1. Cari baju/celana/sepatu sesuai gaya atau foto\n2. Konsultasi ukuran pas (TB & BB)\n3. Rekomendasi padu padan outfit sesuai budget\n4. Cek bahan, jahitan & review pembeli asli\n5. Cek estimasi pengiriman, garansi tukar size & status pesanan (token QRIS).\nAda yang bisa mimin bantu cari sekarang kak?",
@@ -304,7 +323,7 @@ def _classify_greeting_or_offtopic(query: str) -> dict[str, Any] | None:
         r"presiden indonesia",
     ]
     for pattern in off_topic_patterns:
-        if re.search(pattern, q):
+        if re.search(pattern, clean_q):
             return {
                 "type": "off_topic",
                 "reply": "Halo kak! Mimin adalah asisten belanja khusus Toko Marcell yang bertugas membantu kakak seputar produk fashion, ukuran, dan pesanan toko kami. Yuk tanyakan seputar koleksi baju, celana, atau outfit impian kakak!",
@@ -498,8 +517,8 @@ async def chat_copilot(
 
     latest_msg = messages[-1].get("content", "")
 
-    # Node 0: Fast-path for greetings or off-topic
-    if not image_url and len(messages) == 1:
+    # Node 0: Fast-path for greetings or off-topic (across any turn)
+    if not image_url:
         fast_path = _classify_greeting_or_offtopic(latest_msg)
         if fast_path:
             return {
@@ -604,12 +623,24 @@ async def chat_copilot(
                         "function": {"name": "search_catalog", "arguments": json.dumps({"query": latest_msg})},
                     })
             else:
-                clean_q = re.sub(r"\b(min|ada|gak|ya|tolong|cariin|dong|di toko|mimin)\b", "", q_lower).strip()
-                tool_calls.append({
-                    "id": "direct_catalog_search",
-                    "type": "function",
-                    "function": {"name": "search_catalog", "arguments": json.dumps({"query": clean_q or latest_msg})},
-                })
+                catalog_keywords = [
+                    "cari", "baju", "celana", "kaos", "kemeja", "dress", "sepatu", "hoodie", "jaket",
+                    "rok", "jeans", "outfit", "rekomendasi", "pesta", "formal", "kasual", "santai",
+                    "warna", "hitam", "putih", "levis", "dickies", "carhartt", "under", "budget", "rp", "murah", "beli"
+                ]
+                has_shopping_intent = any(k in q_lower for k in catalog_keywords) or len(q_lower.split()) >= 3
+                if has_shopping_intent:
+                    clean_q = re.sub(r"\b(min|ada|gak|ya|tolong|cariin|dong|di toko|mimin)\b", "", q_lower).strip()
+                    tool_calls.append({
+                        "id": "direct_catalog_search",
+                        "type": "function",
+                        "function": {"name": "search_catalog", "arguments": json.dumps({"query": clean_q or latest_msg})},
+                    })
+                else:
+                    assistant_msg = {
+                        "role": "assistant",
+                        "content": "Halo kak! Ada yang bisa mimin bantu cari di Toko Marcell hari ini? Kakak bisa tanya rekomendasi outfit (misal: 'rekomendasi baju pesta under 300rb'), konsultasi ukuran (TB/BB), info bahan, atau cek status pesanan ya!",
+                    }
 
         # Node 2: Check if LLM requested Tool Calls
         if not assistant_msg.get("tool_calls") and not tool_calls:

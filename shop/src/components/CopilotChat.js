@@ -183,10 +183,22 @@ export default function CopilotChat() {
 
           // Bullet point
           if (line.trim().startsWith("- ") || line.trim().startsWith("• ") || line.trim().startsWith("* ")) {
+            const bulletContent = line.trim().replace(/^[-•*]\s+/, "");
+            const bulletParts = bulletContent.split(/(\*\*.*?\*\*)/g);
+            const parsedBullet = bulletParts.map((part, pIdx) => {
+              if (part.startsWith("**") && part.endsWith("**")) {
+                return (
+                  <strong key={pIdx} className="font-semibold text-foreground">
+                    {part.slice(2, -2)}
+                  </strong>
+                );
+              }
+              return part;
+            });
             return (
               <div key={idx} className="flex items-start gap-1.5 pl-1">
                 <span className="text-muted">•</span>
-                <span className="flex-1">{parsed}</span>
+                <span className="flex-1">{parsedBullet}</span>
               </div>
             );
           }
@@ -194,10 +206,22 @@ export default function CopilotChat() {
           // Numbered list item: 1. , 2.
           const matchNum = line.trim().match(/^(\d+)\.\s+(.*)$/);
           if (matchNum) {
+            const numContent = matchNum[2];
+            const numParts = numContent.split(/(\*\*.*?\*\*)/g);
+            const parsedNum = numParts.map((part, pIdx) => {
+              if (part.startsWith("**") && part.endsWith("**")) {
+                return (
+                  <strong key={pIdx} className="font-semibold text-foreground">
+                    {part.slice(2, -2)}
+                  </strong>
+                );
+              }
+              return part;
+            });
             return (
               <div key={idx} className="flex items-start gap-1.5 pl-1">
                 <span className="font-medium text-muted">{matchNum[1]}.</span>
-                <span className="flex-1">{parsed}</span>
+                <span className="flex-1">{parsedNum}</span>
               </div>
             );
           }
