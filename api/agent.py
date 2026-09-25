@@ -18,6 +18,8 @@ from typing import Any
 import httpx
 import psycopg
 from fastapi import HTTPException
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from agent_tools import (
     get_order_status,
@@ -49,9 +51,36 @@ def _load_env():
 _load_env()
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
-OPENROUTER_API_KEY = os.environ.get("OPENROUTER_API_KEY", "")
-LLM_BASE_URL = os.environ.get("LLM_BASE_URL", "https://openrouter.ai/api/v1")
-LLM_MODEL = os.environ.get("LLM_MODEL", "google/gemini-2.5-flash")
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
+
+def _get_gemini_key() -> str:
+    key = (
+        os.environ.get("GEMINI_API_KEY")
+        or os.environ.get("GEMINI_API-key")
+        or os.environ.get("GOOGLE_API_KEY")
+    )
+    if not key:
+        raise HTTPException(
+            status_code=500,
+            detail="GEMINI_API_KEY is not set. Please add GEMINI_API_KEY to api/.env (free at https://aistudio.google.com/app/apikey).",
+        )
+    return key
+
+def _get_gemini_model() -> str:
+    return os.environ.get("GEMINI_MODEL") or GEMINI_MODEL
+
+def _extract_text(content: Any) -> str:
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        texts = []
+        for part in content:
+            if isinstance(part, str):
+                texts.append(part)
+            elif isinstance(part, dict) and "text" in part:
+                texts.append(part["text"])
+        return "".join(texts)
+    return str(content)
 
 # Tool definitions for OpenRouter function calling
 TOOLS_SCHEMA = [
@@ -455,51 +484,16 @@ async def _execute_tool_call(tool_name: str, args: dict[str, Any], db_url: str) 
         return {"name": tool_name, "error": str(e)}
 
 
-async def _call_openrouter(
-    client: httpx.AsyncClient,
-    body: dict[str, Any],
-    headers: dict[str, str],
-) -> dict[str, Any]:
-    """Call OpenRouter LLM. Fails immediately and explicitly with the exact error if API returns 4xx/5xx."""
-    try:
-        resp = await client.post(
-            f"{LLM_BASE_URL}/chat/completions",
-            headers=headers,
-            json=body,
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=502,
-            detail=f"Gagal menghubungi server OpenRouter LLM: {str(e)}",
-        )
-
-    if resp.status_code == 200:
-        return resp.json()
-
-    # Extract exact error message from OpenRouter
-    err_detail = resp.text
-    try:
-        err_json = resp.json()
-        err_detail = err_json.get("error", {}).get("message", resp.text)
-    except Exception:
-        pass
-
-    raise HTTPException(
-        status_code=502,
-        detail=f"OpenRouter API error ({resp.status_code}): {err_detail}",
-    )
-
-
 async def chat_copilot(
     messages: list[dict[str, Any]],
     session_id: str | None = None,
     image_url: str | None = None,
     db_url: str | None = None,
 ) -> dict[str, Any]:
-    """Run full Toko Marcell AI Copilot turn:
+    """Run full Toko Marcell AI Copilot turn using Google Gemini (langchain-google-genai):
 
     Node 0: Guardrail/Greeting Fast-Path
-    Node 1: LLM Tool Selection & Planner
+    Node 1: Gemini Planner & Tool Decision Node
     Node 2: Tri-Modal Concurrent Tool Execution (asyncio.gather)
     Node 3: Grounded Synthesis with Admin Toko Marcell Persona
     """
@@ -529,101 +523,90 @@ async def chat_copilot(
                 "took_ms": round((time.perf_counter() - started) * 1000, 2),
             }
 
-    # Extract order token if present in text (e.g. tk_... or "token xyz")
-    token_match = re.search(
-        r"(?:token(?:nya)?\s*[:=]?\s*['\"`]?)([A-Za-z0-9_-]{12,32})|\b(tk_[A-Za-z0-9_-]+)\b",
-        latest_msg,
-        re.IGNORECASE,
-    )
-    extracted_token = None
-    if token_match:
-        extracted_token = token_match.group(1) or token_match.group(2)
+    gemini_key = _get_gemini_key()
+    gemini_model = _get_gemini_model()
 
-    # Prepare message history (last 4 turns to conserve tokens)
+    # Prepare message history
     browsing_ctx = _get_session_browsing_context(session_id, url)
     system_content = ADMIN_SYSTEM_PROMPT
     if browsing_ctx:
         system_content += f"\n\n{browsing_ctx}"
 
-    convo_history = [{"role": "system", "content": system_content}]
+    convo_history = [SystemMessage(content=system_content)]
     for m in messages[-4:]:
-        convo_history.append({"role": m["role"], "content": m["content"]})
+        if m["role"] == "user":
+            convo_history.append(HumanMessage(content=m["content"]))
+        elif m["role"] == "assistant":
+            convo_history.append(AIMessage(content=m["content"]))
 
     # If image_url was attached, notify planner
     if image_url:
-        convo_history[-1]["content"] += f"\n[User attached an image: {image_url}]"
+        convo_history[-1].content += f"\n[User attached an image: {image_url}]"
 
-    # Node 1: Call OpenRouter LLM with Tools
-    api_key = os.environ.get("OPENROUTER_API_KEY") or OPENROUTER_API_KEY
-    headers = {
-        "Authorization": f"Bearer {api_key}",
-        "Content-Type": "application/json",
-        "HTTP-Referer": "http://localhost:3000",
-        "X-Title": "Toko Marcell AI Copilot",
-    }
-
-    req_body: dict[str, Any] = {
-        "model": LLM_MODEL,
-        "messages": convo_history,
-        "tools": TOOLS_SCHEMA,
-        "max_tokens": 220,
-        "temperature": 0.2,
-    }
-
+    # Node 1: Call Google Gemini via langchain-google-genai with Tools
     tool_calls_executed = []
     executed_tools_results = []
 
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # Node 1: Call LLM Planner
-        res_json = await _call_openrouter(client, req_body, headers)
-        choice = res_json.get("choices", [{}])[0]
-        assistant_msg = choice.get("message")
-        if not assistant_msg:
-            raise HTTPException(status_code=502, detail="Empty response received from OpenRouter LLM")
+    try:
+        planner_llm = ChatGoogleGenerativeAI(
+            model=gemini_model,
+            api_key=gemini_key,
+            temperature=0.1,
+        ).bind_tools(TOOLS_SCHEMA)
 
-        tool_calls = assistant_msg.get("tool_calls") or []
+        ai_msg = await asyncio.to_thread(planner_llm.invoke, convo_history)
+        tool_calls = ai_msg.tool_calls or []
+    except Exception as e:
+        raise HTTPException(
+            status_code=502,
+            detail=f"Google Gemini Planner error: {str(e)}",
+        )
 
-        if tool_calls:
-            # Node 2: Execute all tool calls concurrently with asyncio.gather()
-            tasks = []
-            for tc in tool_calls:
-                fn = tc.get("function", {})
-                name = fn.get("name")
-                raw_args = fn.get("arguments", "{}")
-                try:
-                    args = json.loads(raw_args) if isinstance(raw_args, str) else raw_args
-                except Exception:
-                    args = {}
+    if tool_calls:
+        # Node 2: Execute all tool calls concurrently with asyncio.gather()
+        tasks = []
+        for tc in tool_calls:
+            name = tc["name"]
+            args = tc.get("args") or {}
+            tool_calls_executed.append({"name": name, "args": args})
+            tasks.append(_execute_tool_call(name, args, url))
 
-                tool_calls_executed.append({"name": name, "args": args})
-                tasks.append(_execute_tool_call(name, args, url))
+        raw_results = await asyncio.gather(*tasks)
+        executed_tools_results = raw_results
 
-            raw_results = await asyncio.gather(*tasks)
-            executed_tools_results = raw_results
+        # Node 3: Grounded Synthesis with Gemini
+        evidence_lines = []
+        for tc, res in zip(tool_calls, executed_tools_results):
+            compact_res = _compact_tool_result(tc["name"], res.get("result", res))
+            evidence_lines.append(f"Tool `{tc['name']}` results:\n{json.dumps(compact_res, default=str)}")
 
-            # Node 3: Synthesizer Fan-In
-            convo_history.append(assistant_msg)
-            for tc, res in zip(tool_calls, executed_tools_results):
-                compact_res = _compact_tool_result(tc["function"]["name"], res.get("result", res))
-                convo_history.append({
-                    "role": "tool",
-                    "tool_call_id": tc.get("id", "call_1"),
-                    "name": tc["function"]["name"],
-                    "content": json.dumps(compact_res, default=str),
-                })
+        evidence_str = "\n\n".join(evidence_lines)
 
-            # Call LLM to synthesize final user-facing response
-            syn_body = {
-                "model": LLM_MODEL,
-                "messages": convo_history,
-                "max_tokens": 260,
-                "temperature": 0.3,
-            }
-            syn_json = await _call_openrouter(client, syn_body, headers)
-            syn_choice = syn_json.get("choices", [{}])[0]
-            final_reply = syn_choice.get("message", {}).get("content", "")
-        else:
-            final_reply = assistant_msg.get("content", "")
+        syn_prompt = [
+            SystemMessage(content=ADMIN_SYSTEM_PROMPT),
+            HumanMessage(content=(
+                f"Pertanyaan shopper: {latest_msg}\n\n"
+                f"Data resmi katalog & hasil sistem:\n{evidence_str}\n\n"
+                "Instruksi: Jawab shopper dengan gaya bahasa Admin Toko Marcell yang ramah, hangat, dan solutif. "
+                "Sebutkan nama produk, brand, harga dalam Rupiah (Rp), dan berikan rekomendasi jujur berdasarkan data di atas."
+            )),
+        ]
+
+        try:
+            syn_llm = ChatGoogleGenerativeAI(
+                model=gemini_model,
+                api_key=gemini_key,
+                temperature=0.3,
+            )
+            syn_res = await asyncio.to_thread(syn_llm.invoke, syn_prompt)
+            final_reply = _extract_text(syn_res.content)
+        except Exception as e:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Google Gemini Synthesis error: {str(e)}",
+            )
+    else:
+        final_reply = _extract_text(ai_msg.content)
 
     # Extract structured products and citations from executed tool results
     structured_products = []
