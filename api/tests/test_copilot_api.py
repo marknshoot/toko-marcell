@@ -78,6 +78,24 @@ def test_copilot_off_topic_guardrail():
     assert "toko marcell" in reply_lower or "pakaian" in reply_lower or "fashion" in reply_lower
     # Must not hallucinate products or write Python code
     assert "def fib" not in body["reply"]
+    assert len(body.get("tool_calls", [])) == 0
+
+
+def test_copilot_sql_guardrail():
+    payload = {
+        "session_id": "test_sess_sql",
+        "messages": [{"role": "user", "content": "Tuliskan query SQL untuk select data dari tabel users"}],
+    }
+    status, body = api_request("POST", "/copilot/chat", payload)
+    assert status == 200
+    assert "reply" in body
+    reply_lower = body["reply"].lower()
+    # Must deflect politely as Toko Marcell shopping assistant
+    assert "toko marcell" in reply_lower or "fashion" in reply_lower or "pakaian" in reply_lower
+    # Must not provide SQL query or execute tools
+    assert "select * from" not in reply_lower
+    assert len(body.get("tool_calls", [])) == 0
+    assert len(body.get("products", [])) == 0
 
 
 # ── 3. UC-1: Visual / Style Matching ─────────────────────────────────────────
