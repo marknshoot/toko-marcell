@@ -9,13 +9,13 @@ export default function Home() {
       <section className="py-12 md:py-16">
         <div className="mx-auto max-w-6xl px-7">
           <p className="text-xs font-medium uppercase tracking-[0.12em] text-muted">
-            Multi-brand fashion · 6,000 products
+            Multi-brand fashion · 4,670 verified products
           </p>
           <h1 className="mt-2 text-7xl font-semibold leading-[1.1] tracking-tight text-foreground md:text-8xl">
             Toko Marcell
           </h1>
           <p className="mt-4 max-w-lg text-base leading-relaxed text-muted md:text-lg md:mt-3">
-            Browse a 6,000-product fashion catalog with hybrid search, session
+            Browse a 4,670-product curated fashion catalog with hybrid search, session
             recommendations and a QRIS demo checkout.
           </p>
           <div className="mt-8">

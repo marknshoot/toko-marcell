@@ -60,8 +60,8 @@ def _get_gemini_key() -> str:
     )
     if not key:
         raise HTTPException(
-            status_code=500,
-            detail="GEMINI_API_KEY is not set. Please add GEMINI_API_KEY to api/.env (free at https://aistudio.google.com/app/apikey).",
+            status_code=503,
+            detail="Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti.",
         )
     return key
 
@@ -186,23 +186,6 @@ TOOLS_SCHEMA = [
             },
         },
     },
-    {
-        "type": "function",
-        "function": {
-            "name": "get_order_status",
-            "description": "Retrieves live order payment status and purchased items from PostgreSQL by unique checkout token (e.g. 'tk_7f9a2b1').",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "token": {
-                        "type": "string",
-                        "description": "Unique order token returned at checkout",
-                    }
-                },
-                "required": ["token"],
-            },
-        },
-    },
 ]
 
 ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall stylist and customer service admin for Toko Marcell (Jakarta, Indonesia).
@@ -221,7 +204,7 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall sty
 - Comparing products (A vs B): Invoke `get_product_details` for both products.
 - Customer ratings & satisfaction: Invoke `search_catalog` or `get_product_details` to inspect official average rating and rating count from catalog data.
 - Shipping, QRIS demo, returns: Invoke `lookup_store_policy`.
-- Order tracking: Whenever an order token (e.g. tk_...) is mentioned, invoke `get_order_status`.
+- Order tracking / Status pesanan: Toko Marcell menggunakan simulasi checkout QRIS instan di mana setiap pesanan otomatis terkonfirmasi lunas saat checkout. Jelaskan secara ramah kepada pembeli bahwa pesanan langsung tercatat dan dapat dilihat pada halaman konfirmasi pesanan.
 
 ### STRICT GROUNDING & ANTI-HALLUCINATION RULES:
 1. ZERO PRODUCT INVENTIONS:
@@ -243,8 +226,8 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall sty
    - Payment: Instant QRIS digital simulation (honest disclosure: realistic demo, zero real funds charged).
    - Shipping: Dispatched from South Jakarta (1–2 days Jabodetabek, 3–5 days outer islands). Free shipping for orders >= Rp 300.000!
    - Returns: 7-day size exchange guarantee for unworn items with original tags.
-6. ORDER TRACKING (USE CASE 8):
-   - When given an order token (tk_...), report exact status (PAID), total IDR, and items from the database.
+6. ORDER TRACKING & DEMO RULES:
+   - Di toko demo portofolio ini, checkout bersifat simulasi real-time. Pesanan langsung tervalidasi. Ajak shopper untuk mengecek koleksi busana atau meminta rekomendasi styling lain.
 7. STRICT OUT-OF-SCOPE GUARDRAIL & REFUSAL DIRECTIVE:
    - You are EXCLUSIVELY an in-store assistant and personal stylist for Toko Marcell (Jakarta, Indonesia).
    - You MUST STRICTLY REFUSE any off-topic, non-store questions including:
@@ -457,9 +440,10 @@ async def chat_copilot(
         ai_msg = await asyncio.to_thread(planner_llm.invoke, convo_history)
         tool_calls = ai_msg.tool_calls or []
     except Exception as e:
+        print(f"[ERROR] Gemini Planner: {e}", flush=True)
         raise HTTPException(
             status_code=502,
-            detail=f"Google Gemini Planner error: {str(e)}",
+            detail="Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!",
         )
 
     if tool_calls:
@@ -499,9 +483,10 @@ async def chat_copilot(
             syn_res = await asyncio.to_thread(syn_llm.invoke, syn_prompt)
             final_reply = _extract_text(syn_res.content)
         except Exception as e:
+            print(f"[ERROR] Gemini Synthesis: {e}", flush=True)
             raise HTTPException(
                 status_code=502,
-                detail=f"Google Gemini Synthesis error: {str(e)}",
+                detail="Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!",
             )
     else:
         final_reply = _extract_text(ai_msg.content)

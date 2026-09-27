@@ -122,7 +122,7 @@ export default function CopilotChat({ embedded = false }) {
         ...prev,
         {
           role: "assistant",
-          content: `Maaf kak, ada kendala koneksi: ${err.message || "Gagal memproses pesan"}. Silakan coba lagi ya.`,
+          content: "Maaf kak, saat ini asisten AI sedang mengalami sedikit kendala koneksi. Boleh coba kirim pesan kembali ya!",
           products: [],
         },
       ]);

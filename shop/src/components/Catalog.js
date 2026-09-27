@@ -168,6 +168,10 @@ export default function Catalog() {
 
   function goToPage(nextPage) {
     router.push(buildUrl({ department, page: nextPage, q: urlQuery }), { scroll: false });
+    const catalogElement = document.getElementById("catalog");
+    if (catalogElement) {
+      catalogElement.scrollIntoView({ behavior: "smooth" });
+    }
   }
 
   function clearQuery() {

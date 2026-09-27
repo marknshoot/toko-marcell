@@ -52,7 +52,7 @@ export default async function ProductPage({ params }) {
                     href="/#catalog"
                     className="text-xs text-muted no-underline transition-colors hover:text-foreground"
                 >
-                    ← All products
+                    All products
                 </Link>
 
                 <div className="mt-6 grid gap-8 md:grid-cols-2">
