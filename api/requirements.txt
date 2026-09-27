@@ -7,3 +7,6 @@ pillow
 httpx
 numpy
 langchain-google-genai
+onnxruntime
+transformers
+huggingface_hub

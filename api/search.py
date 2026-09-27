@@ -299,6 +299,43 @@ def embed_query(query: str) -> list[float] | None:
         return None
 
 
+_CHAMPION_CLIP_MODEL = None
+_CHAMPION_CLIP_PROCESSOR = None
+_CHAMPION_CLIP_LOCK = threading.Lock()
+
+
+def get_champion_clip():
+    """Load local fine-tuned Champion CLIP model if present."""
+    global _CHAMPION_CLIP_MODEL, _CHAMPION_CLIP_PROCESSOR
+    if _CHAMPION_CLIP_MODEL is None:
+        with _CHAMPION_CLIP_LOCK:
+            if _CHAMPION_CLIP_MODEL is None:
+                here = os.path.dirname(os.path.abspath(__file__))
+                candidates = [
+                    os.environ.get("CLIP_MODEL_DIR"),
+                    os.path.join(here, "models", "best_champion_model"),
+                    os.path.join(here, "..", "pipelines", "Best Model"),
+                    os.path.join(here, "..", "models", "best_champion_model"),
+                    os.path.join(here, "..", "models", "fashion_clip"),
+                ]
+                for candidate in candidates:
+                    if candidate and os.path.isdir(candidate):
+                        try:
+                            import torch
+                            from transformers import CLIPModel, CLIPProcessor
+                            device = "cuda" if torch.cuda.is_available() else "cpu"
+                            model = CLIPModel.from_pretrained(candidate).to(device)
+                            model.eval()
+                            processor = CLIPProcessor.from_pretrained(candidate)
+                            _CHAMPION_CLIP_MODEL = model
+                            _CHAMPION_CLIP_PROCESSOR = processor
+                            print(f"[search] Successfully loaded Champion CLIP Model from {candidate} on {device}")
+                            break
+                        except Exception as e:
+                            print(f"[search] Could not load champion CLIP from {candidate}: {e}")
+    return _CHAMPION_CLIP_MODEL, _CHAMPION_CLIP_PROCESSOR
+
+
 _IMAGE_EMBED_MODEL = None
 _IMAGE_EMBED_LOCK = threading.Lock()
 
@@ -335,12 +372,85 @@ def embed_image_bytes(image_bytes: bytes) -> list[float] | None:
         import io
         from PIL import Image
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
+        
+        # Try Champion model first
+        champ_model, champ_proc = get_champion_clip()
+        if champ_model is not None and champ_proc is not None:
+            import torch
+            device = next(champ_model.parameters()).device
+            inputs = champ_proc(images=[img], return_tensors="pt").to(device)
+            with torch.no_grad():
+                out = champ_model.get_image_features(**inputs)
+                feats = getattr(out, "pooler_output", out)
+                norm_feats = feats / feats.norm(dim=-1, keepdim=True)
+                return [float(x) for x in norm_feats[0].cpu().numpy()]
+    except Exception as e:
+        print(f"[search] Champion embed_image_bytes fallback: {e}")
+
+    # Fallback to fastembed
+    try:
         model = get_image_embed_model()
         vectors = list(model.embed([img]))
         return [float(x) for x in vectors[0]]
     except Exception as e:
         print(f"[search] embed_image_bytes failed: {e}")
         return None
+
+
+_ONNX_TEXT_SESSION = None
+_ONNX_TOKENIZER = None
+_ONNX_LOCK = threading.Lock()
+
+
+def get_onnx_champion_encoder():
+    """Load ONNX Champion Text Encoder lazily (local or auto-downloaded from HF Hub)."""
+    global _ONNX_TEXT_SESSION, _ONNX_TOKENIZER
+    if _ONNX_TEXT_SESSION is None:
+        with _ONNX_LOCK:
+            if _ONNX_TEXT_SESSION is None:
+                try:
+                    import onnxruntime as ort
+                    from transformers import CLIPTokenizer
+                    from huggingface_hub import hf_hub_download
+
+                    here = os.path.dirname(os.path.abspath(__file__))
+                    local_candidates = [
+                        os.path.join(here, "..", "models", "champion_text_encoder.onnx"),
+                        os.path.join(here, "models", "champion_text_encoder.onnx"),
+                        os.path.join(here, "champion_text_encoder.onnx"),
+                    ]
+                    onnx_path = None
+                    for c in local_candidates:
+                        if os.path.exists(c):
+                            onnx_path = c
+                            break
+
+                    repo_id = os.environ.get("HF_MODEL_REPO", "Marcell-Kristianto/toko-marcell-clip")
+                    if not onnx_path:
+                        try:
+                            print(f"[search] Downloading ONNX text encoder from {repo_id}...")
+                            onnx_path = hf_hub_download(repo_id=repo_id, filename="champion_text_encoder.onnx")
+                        except Exception as e:
+                            print(f"[search] HF hub download note: {e}")
+
+                    if onnx_path and os.path.exists(onnx_path):
+                        sess_opts = ort.SessionOptions()
+                        sess_opts.intra_op_num_threads = 2
+                        sess_opts.inter_op_num_threads = 1
+                        sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+                        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+                        _ONNX_TEXT_SESSION = ort.InferenceSession(
+                            onnx_path, sess_opts, providers=["CPUExecutionProvider"]
+                        )
+                        try:
+                            _ONNX_TOKENIZER = CLIPTokenizer.from_pretrained(repo_id)
+                        except Exception:
+                            _ONNX_TOKENIZER = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+                        print(f"[search] Loaded Champion ONNX Text Encoder from {onnx_path} (<150MB RAM)")
+                except Exception as e:
+                    print(f"[search] Could not initialize ONNX text encoder: {e}")
+    return _ONNX_TEXT_SESSION, _ONNX_TOKENIZER
 
 
 _CLIP_TEXT_MODEL = None
@@ -364,6 +474,36 @@ def get_clip_text_model():
 
 def embed_query_clip_text(query: str) -> list[float] | None:
     """Generate 512-dim CLIP text embedding to query products.image_embedding cross-modally."""
+    # 1. Try Champion ONNX model (<150MB RAM, ultra fast)
+    try:
+        session, tokenizer = get_onnx_champion_encoder()
+        if session is not None and tokenizer is not None:
+            tokens = tokenizer(query, padding="max_length", max_length=77, truncation=True, return_tensors="np")
+            import numpy as np
+            outputs = session.run(None, {
+                "input_ids": tokens["input_ids"].astype(np.int64),
+                "attention_mask": tokens["attention_mask"].astype(np.int64),
+            })
+            return [float(x) for x in outputs[0][0]]
+    except Exception as e:
+        print(f"[search] Champion ONNX embed_query_clip_text note: {e}")
+
+    # 2. Try Champion PyTorch model (if PyTorch environment available)
+    try:
+        champ_model, champ_proc = get_champion_clip()
+        if champ_model is not None and champ_proc is not None:
+            import torch
+            device = next(champ_model.parameters()).device
+            inputs = champ_proc(text=[query], return_tensors="pt", truncation=True, max_length=64).to(device)
+            with torch.no_grad():
+                out = champ_model.get_text_features(**inputs)
+                feats = getattr(out, "pooler_output", out)
+                norm_feats = feats / feats.norm(dim=-1, keepdim=True)
+                return [float(x) for x in norm_feats[0].cpu().numpy()]
+    except Exception as e:
+        pass
+
+    # 3. Fallback to fastembed zero-shot CLIP
     try:
         model = get_clip_text_model()
         vectors = list(model.embed([query]))
@@ -371,5 +511,7 @@ def embed_query_clip_text(query: str) -> list[float] | None:
     except Exception as e:
         print(f"[search] embed_query_clip_text failed: {e}")
         return None
+
+
 
 

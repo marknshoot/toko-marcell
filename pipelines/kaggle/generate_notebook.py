@@ -618,6 +618,54 @@ os.makedirs(save_dir, exist_ok=True)
 decoupled_model.save_pretrained(save_dir, safe_serialization=True)
 processor.save_pretrained(save_dir)
 print(f"\\nSuccessfully exported Champion Model to {save_dir}")
+
+# --- PRODUCTION DEPLOYMENT ARTIFACTS (100% FREE ZERO-COST STACK) ---
+print("\\n" + "=" * 65)
+print("  GENERATING 100% FREE PRODUCTION ARTIFACTS FOR TOKO MARCELL")
+print("=" * 65)
+
+all_catalog = train_data + val_data + test_data
+print(f"Pre-computing 512-dim visual embeddings for all {len(all_catalog):,} catalog products...")
+
+decoupled_model.eval()
+prod_embeds = []
+prod_metadata = []
+
+with torch.no_grad():
+    for i in range(0, len(all_catalog), 64):
+        b = all_catalog[i : i+64]
+        imgs = [get_image(item) for item in b]
+        in_img = processor(images=imgs, return_tensors="pt", padding=True).to(device)
+        
+        raw = decoupled_model.module if hasattr(decoupled_model, "module") else decoupled_model
+        base = getattr(raw, "base_model", raw)
+        io = base.get_image_features(pixel_values=in_img["pixel_values"])
+        io = getattr(io, "pooler_output", io)
+        io = io / (io.norm(dim=-1, keepdim=True) + 1e-8)
+        prod_embeds.append(io.cpu().numpy().astype(np.float32))
+        
+        for item in b:
+            prod_metadata.append({
+                "id": item.get("id"),
+                "asin": item.get("asin"),
+                "title": item.get("title"),
+                "brand": item.get("brand"),
+                "category": item.get("category"),
+                "department": item.get("department"),
+                "price_idr": item.get("price_idr"),
+                "relative_image_path": item.get("relative_image_path", f"images/{item.get('asin')}.jpg")
+            })
+
+catalog_matrix = np.vstack(prod_embeds)
+print(f"Catalog Matrix Generated: shape {catalog_matrix.shape}, dtype={catalog_matrix.dtype}, size={catalog_matrix.nbytes / 1e6:.2f} MB")
+
+np.save("/kaggle/working/catalog_embeddings.npy", catalog_matrix)
+with open("/kaggle/working/catalog_items.json", "w", encoding="utf-8") as f:
+    json.dump(prod_metadata, f, indent=2)
+
+# Zip everything into a single distribution package for easy 1-click download
+!cd /kaggle/working && zip -r -q toko_marcell_production_package.zip best_champion_model catalog_embeddings.npy catalog_items.json
+print("\\n[SUCCESS] Packaged: /kaggle/working/toko_marcell_production_package.zip (Ready for 100% Free Production Deployment!)")
 """))
 
 # Cell 12: Visualizations & Publication Graphics
