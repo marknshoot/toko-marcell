@@ -3,8 +3,7 @@ import Link from "next/link";
 import "./globals.css";
 import { CartProvider } from "@/components/CartProvider";
 import CartLink from "@/components/CartLink";
-import CopilotChat from "@/components/CopilotChat";
-
+import FloatingCopilot from "@/components/FloatingCopilot";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -14,7 +13,8 @@ const geist = Geist({
 
 export const metadata = {
   title: "Toko Marcell",
-  description: "6,000-product fashion catalog with hybrid search, session recommendations and a QRIS demo checkout.",
+  description:
+    "6,000-product fashion catalog with hybrid search, session recommendations and a QRIS demo checkout.",
 };
 
 export default function RootLayout({ children }) {
@@ -24,25 +24,41 @@ export default function RootLayout({ children }) {
         className={`${geist.className} flex min-h-screen flex-col bg-background text-foreground antialiased`}
       >
         <CartProvider>
-          <header className="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-4 border-b border-border bg-surface px-5 py-4">
+          <header className="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-4 border-b border-border bg-surface px-5 py-3.5 sm:px-8">
+            <div className="flex items-center gap-6">
+              <Link
+                href="/"
+                className="text-lg font-bold tracking-tight text-foreground no-underline"
+              >
+                Toko Marcell
+              </Link>
+            </div>
 
-            <Link
-              href="/"
-              className="text-xl font-semibold tracking-tight text-foreground no-underline"
-            >
-              Toko Marcell
-            </Link>
-
-            <CartLink />
-
+            <div className="flex items-center gap-4">
+              <CartLink />
+            </div>
           </header>
 
           <div className="flex-1">{children}</div>
 
-          <CopilotChat />
+          <FloatingCopilot />
 
-          <footer className="border-t border-border px-5 py-4 text-sm text-muted">
-            Made by Marcell Hermawan Kristianto
+          <footer className="border-t border-border bg-surface px-5 py-6 sm:px-8 text-xs text-muted">
+            <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 sm:flex-row">
+              <p>
+                © 2026 Toko Marcell — Karya Marcell Hermawan Kristianto (Binus DS).
+              </p>
+              <div>
+                <a
+                  href="https://github.com/marknshoot"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="hover:text-foreground hover:underline"
+                >
+                  GitHub
+                </a>
+              </div>
+            </div>
           </footer>
         </CartProvider>
       </body>

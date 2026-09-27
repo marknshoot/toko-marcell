@@ -87,16 +87,13 @@ def main():
                     ts = 0
                 user_timeline[u].append((ts, asin))
 
-    # Filter to active users with >= 5 interactions
     active_users = [u for u, timeline in user_timeline.items() if len(timeline) >= 5]
     print(f"Found {len(active_users):,} active users (>= 5 interactions).")
 
-    # Sample test users
     sample_size = min(args.n_users, len(active_users))
     sample_users = random.sample(active_users, sample_size)
     print(f"Evaluating on {sample_size:,} sampled test users...")
 
-    # Evaluation accumulators
     models = ["Random", "Popularity (M8)", "Item-to-Item CF (M9)"]
     metrics = {
         m: {"hr10": 0.0, "hr5": 0.0, "mrr": 0.0, "ndcg10": 0.0}
@@ -107,24 +104,17 @@ def main():
 
     for i, u in enumerate(sample_users, 1):
         timeline = sorted(user_timeline[u], key=lambda x: x[0])
-        # Last item is held-out target
         target_item = timeline[-1][1]
-        # Penultimate item is session context
         context_item = timeline[-2][1]
-        # Prior history to mask
         history_asins = {item for _, item in timeline[:-1]}
 
-        # 1. Random Baseline
         rand_candidates = [a for a in catalog_asins if a not in history_asins]
         rand_recs = random.sample(rand_candidates, min(10, len(rand_candidates)))
 
-        # 2. Popularity Baseline
         pop_recs = [a for a in global_popular if a not in history_asins][:10]
 
-        # 3. Item-to-Item CF Model
         raw_cf = item_recs.get(context_item, [])
         cf_recs = [a for a in raw_cf if a not in history_asins][:10]
-        # Backfill with popular if fewer than 10
         if len(cf_recs) < 10:
             for p in global_popular:
                 if p not in history_asins and p not in cf_recs:
@@ -132,14 +122,13 @@ def main():
                     if len(cf_recs) >= 10:
                         break
 
-        # Compute metrics for each model
         for m, recs in [
             ("Random", rand_recs),
             ("Popularity (M8)", pop_recs),
             ("Item-to-Item CF (M9)", cf_recs),
         ]:
             if target_item in recs:
-                rank = recs.index(target_item)  # 0-indexed
+                rank = recs.index(target_item)
                 metrics[m]["hr10"] += 1.0
                 if rank < 5:
                     metrics[m]["hr5"] += 1.0

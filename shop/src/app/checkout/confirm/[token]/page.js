@@ -4,9 +4,6 @@ import { getOrder } from "@/lib/api";
 import { formatRp } from "@/lib/formatRp";
 import ClearCart from "@/components/ClearCart";
 
-// The real confirmation page. It shows what the SERVER holds, keyed by the token
-// in the URL — which is why it survives a refresh, a new tab or another device,
-// and why opening it without a valid token shows a 404 instead of a fake receipt.
 export default async function ConfirmPage({ params }) {
   const { token } = await params;
   const order = await getOrder(token);

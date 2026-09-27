@@ -89,13 +89,11 @@ def rerank(
 
     session, tokenizer = _get_reranker()
     if session is None or tokenizer is None:
-        # Graceful fallback: return candidates in original order
         return candidates[:limit]
 
     try:
         import numpy as np
 
-        # Format candidate texts: e.g. title + brand + category
         doc_texts = []
         for c in candidates:
             if callable(text_key):
@@ -111,12 +109,10 @@ def rerank(
 
         pairs = [(query, text) for text in doc_texts]
 
-        # Tokenize with truncation to 256
         tokenizer.no_padding()
         encoded = tokenizer.encode_batch(pairs)
         max_len = max((len(e.ids) for e in encoded), default=16)
 
-        # Pad uniformly to max_len in this batch
         input_ids = np.array([e.ids + [0] * (max_len - len(e.ids)) for e in encoded], dtype=np.int64)
         attention_mask = np.array([e.attention_mask + [0] * (max_len - len(e.attention_mask)) for e in encoded], dtype=np.int64)
         token_type_ids = np.array([e.type_ids + [0] * (max_len - len(e.type_ids)) for e in encoded], dtype=np.int64)

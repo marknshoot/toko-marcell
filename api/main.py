@@ -15,6 +15,7 @@ from search import (
     reciprocal_rank_fusion,
     embed_query,
     embed_image_bytes,
+    embed_query_clip_text,
     tokenize,
 )
 
@@ -34,16 +35,6 @@ app.add_middleware(
 
 DATABASE_URL = os.environ["DATABASE_URL"]
 
-# ── Schema ────────────────────────────────────────────────────────────────────
-# ONE source of truth. `CREATE TABLE` is generated from this list, PRODUCT_COLUMNS
-# is derived from it, and init_db() adds whatever an existing database is missing.
-# Add a column here and nowhere else.
-#
-# Rule: this list is APPEND-ONLY, and a new column must be nullable or carry a
-# DEFAULT. `ALTER TABLE ADD COLUMN` cannot invent a value for existing rows, so a
-# bare `NOT NULL` column would fail on any database that already has data.
-#
-# The order matters: row_to_product() maps by index.
 SCHEMA: list[tuple[str, str]] = [
     ("id", "INTEGER PRIMARY KEY"),
     ("asin", "TEXT NOT NULL UNIQUE"),
@@ -63,25 +54,14 @@ SCHEMA: list[tuple[str, str]] = [
     ("also_view", "JSONB NOT NULL DEFAULT '[]'::jsonb"),
 ]
 
-# Phase C. Kept out of SCHEMA because it needs the pgvector extension, which a host
-# may not have. If it is missing the catalog still works — only search degrades.
 VECTOR_COLUMN: tuple[str, str] = ("embedding", "vector(384)")
 IMAGE_VECTOR_COLUMN: tuple[str, str] = ("image_embedding", "vector(512)")
 
 INDEXES: list[tuple[str, str]] = [
     ("products_department_idx", "products (department)"),
     ("products_category_idx", "products (category)"),
-    # No vector index here on purpose. An HNSW index is cheaper to build AFTER the
-    # table is seeded — building it first makes every INSERT maintain the graph.
-    # Create it once, after pipelines/seed.py:
-    #   CREATE INDEX products_embedding_idx ON products
-    #     USING hnsw (embedding vector_cosine_ops);
 ]
 
-# ── Funnel events (M2/M2b) ────────────────────────────────────────────────────
-# One row per shopper action, grouped into a visit by `session_id`: an anonymous
-# id generated in the browser, NOT a login. It is the only identity this demo
-# has, and it is enough to compute per-session funnel rates (PLAN §4).
 EVENTS_SCHEMA: list[tuple[str, str]] = [
     ("id", "BIGSERIAL PRIMARY KEY"),
     ("session_id", "TEXT NOT NULL"),
@@ -99,10 +79,6 @@ EVENTS_INDEXES: list[tuple[str, str]] = [
     ("events_type_created_idx", "events (event_type, created_at DESC)"),
 ]
 
-# ── Orders (B5: server-side checkout confirm) ─────────────────────────────────
-# The client sends {asin, qty} and nothing else. The server prices the order from
-# `products` itself, because a client-supplied total is a client-supplied price:
-# a tampered request could otherwise "pay" Rp 1.
 ORDERS_SCHEMA: list[tuple[str, str]] = [
     ("id", "BIGSERIAL PRIMARY KEY"),
     ("token", "TEXT NOT NULL UNIQUE"),
@@ -170,9 +146,6 @@ STORE_KNOWLEDGE_INDEXES: list[tuple[str, str]] = [
 ]
 
 
-# Derived, so the SELECT can never drift from the table definition. `embedding` is
-# excluded by construction: 384 floats per product would bloat every response and
-# the storefront never needs them.
 PRODUCT_COLUMNS = ", ".join(name for name, _ in SCHEMA)
 
 
@@ -252,8 +225,6 @@ def init_db():
             else:
                 print("[init_db] pgvector unavailable — no embedding column, search disabled")
 
-            # Interpolated, not parameterised, because these are column definitions
-            # rather than values. SCHEMA is a module constant, never user input.
             col_defs = ",\n                    ".join(f"{name} {ddl}" for name, ddl in columns)
             cur.execute(
                 f"""
@@ -263,8 +234,6 @@ def init_db():
                 """
             )
 
-            # Re-read: the table may have just been created, in which case every
-            # column already exists and the loop below correctly adds nothing.
             cur.execute(
                 "SELECT column_name FROM information_schema.columns WHERE table_name = 'products'"
             )
@@ -281,8 +250,6 @@ def init_db():
                 cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_target}")
 
             _ensure_table(cur, "events", EVENTS_SCHEMA, EVENTS_INDEXES)
-            # orders before order_items: the second references the first, and its
-            # index has to be created with it, not with orders.
             _ensure_table(cur, "orders", ORDERS_SCHEMA, ORDERS_INDEXES)
             _ensure_table(cur, "order_items", ORDER_ITEMS_SCHEMA, ORDER_ITEMS_INDEXES)
             _ensure_table(cur, "item_recommendations", ITEM_RECS_SCHEMA, ITEM_RECS_INDEXES)
@@ -291,7 +258,6 @@ def init_db():
 
             conn.commit()
 
-        # Seed knowledge documents if empty
         try:
             from knowledge_seed import seed_knowledge
             seed_knowledge(DATABASE_URL)
@@ -605,8 +571,6 @@ def confirm_checkout(payload: ConfirmIn):
 
             unknown = sorted(set(wanted) - set(found))
             if unknown:
-                # 400, not 404: the request is wrong about the catalog, and the
-                # detail names every bad asin so the bug is fixable from the log.
                 raise HTTPException(
                     status_code=400,
                     detail=f"unknown asin(s): {', '.join(unknown)}",
@@ -639,9 +603,6 @@ def confirm_checkout(payload: ConfirmIn):
                     (order_id, asin, title, qty, unit_price),
                 )
 
-            # The purchase event is written HERE, not by the browser: the server
-            # is the only party that knows the order really exists. This is what
-            # makes the funnel's last step authoritative instead of a claim.
             cur.execute(
                 """
                 INSERT INTO events (session_id, event_type, qty, price_idr)
@@ -759,12 +720,12 @@ def search_products(
     offset: int = Query(0, ge=0),
     department: str | None = None,
     category: str | None = None,
-    mode: Literal["hybrid", "bm25", "vector"] = "hybrid",
+    mode: Literal["hybrid", "bm25", "vector", "trimodal"] = "hybrid",
 ):
-    """Hybrid (BM25 + pgvector cosine similarity), BM25-only, or vector-only search.
+    """Hybrid (BM25 + pgvector cosine similarity), BM25-only, vector-only, or trimodal search.
 
-    Fuses lexical term matching (BM25) and dense semantic embeddings (fastembed
-    sentence-transformers/all-MiniLM-L6-v2) using Reciprocal Rank Fusion (RRF, k=60).
+    Fuses lexical term matching (BM25), dense semantic embeddings (all-MiniLM-L6-v2),
+    and cross-modal visual embeddings (CLIP text-to-image) using Reciprocal Rank Fusion (RRF, k=60).
     """
     started = time.perf_counter()
 
@@ -802,11 +763,11 @@ def search_products(
                 allowed = {row[0] for row in cur.fetchall()}
 
     bm25_ranked = []
-    if mode in ("bm25", "hybrid"):
+    if mode in ("bm25", "hybrid", "trimodal"):
         bm25_ranked = index.rank(q, allowed=allowed, dedupe=False)
 
     vector_ranked = []
-    if mode in ("vector", "hybrid"):
+    if mode in ("vector", "hybrid", "trimodal"):
         query_vec = embed_query(q)
         if query_vec is not None:
             vec_str = "[" + ",".join(f"{x:.6f}" for x in query_vec) + "]"
@@ -834,10 +795,52 @@ def search_products(
                     )
                     vector_ranked = [(row[0], float(row[1])) for row in cur.fetchall()]
 
+    clip_ranked = []
+    if mode == "trimodal":
+        clip_vec = embed_query_clip_text(q)
+        if clip_vec is not None:
+            clip_str = "[" + ",".join(f"{x:.6f}" for x in clip_vec) + "]"
+            clip_filters = ["image_embedding IS NOT NULL"]
+            clip_params = [clip_str]
+            if department:
+                clip_filters.append("department = %s")
+                clip_params.append(department)
+            if category:
+                clip_filters.append("category = %s")
+                clip_params.append(category)
+            clip_params.append(clip_str)
+
+            with psycopg.connect(DATABASE_URL) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        f"""
+                        SELECT id, 1 - (image_embedding <=> %s::vector) AS similarity
+                        FROM products
+                        WHERE {' AND '.join(clip_filters)}
+                        ORDER BY image_embedding <=> %s::vector
+                        LIMIT 100
+                        """,
+                        clip_params,
+                    )
+                    clip_ranked = [(row[0], float(row[1])) for row in cur.fetchall()]
+
     if mode == "bm25":
         ranked = index.dedupe(bm25_ranked)
     elif mode == "vector":
         ranked = index.dedupe(vector_ranked)
+    elif mode == "trimodal":
+        rankings_to_fuse = []
+        if bm25_ranked:
+            rankings_to_fuse.append(bm25_ranked[:100])
+        if vector_ranked:
+            rankings_to_fuse.append(vector_ranked[:100])
+        if clip_ranked:
+            rankings_to_fuse.append(clip_ranked[:100])
+        if rankings_to_fuse:
+            fused = reciprocal_rank_fusion(rankings_to_fuse, k=60)
+            ranked = index.dedupe(fused)
+        else:
+            ranked = []
     else:  # hybrid
         if bm25_ranked and vector_ranked:
             fused = reciprocal_rank_fusion([bm25_ranked[:100], vector_ranked[:100]], k=60)
@@ -1016,7 +1019,6 @@ def recs_item(
     """
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
-            # 1. Fetch precomputed recs
             cur.execute(
                 "SELECT recs FROM item_recommendations WHERE asin = %s",
                 (asin,),
@@ -1040,7 +1042,6 @@ def recs_item(
                     if prod:
                         items.append(prod)
 
-            # Fallback if empty or fewer than limit
             if len(items) < limit:
                 cur.execute(
                     "SELECT department, category FROM products WHERE asin = %s",
@@ -1093,7 +1094,6 @@ def recs_session(
     """
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
-            # Read session's recent product interactions (most recent first)
             cur.execute(
                 """
                 SELECT asin FROM events
@@ -1108,7 +1108,6 @@ def recs_session(
             seen_asins = [r[0] for r in cur.fetchall()]
 
             if not seen_asins:
-                # Cold session fallback -> popular
                 cur.execute(
                     f"""
                     SELECT {PRODUCT_COLUMNS}
@@ -1126,7 +1125,6 @@ def recs_session(
                     "strategy": "cold_popularity",
                 }
 
-            # Warm session: fetch recs for the most recent items
             cur.execute(
                 """
                 SELECT asin, recs FROM item_recommendations
@@ -1136,7 +1134,6 @@ def recs_session(
             )
             recs_by_asin = {r[0]: r[1] for r in cur.fetchall()}
 
-            # Blend recommendations, excluding items already seen in session
             seen_set = set(seen_asins)
             candidate_asins = []
             cand_seen = set()
@@ -1151,7 +1148,6 @@ def recs_session(
                 if len(candidate_asins) >= limit:
                     break
 
-            # Backfill if needed
             if len(candidate_asins) < limit:
                 cur.execute(
                     f"""
@@ -1165,12 +1161,12 @@ def recs_session(
                 for r in cur.fetchall():
                     candidate_asins.append(r[0])
 
-            # Hydrate products
             cur.execute(
                 f"SELECT {PRODUCT_COLUMNS} FROM products WHERE asin = ANY(%s)",
                 (candidate_asins,),
             )
-            by_asin = {r[1]: row_to_product(r) for r in cur.fetchall()}
+            rows = cur.fetchall()
+            by_asin = {r[1]: row_to_product(r) for r in rows}
             items = [by_asin[a] for a in candidate_asins if a in by_asin]
 
     return {
@@ -1296,7 +1292,6 @@ async def copilot_chat(payload: CopilotChatIn):
 
     image_ref = payload.image_url
     if not image_ref and payload.messages:
-        # Check if the last user message carried an image
         image_ref = payload.messages[-1].imageUrl
 
     res = await chat_copilot(

@@ -1,0 +1,17 @@
+{
+  "id": "mar096/toko-marcell-vlm-experiments",
+  "title": "Toko Marcell Vlm Experiments",
+  "code_file": "toko_marcell_vlm_experiments.ipynb",
+  "language": "python",
+  "kernel_type": "notebook",
+  "is_private": "true",
+  "enable_gpu": "true",
+  "enable_tpu": "false",
+  "enable_internet": "true",
+  "dataset_sources": [
+    "mar096/toko-marcell-fashion-vlm"
+  ],
+  "competition_sources": [],
+  "kernel_sources": [],
+  "model_sources": []
+}

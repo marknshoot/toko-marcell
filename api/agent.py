@@ -24,7 +24,6 @@ from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from agent_tools import (
     get_order_status,
     get_product_details,
-    get_product_reviews,
     lookup_store_policy,
     search_by_image,
     search_catalog,
@@ -141,31 +140,6 @@ TOOLS_SCHEMA = [
     {
         "type": "function",
         "function": {
-            "name": "get_product_reviews",
-            "description": "Fetches authentic customer reviews for sizing reality, shrinkage, durability, and fabric quality.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "asin": {
-                        "type": "string",
-                        "description": "The product ASIN",
-                    },
-                    "topic": {
-                        "type": "string",
-                        "description": "Specific aspect: 'fit', 'sizing', 'durability', 'material', 'shrinkage'",
-                    },
-                    "limit": {
-                        "type": "integer",
-                        "description": "Max reviews to fetch (default 5)",
-                    },
-                },
-                "required": ["asin"],
-            },
-        },
-    },
-    {
-        "type": "function",
-        "function": {
             "name": "search_by_image",
             "description": "Finds catalog items that visually match an uploaded image using CLIP vision embeddings.",
             "parameters": {
@@ -242,10 +216,10 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall sty
 
 ### MANDATORY TOOL CALLING DIRECTIVES:
 - Product inquiries / availability: Whenever a customer asks if you have certain clothes, brands, or styles (e.g. "ada celana...", "cari kemeja...", "outfit santai...", "jaket denim"), you MUST invoke `search_catalog` immediately to show real products and prices. Do NOT reply with empty pleasantries without searching!
-- Sizing & Fit inquiries: For height/weight (TB/BB) or brand sizing questions, invoke `lookup_store_policy` to retrieve the master size chart & brand overrides, and `get_product_reviews` for authentic buyer sizing feedback.
+- Sizing & Fit inquiries: For height/weight (TB/BB) or brand sizing questions, invoke `lookup_store_policy` to retrieve the master size chart & brand overrides.
 - Fabric & Material inquiries: Invoke `get_product_details` to check exact composition and bullet features.
-- Comparing products (A vs B): Invoke `get_product_details` for both products, and `get_product_reviews` for both.
-- Buyer reviews & social proof: Invoke `get_product_reviews` (or `search_catalog` if ASIN is not yet known).
+- Comparing products (A vs B): Invoke `get_product_details` for both products.
+- Customer ratings & satisfaction: Invoke `search_catalog` or `get_product_details` to inspect official average rating and rating count from catalog data.
 - Shipping, QRIS demo, returns: Invoke `lookup_store_policy`.
 - Order tracking: Whenever an order token (e.g. tk_...) is mentioned, invoke `get_order_status`.
 
@@ -256,10 +230,10 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall sty
    - If a product isn't found, politely offer alternatives from the catalog.
 2. CURRENCY & PRICING:
    - All prices must be strictly formatted in Indonesian Rupiah (e.g. "Rp 178.100", "Rp 494.700"). Never invent prices.
-3. SIZING ADVICE (USE CASE 2):
-   - Always reference the sizing chart rules and verified customer reviews:
-   - Dickies 874: Rigid 8.5 oz twill has zero stretch; recommend sizing up 1–2 waist sizes for comfortable fit.
-   - Levi's: 505 has extra room in thigh/seat vs 501 (straight leg classic).
+3. SIZING ADVICE & BRAND DEVIATIONS (USE CASE 2):
+   - Always reference the sizing chart rules and brand cut characteristics:
+   - Dickies 874: Heavyweight 8.5 oz twill (65% polyester / 35% katun). Bahannya kaku dan tebal saat baru, zero stretch; sarankan naik 1–2 ukuran pinggang untuk kenyamanan duduk.
+   - Levi's 501 vs 505: Model 505 Regular memiliki ruang ekstra di bagian paha dan pinggul (extra room in seat and thigh) dengan zipper fly, sangat pas untuk paha yang agak berisi. Sedangkan model 501 adalah potongan classic straight leg dengan button fly.
    - Carhartt / Champion: US relaxed cut, runs 1 size larger than Asian standard.
    - Birkenstock: EU sizing with cork arch support; if between sizes, size down.
    - TOMS: Canvas stretches slightly after a few wears.
@@ -353,15 +327,6 @@ def _compact_tool_result(name: str, res: Any) -> Any:
             "features": (res.get("features") or [])[:4],
             "description": (res.get("description") or "")[:200],
         }
-    if name == "get_product_reviews" and isinstance(res, dict):
-        quotes = [r.get("comment", "")[:120] for r in res.get("reviews", [])[:3]]
-        return {
-            "asin": res.get("asin"),
-            "total_reviews": res.get("total_reviews"),
-            "average_rating": res.get("average_rating"),
-            "aspect_summary": res.get("aspect_summary"),
-            "quotes": quotes,
-        }
     if name == "lookup_store_policy" and isinstance(res, list):
         return [
             {"title": p.get("title"), "content": p.get("content", "")[:300]}
@@ -397,16 +362,6 @@ async def _execute_tool_call(tool_name: str, args: dict[str, Any], db_url: str) 
             res = await asyncio.to_thread(
                 get_product_details,
                 asin_or_id=args.get("asin_or_id", ""),
-                db_url=db_url,
-            )
-            return {"name": tool_name, "result": res}
-
-        elif tool_name == "get_product_reviews":
-            res = await asyncio.to_thread(
-                get_product_reviews,
-                asin=args.get("asin", ""),
-                topic=args.get("topic"),
-                limit=args.get("limit", 5),
                 db_url=db_url,
             )
             return {"name": tool_name, "result": res}
@@ -474,7 +429,6 @@ async def chat_copilot(
     gemini_key = _get_gemini_key()
     gemini_model = _get_gemini_model()
 
-    # Prepare message history
     browsing_ctx = _get_session_browsing_context(session_id, url)
     system_content = ADMIN_SYSTEM_PROMPT
     if browsing_ctx:
@@ -487,11 +441,9 @@ async def chat_copilot(
         elif m["role"] == "assistant":
             convo_history.append(AIMessage(content=m["content"]))
 
-    # If image_url was attached, notify planner
     if image_url:
         convo_history[-1].content += f"\n[User attached an image: {image_url}]"
 
-    # Node 1: Call Google Gemini via langchain-google-genai with Tools
     tool_calls_executed = []
     executed_tools_results = []
 
@@ -511,7 +463,6 @@ async def chat_copilot(
         )
 
     if tool_calls:
-        # Node 2: Execute all tool calls concurrently with asyncio.gather()
         tasks = []
         for tc in tool_calls:
             name = tc["name"]
@@ -522,7 +473,6 @@ async def chat_copilot(
         raw_results = await asyncio.gather(*tasks)
         executed_tools_results = raw_results
 
-        # Node 3: Grounded Synthesis with Gemini
         evidence_lines = []
         for tc, res in zip(tool_calls, executed_tools_results):
             compact_res = _compact_tool_result(tc["name"], res.get("result", res))
@@ -556,7 +506,6 @@ async def chat_copilot(
     else:
         final_reply = _extract_text(ai_msg.content)
 
-    # Extract structured products and citations from executed tool results
     structured_products = []
     structured_citations = []
     seen_asins = set()
@@ -566,7 +515,6 @@ async def chat_copilot(
         if not res:
             continue
 
-        # Product list from search_catalog or search_by_image
         if isinstance(res, list):
             for prod in res:
                 if isinstance(prod, dict) and "asin" in prod:
@@ -586,7 +534,6 @@ async def chat_copilot(
                             "department": prod.get("department", ""),
                         })
 
-        # Single product from get_product_details
         elif isinstance(res, dict) and "asin" in res and "title" in res:
             a = res["asin"]
             if a not in seen_asins:
@@ -604,34 +551,12 @@ async def chat_copilot(
                     "department": res.get("department", ""),
                 })
 
-        # Citations from reviews
-        if isinstance(res, dict) and "reviews" in res:
-            asin = res.get("asin", "")
-            for rev in res.get("reviews", []):
-                comment = rev.get("comment", "")
-                if comment and len(comment) > 20:
-                    structured_citations.append({
-                        "asin": asin,
-                        "source": "Verified Customer Review",
-                        "rating": rev.get("rating"),
-                        "quote": comment[:160] + ("..." if len(comment) > 160 else ""),
-                    })
-
-        # Citations from policies
-        if isinstance(res, list) and res and "title" in res[0] and "category" in res[0]:
-            for pol in res:
-                structured_citations.append({
-                    "source": f"Store Policy: {pol.get('title')}",
-                    "category": pol.get("category"),
-                    "quote": pol.get("content", "")[:180] + "...",
-                })
-
     took_ms = round((time.perf_counter() - started) * 1000, 2)
 
     return {
         "reply": final_reply,
         "products": structured_products[:6],
-        "citations": structured_citations[:4],
+        "citations": [],
         "tool_calls": tool_calls_executed,
         "took_ms": took_ms,
     }

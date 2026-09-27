@@ -83,19 +83,18 @@ def main():
 
     # ── 1. Popularity Baseline (M8) ───────────────────────────────────────────
     log("Computing popularity baselines (global and per-department)...")
-    # Bayesian weighted rating: (v * R + m * C) / (v + m)
-    # v = ratingCount, R = avgRating, m = 100, C = 4.31
-    C = 4.31
-    m = 100.0
+    prior_mean_rating = 4.31
+    prior_weight = 100.0
 
     scored_items = []
     for asin, p in products_by_asin.items():
-        v = float(p.get("ratingCount") or p.get("nInteractions") or 0)
-        R = float(p.get("avgRating") or 4.0)
-        score = (v * R + m * C) / (v + m)
-        scored_items.append((score, v, asin, p["department"], p["category"]))
+        rating_count = float(p.get("ratingCount") or p.get("nInteractions") or 0)
+        avg_rating = float(p.get("avgRating") or 4.0)
+        bayesian_score = (
+            rating_count * avg_rating + prior_weight * prior_mean_rating
+        ) / (rating_count + prior_weight)
+        scored_items.append((bayesian_score, rating_count, asin, p["department"], p["category"]))
 
-    # Sort descending by Bayesian score, then interaction volume
     scored_items.sort(key=lambda x: (-x[0], -x[1]))
 
     popular_by_dept = defaultdict(list)
@@ -103,7 +102,7 @@ def main():
     global_popular = []
     global_seen_titles = set()
 
-    for score, v, asin, dept, cat in scored_items:
+    for bayesian_score, rating_count, asin, dept, cat in scored_items:
         title_key = asin_to_title[asin].lower()
         if title_key not in global_seen_titles and len(global_popular) < 50:
             global_popular.append(asin)
@@ -173,15 +172,12 @@ def main():
                 if other_asin != asin:
                     co_counts[other_asin] += 1
 
-        # Score candidates
         candidate_scores = {}
         for other, co in co_counts.items():
             count_j = item_interaction_counts.get(other, 1)
-            # Cosine similarity on user interaction overlap
             cos_sim = co / (sqrt_i * math.sqrt(count_j))
             candidate_scores[other] = cos_sim
 
-        # Boost explicit metadata links: also_buy (+0.50), also_view (+0.30)
         for buy_asin in asin_to_also_buy.get(asin, ()):
             if buy_asin != asin and buy_asin in catalog_asins:
                 candidate_scores[buy_asin] = candidate_scores.get(buy_asin, 0.0) + 0.50
@@ -190,12 +186,10 @@ def main():
             if view_asin != asin and view_asin in catalog_asins:
                 candidate_scores[view_asin] = candidate_scores.get(view_asin, 0.0) + 0.30
 
-        # Sort candidate items descending by fused score
         sorted_candidates = sorted(
             candidate_scores.items(), key=lambda item: -item[1]
         )
 
-        # Select top recommendations, deduplicating duplicate titles
         selected = []
         seen_titles = {asin_to_title[asin].lower()}
 
@@ -208,7 +202,6 @@ def main():
             if len(selected) >= MAX_RECS_PER_ITEM:
                 break
 
-        # Fallback if fewer than 6 recs: backfill from same category popularity
         if len(selected) < 6:
             cat = asin_to_cat.get(asin)
             dept = asin_to_dept.get(asin)
@@ -229,7 +222,6 @@ def main():
         if idx % 1000 == 0 or idx == total_items:
             log(f"  Progress: {idx:,} / {total_items:,} items processed ({round(idx/total_items*100)}%)")
 
-    # Save to JSON
     with open(ITEM_RECS_OUT, "w", encoding="utf-8") as f:
         json.dump(item_recs, f)
     log(f"Saved {len(item_recs):,} item recommendation lists to {ITEM_RECS_OUT}")

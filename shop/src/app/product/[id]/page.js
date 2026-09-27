@@ -8,10 +8,6 @@ import ProductCard from "@/components/ProductCard";
 import ProductReviews from "@/components/ProductReviews";
 import TrackView from "@/components/TrackView";
 
-// Dynamic <title>/description per product. This calls getProduct again, but Next
-// dedupes identical fetches within one request, so FastAPI is hit once.
-// Missing products are handled by the page's notFound() — verified to answer a
-// real 404, not a 200 with a 404 page.
 export async function generateMetadata({ params }) {
   const { id } = await params;
   const product = await getProduct(id);
@@ -34,9 +30,6 @@ export async function generateMetadata({ params }) {
 
 export default async function ProductPage({ params }) {
     const { id } = await params;
-
-    // Server component: this fetch runs on the Next server, not in the browser,
-    // so it talks to FastAPI directly (no CORS involved).
     const product = await getProduct(id);
 
     if (!product) {

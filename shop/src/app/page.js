@@ -31,11 +31,6 @@ export default function Home() {
 
       <RecommendationsRail />
 
-      {/*
-        Catalog reads the filter + page from the URL (useSearchParams), which the
-        App Router can only resolve on the client, so it needs a Suspense
-        boundary. The fallback is what the server sends first.
-      */}
       <Suspense fallback={<CatalogSkeleton />}>
         <Catalog />
       </Suspense>

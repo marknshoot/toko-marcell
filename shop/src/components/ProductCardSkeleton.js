@@ -1,6 +1,3 @@
-// A placeholder shaped like ProductCard: same square image box, same three text
-// lines. Because the boxes match, the grid doesn't jump when real cards arrive.
-// motion-reduce:animate-none respects "reduce motion" for people who ask for it.
 export default function ProductCardSkeleton() {
   return (
     <div

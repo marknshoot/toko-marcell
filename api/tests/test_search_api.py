@@ -51,6 +51,12 @@ def test_search_modes():
     assert body_vec["mode"] == "vector"
     assert body_vec["total"] > 0
 
+    # Explicit trimodal mode (BM25 + MiniLM + CLIP text-to-image RRF)
+    status_tri, body_tri = api_request("GET", "/search?q=jeans&limit=5&mode=trimodal")
+    assert status_tri == 200
+    assert body_tri["mode"] == "trimodal"
+    assert body_tri["total"] > 0
+
 
 def test_search_semantic_query():
     # Query with semantic intent that pure keywords might miss or score poorly

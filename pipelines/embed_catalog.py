@@ -66,7 +66,6 @@ def main():
 
     with psycopg.connect(args.database_url) as conn:
         with conn.cursor() as cur:
-            # Check table exists
             cur.execute("SELECT to_regclass('products')")
             if cur.fetchone()[0] is None:
                 log("table 'products' does not exist. Run seed.py first.")
@@ -85,7 +84,6 @@ def main():
             total = len(rows)
             log(f"fetched {total:,} products from DB to embed")
 
-            # Process in batches
             updated = 0
             for i in range(0, total, args.batch_size):
                 chunk = rows[i : i + args.batch_size]
@@ -95,10 +93,8 @@ def main():
                     for row in chunk
                 ]
 
-                # Generate dense embeddings (batch)
                 embeddings = list(model.embed(texts))
 
-                # Update database
                 update_params = [
                     (format_vector(vec), doc_id)
                     for doc_id, vec in zip(doc_ids, embeddings)
@@ -111,7 +107,6 @@ def main():
                 updated += len(chunk)
                 log(f"  progress: {updated:,} / {total:,} products embedded ({round(updated/total*100)}%)")
 
-            # Build HNSW index on the embedded products
             log("building HNSW cosine index (products_embedding_idx)...")
             idx_start = time.perf_counter()
             cur.execute(
@@ -123,7 +118,6 @@ def main():
             conn.commit()
             log(f"HNSW index built in {round(time.perf_counter() - idx_start, 2)}s")
 
-            # Verify with a quick test query
             cur.execute("SELECT count(*), count(embedding) FROM products")
             total_db, embedded_db = cur.fetchone()
 

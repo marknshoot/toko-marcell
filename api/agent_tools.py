@@ -69,7 +69,6 @@ def search_catalog(
     if not clean_tokens:
         return []
 
-    # 1. Candidate Generation: Resolve SQL filters for candidate pool
     filters, params = [], []
     if department and department != "All":
         filters.append("department = %s")
@@ -93,11 +92,9 @@ def search_catalog(
                 if not allowed_ids:
                     return []
 
-            # BM25 Lexical candidates
             bm25_index = get_index()
             bm25_ranked = bm25_index.rank(query, allowed=allowed_ids, dedupe=False)
 
-            # Dense Vector candidates (pgvector)
             vector_ranked = []
             q_vec = embed_query(query)
             if q_vec is not None:
@@ -121,7 +118,6 @@ def search_catalog(
                 )
                 vector_ranked = [(row[0], float(row[1])) for row in cur.fetchall()]
 
-    # Stage 1 Rank Fusion (RRF k=60)
     if bm25_ranked and vector_ranked:
         fused = reciprocal_rank_fusion([bm25_ranked[:40], vector_ranked[:40]], k=60)
         candidate_ids = [doc_id for doc_id, _ in fused[:20]]
@@ -132,7 +128,6 @@ def search_catalog(
     else:
         return []
 
-    # Fetch hydrated product rows for top candidates
     candidates = []
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
@@ -146,7 +141,6 @@ def search_catalog(
                 if cid in by_id:
                     candidates.append(by_id[cid])
 
-    # Stage 2 Precision: Cross-Encoder Reranking
     reranked = rerank(query=query, candidates=candidates, text_key="title", limit=limit)
     return reranked
 
@@ -179,7 +173,6 @@ def get_product_reviews(
     url = db_url or DATABASE_URL
     with psycopg.connect(url) as conn:
         with conn.cursor() as cur:
-            # Aggregate ratings
             cur.execute(
                 """
                 SELECT
@@ -216,7 +209,6 @@ def get_product_reviews(
                     "reviews": [],
                 }
 
-            # Filter or retrieve top reviews
             topic_filter = ""
             params: list[Any] = [asin]
             if topic:
@@ -241,7 +233,6 @@ def get_product_reviews(
             rows = cur.fetchall()
 
             if not rows and topic:
-                # Fallback to general reviews if topic filter returned none
                 cur.execute(
                     """
                     SELECT id, rating, summary, comment, author, verified, review_date
@@ -266,7 +257,6 @@ def get_product_reviews(
                     "reviewDate": r[6],
                 })
 
-            # Quick aspect signals from comments
             comments_blob = " ".join(r["comment"].lower() for r in reviews)
             signals = []
             if "shrink" in comments_blob:
@@ -307,7 +297,6 @@ def search_by_image(
 
     if contents is None and image_url_or_ref:
         if image_url_or_ref.startswith("data:image/"):
-            # base64 data URL
             _, b64data = image_url_or_ref.split(",", 1)
             contents = base64.b64decode(b64data)
         elif image_url_or_ref.startswith("http://") or image_url_or_ref.startswith("https://"):

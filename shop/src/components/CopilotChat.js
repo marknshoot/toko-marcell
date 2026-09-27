@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useContext } from "react";
 import Link from "next/link";
+import Image from "next/image";
 import { CartContext } from "./CartProvider";
 import { sendCopilotMessage } from "../lib/api";
 import { formatRp } from "../lib/formatRp";
@@ -15,11 +16,13 @@ const QUICK_PROMPTS = [
   { label: "📦 Lacak status pesanan", text: "Saya mau cek status pesanan dengan token tk_" },
 ];
 
-export default function CopilotChat() {
-  const [isOpen, setIsOpen] = useState(false);
+const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;
+
+export default function CopilotChat({ embedded = false }) {
+  const [isOpen, setIsOpen] = useState(embedded ? true : false);
   const [messages, setMessages] = useState([]);
   const [inputValue, setInputValue] = useState("");
-  const [selectedImage, setSelectedImage] = useState(null); // { file, preview, base64 }
+  const [selectedImage, setSelectedImage] = useState(null);
   const [isLoading, setIsLoading] = useState(false);
   const [addedItemNotice, setAddedItemNotice] = useState(null);
 
@@ -28,14 +31,12 @@ export default function CopilotChat() {
   const inputRef = useRef(null);
   const fileInputRef = useRef(null);
 
-  // Auto-scroll to bottom of conversation
   useEffect(() => {
     if (isOpen) {
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
   }, [messages, isLoading, isOpen]);
 
-  // Focus input when opened
   useEffect(() => {
     if (isOpen) {
       setTimeout(() => inputRef.current?.focus(), 150);
@@ -46,8 +47,7 @@ export default function CopilotChat() {
     const file = e.target.files?.[0];
     if (!file) return;
 
-    // Check size limit: 5MB max for client preview
-    if (file.size > 5 * 1024 * 1024) {
+    if (file.size > MAX_IMAGE_SIZE_BYTES) {
       alert("Ukuran foto maksimal 5 MB.");
       return;
     }
@@ -57,11 +57,10 @@ export default function CopilotChat() {
       setSelectedImage({
         file,
         preview: URL.createObjectURL(file),
-        base64: reader.result, // data:image/...;base64,...
+        base64: reader.result,
       });
     };
     reader.readAsDataURL(file);
-    // Reset file input so same file can be picked again if desired
     e.target.value = "";
   }
 
@@ -98,7 +97,6 @@ export default function CopilotChat() {
     setIsLoading(true);
 
     try {
-      // Prepare payload: convert messages to role/content
       const apiMessages = newMessages.map((m) => ({
         role: m.role,
         content: m.content,
@@ -156,7 +154,6 @@ export default function CopilotChat() {
     setTimeout(() => setAddedItemNotice(null), 2500);
   }
 
-  // Format assistant markdown simple formatting (bold, bullet lines)
   function renderFormattedText(text) {
     if (!text) return null;
 
@@ -168,7 +165,6 @@ export default function CopilotChat() {
             return <div key={idx} className="h-1" />;
           }
 
-          // Format bold **text**
           const parts = line.split(/(\*\*.*?\*\*)/g);
           const parsed = parts.map((part, pIdx) => {
             if (part.startsWith("**") && part.endsWith("**")) {
@@ -181,7 +177,6 @@ export default function CopilotChat() {
             return part;
           });
 
-          // Bullet point
           if (line.trim().startsWith("- ") || line.trim().startsWith("• ") || line.trim().startsWith("* ")) {
             const bulletContent = line.trim().replace(/^[-•*]\s+/, "");
             const bulletParts = bulletContent.split(/(\*\*.*?\*\*)/g);
@@ -203,7 +198,6 @@ export default function CopilotChat() {
             );
           }
 
-          // Numbered list item: 1. , 2.
           const matchNum = line.trim().match(/^(\d+)\.\s+(.*)$/);
           if (matchNum) {
             const numContent = matchNum[2];
@@ -234,7 +228,6 @@ export default function CopilotChat() {
 
   return (
     <>
-      {/* Toast Notification when adding product */}
       {addedItemNotice && (
         <div className="fixed top-5 right-5 z-50 flex items-center gap-2 rounded-lg bg-foreground px-4 py-2.5 text-xs font-medium text-background shadow-lg animate-in fade-in slide-in-from-top-2 duration-150">
           <span>✓ Berhasil ditambah ke keranjang:</span>
@@ -242,8 +235,7 @@ export default function CopilotChat() {
         </div>
       )}
 
-      {/* Floating Launcher Button */}
-      {!isOpen && (
+      {!embedded && !isOpen && (
         <button
           type="button"
           onClick={() => setIsOpen(true)}
@@ -261,10 +253,14 @@ export default function CopilotChat() {
         </button>
       )}
 
-      {/* Chat Drawer / Modal */}
-      {isOpen && (
-        <div className="fixed inset-x-3 bottom-3 sm:inset-x-auto sm:right-6 sm:bottom-6 z-50 flex h-[85vh] max-h-[640px] w-auto sm:w-[420px] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl transition-all">
-          {/* Header */}
+      {(embedded || isOpen) && (
+        <div
+          className={
+            embedded
+              ? "flex h-full min-h-[640px] max-h-[820px] w-full flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-sm"
+              : "fixed inset-x-3 bottom-3 sm:inset-x-auto sm:right-6 sm:bottom-6 z-50 flex h-[85vh] max-h-[640px] w-auto sm:w-[420px] flex-col overflow-hidden rounded-2xl border border-border bg-surface shadow-2xl transition-all"
+          }
+        >
           <div className="flex items-center justify-between border-b border-border bg-surface px-4 py-3">
             <div className="flex items-center gap-3">
               <div className="relative flex h-9 w-9 items-center justify-center rounded-full bg-foreground text-background font-bold text-sm">
@@ -290,22 +286,22 @@ export default function CopilotChat() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
                 </svg>
               </button>
-              <button
-                type="button"
-                onClick={() => setIsOpen(false)}
-                title="Tutup Chat"
-                className="rounded-lg p-1.5 text-muted hover:bg-muted/10 hover:text-foreground"
-              >
-                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
-                </svg>
-              </button>
+              {!embedded && (
+                <button
+                  type="button"
+                  onClick={() => setIsOpen(false)}
+                  title="Tutup Chat"
+                  className="rounded-lg p-1.5 text-muted hover:bg-muted/10 hover:text-foreground"
+                >
+                  <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  </svg>
+                </button>
+              )}
             </div>
           </div>
 
-          {/* Messages Container */}
           <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs sm:text-sm">
-            {/* Default Welcome Message */}
             <div className="flex flex-col gap-2">
               <div className="flex items-start gap-2">
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background text-[11px] font-bold">
@@ -319,7 +315,6 @@ export default function CopilotChat() {
                 </div>
               </div>
 
-              {/* Quick suggestions when conversation is fresh */}
               {messages.length === 0 && (
                 <div className="mt-2 pl-9 space-y-1.5">
                   <p className="text-[11px] font-medium text-muted">Contoh pertanyaan cepat:</p>
@@ -339,15 +334,17 @@ export default function CopilotChat() {
               )}
             </div>
 
-            {/* Conversation Flow */}
             {messages.map((msg, index) => (
               <div key={index} className="space-y-2">
                 {msg.role === "user" ? (
                   <div className="flex flex-col items-end gap-1">
                     {msg.imageUrl && (
-                      <img
+                      <Image
                         src={msg.imageUrl}
                         alt="Foto pencarian"
+                        width={112}
+                        height={112}
+                        unoptimized
                         className="h-28 w-28 rounded-xl object-cover border border-border"
                       />
                     )}
@@ -361,29 +358,10 @@ export default function CopilotChat() {
                       TM
                     </div>
                     <div className="max-w-[88%] space-y-2.5">
-                      {/* Text Bubble */}
                       <div className="rounded-2xl rounded-tl-xs border border-border bg-muted/10 px-3.5 py-2.5 text-foreground">
                         {renderFormattedText(msg.content)}
                       </div>
 
-                      {/* Store Policy / Citation Quotes */}
-                      {msg.citations && msg.citations.length > 0 && (
-                        <div className="space-y-1 rounded-xl border border-dashed border-border bg-muted/5 p-2.5">
-                          <p className="text-[10px] font-semibold text-muted uppercase tracking-wider">
-                            Rujukan Toko & Review Asli:
-                          </p>
-                          {msg.citations.map((c, cIdx) => (
-                            <div key={cIdx} className="text-[11px] text-muted leading-tight">
-                              <span className="font-medium text-foreground">
-                                {c.title || c.source || "Kebijakan Toko"}:
-                              </span>{" "}
-                              &ldquo;{c.quote}&rdquo;
-                            </div>
-                          ))}
-                        </div>
-                      )}
-
-                      {/* Product Recommendation Cards */}
                       {msg.products && msg.products.length > 0 && (
                         <div className="space-y-2 pt-1">
                           <p className="text-[11px] font-semibold text-foreground">
@@ -433,7 +411,6 @@ export default function CopilotChat() {
               </div>
             ))}
 
-            {/* Loading Indicator */}
             {isLoading && (
               <div className="flex items-start gap-2">
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background text-[11px] font-bold">
@@ -445,7 +422,6 @@ export default function CopilotChat() {
                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground" style={{ animationDelay: "150ms" }} />
                     <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground" style={{ animationDelay: "300ms" }} />
                   </div>
-                  <span>Admin sedang mengecek katalog toko...</span>
                 </div>
               </div>
             )}
@@ -453,14 +429,15 @@ export default function CopilotChat() {
             <div ref={messagesEndRef} />
           </div>
 
-          {/* Footer Input */}
           <div className="border-t border-border bg-surface p-3">
-            {/* Image Preview Chip if attached */}
             {selectedImage && (
               <div className="mb-2 flex items-center gap-2 rounded-lg border border-border bg-muted/10 p-1.5 w-fit">
-                <img
+                <Image
                   src={selectedImage.preview}
                   alt="Upload preview"
+                  width={32}
+                  height={32}
+                  unoptimized
                   className="h-8 w-8 rounded-md object-cover"
                 />
                 <span className="text-[11px] text-muted truncate max-w-[140px]">
@@ -479,7 +456,6 @@ export default function CopilotChat() {
             )}
 
             <div className="flex items-center gap-2">
-              {/* Photo Upload Button */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -499,19 +475,17 @@ export default function CopilotChat() {
                 </svg>
               </button>
 
-              {/* Text Input */}
               <input
                 ref={inputRef}
                 type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Tanya style, ukuran, atau token tk_..."
+                placeholder="Tanya style, ukuran, atau kebijakan toko..."
                 disabled={isLoading}
                 className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-xs sm:text-sm text-foreground placeholder:text-muted focus:border-foreground focus:outline-hidden"
               />
 
-              {/* Send Button */}
               <button
                 type="button"
                 onClick={() => handleSend()}

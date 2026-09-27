@@ -10,7 +10,6 @@ export default function AddToCartButton({ product }) {
   const inCartItem = items?.find((item) => item.id === product.id);
   const inCartQty = inCartItem ? inCartItem.qty : 0;
 
-  // useState returns [value, setter] — must use [ ] not { }
   const [qty, setQty] = useState(1);
 
   function handleDecrease() {

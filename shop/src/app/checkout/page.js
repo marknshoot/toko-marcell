@@ -9,15 +9,12 @@ import { formatRp } from "@/lib/formatRp";
 export default function CheckoutPage() {
   const { items, cartCount, subtotal } = useContext(CartContext);
 
-  // Checkout started (M2b). The cart is loaded from localStorage in an effect, so
-  // on the first render `cartCount` is still 0 — this fires on the first render
-  // where the cart is actually non-empty, and the ref makes it fire only once.
-  const startedLogged = useRef(false);
+  const hasLoggedCheckoutStartRef = useRef(false);
   useEffect(() => {
-    if (startedLogged.current || cartCount === 0) {
+    if (hasLoggedCheckoutStartRef.current || cartCount === 0) {
       return;
     }
-    startedLogged.current = true;
+    hasLoggedCheckoutStartRef.current = true;
     postEvent({ eventType: "checkout_start", qty: cartCount, priceIdr: subtotal });
   }, [cartCount, subtotal]);
 

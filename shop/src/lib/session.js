@@ -1,13 +1,8 @@
-// Anonymous visit id — no account, no cookie, no personal data.
-//
-// sessionStorage (not localStorage) means a new tab is a new session, which is
-// honest: a "session" is a visit, not a person. Nothing here identifies anyone,
-// it only lets the funnel group events that belong to the same visit.
 const STORAGE_KEY = "toko-session";
 
 export function getSessionId() {
   if (typeof window === "undefined") {
-    return null; // server render: there is no browser to read from
+    return null;
   }
 
   const existing = window.sessionStorage.getItem(STORAGE_KEY);

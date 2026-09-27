@@ -31,7 +31,6 @@ def _chunk_markdown(filepath: str, default_category: str) -> list[dict]:
     with open(filepath, "r", encoding="utf-8") as f:
         text = f.read()
 
-    # Split by ## or ### headers
     raw_sections = re.split(r"\n(?=#{2,3}\s+)", text)
     chunks = []
 
@@ -73,7 +72,6 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
     """Ensure `store_knowledge` table exists, and seed chunks if empty or forced."""
     knowledge_dir = os.path.join(os.path.dirname(__file__), "knowledge")
     if not os.path.isdir(knowledge_dir):
-        # fallback to ../data/knowledge
         alt_dir = os.path.join(os.path.dirname(__file__), "..", "data", "knowledge")
         if os.path.isdir(alt_dir):
             knowledge_dir = alt_dir
@@ -91,7 +89,6 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
 
     with psycopg.connect(database_url) as conn:
         with conn.cursor() as cur:
-            # Check if store_knowledge already has rows
             cur.execute(
                 "SELECT column_name FROM information_schema.columns WHERE table_name = 'store_knowledge'"
             )

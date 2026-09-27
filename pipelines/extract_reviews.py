@@ -68,9 +68,6 @@ def main():
             if total_scanned % 1_000_000 == 0:
                 log(f"  Scanned {total_scanned:,} reviews...")
 
-            # Fast string search before full JSON parsing
-            # Review lines look like: {"overall": 5.0, ..., "asin": "B000YXC2LI", ...}
-            # Only parse if asin matches
             try:
                 data = json.loads(line)
             except Exception:
@@ -80,7 +77,6 @@ def main():
             if asin not in catalog_asins:
                 continue
 
-            # Need at least a meaningful comment
             text = (data.get("reviewText") or "").strip()
             if len(text) < 15:
                 continue
@@ -91,8 +87,9 @@ def main():
             verified = bool(data.get("verified", False))
             review_date = (data.get("reviewTime") or "").strip()
 
-            # Score for ranking review quality: verified bonus + length bonus (up to 300 chars)
-            quality_score = (2.0 if verified else 0.0) + min(len(text) / 100.0, 3.0)
+            verified_bonus = 2.0 if verified else 0.0
+            length_bonus = min(len(text) / 100.0, 3.0)
+            quality_score = verified_bonus + length_bonus
 
             reviews_by_asin[asin].append({
                 "rating": rating,
@@ -116,7 +113,6 @@ def main():
         candidates = reviews_by_asin.get(asin, [])
         if not candidates:
             continue
-        # Sort by quality score descending
         candidates.sort(key=lambda x: -x["quality"])
         selected = candidates[:MAX_REVIEWS_PER_ITEM]
         for r in selected:
@@ -153,7 +149,6 @@ def main():
                 CREATE INDEX IF NOT EXISTS reviews_rating_idx ON reviews(rating);
                 """
             )
-            # Clean and reload
             cur.execute("TRUNCATE TABLE reviews RESTART IDENTITY")
             log("Bulk inserting reviews into table `reviews`...")
             cur.executemany(

@@ -13,9 +13,6 @@ export default function QrisPage() {
   const [paying, setPaying] = useState(false);
   const [error, setError] = useState(null);
 
-  // "I have paid" is no longer a link to a static success page: it asks the
-  // server to create the order. Only the token that comes back is proof, and the
-  // purchase event is written by the server (see POST /checkout/confirm).
   async function handlePaid() {
     setPaying(true);
     setError(null);

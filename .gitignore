@@ -15,3 +15,6 @@ __pycache__/
 
 # defence in depth: the plan pack is local-only, never commit it
 plan/
+
+# fine-tuned model checkpoints and weights
+models/

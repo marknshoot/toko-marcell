@@ -287,17 +287,14 @@ def judge_item(spec: dict, item: dict) -> int:
         (item.get("description") or "")[:300],
     ]).lower()
 
-    # Check disqualifiers
     for bad in spec.get("disallowed", []):
         if bad.lower() in text:
             return 0
 
-    # Grade 2: Matches exact target attributes
     for exact in spec.get("exact_match", []):
         if exact.lower() in text:
             return 2
 
-    # Grade 1: Matches general intent / category
     matches_must = 0
     for must in spec.get("must_match", []):
         if must.lower() in text:
@@ -357,21 +354,17 @@ def run_eval(api_url: str):
         q = spec["query"]
         group = spec["group"]
 
-        # Run BM25
         t0 = time.perf_counter()
         bm25_items = fetch_search_results(api_url, q, mode="bm25", limit=10)
         bm25_time = (time.perf_counter() - t0) * 1000
 
-        # Run Hybrid
         t0 = time.perf_counter()
         hybrid_items = fetch_search_results(api_url, q, mode="hybrid", limit=10)
         hybrid_time = (time.perf_counter() - t0) * 1000
 
-        # Grade items
         bm25_grades = [judge_item(spec, item) for item in bm25_items]
         hybrid_grades = [judge_item(spec, item) for item in hybrid_items]
 
-        # Calculate metrics
         bm25_p10 = sum(1 for g in bm25_grades if g >= 1) / 10.0
         hybrid_p10 = sum(1 for g in hybrid_grades if g >= 1) / 10.0
 

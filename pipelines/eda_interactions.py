@@ -99,7 +99,6 @@ def main():
     p90 = item_vols[int(0.90 * len(item_vols))]
     p99 = item_vols[int(0.99 * len(item_vols))]
 
-    # Average rating
     sum_ratings = sum(float(r) * cnt for r, cnt in rating_counts.items())
     avg_rating = round(sum_ratings / total_rows, 3) if total_rows > 0 else 0.0
 
@@ -135,7 +134,6 @@ def main():
         },
     }
 
-    # Print Report
     print("\n" + "=" * 70)
     print("INTERACTIONS EXPLORATORY DATA ANALYSIS (EDA)")
     print("=" * 70)
@@ -166,7 +164,6 @@ def main():
     print(f"  Average Rating: {avg_rating} ★")
     print("=" * 70)
 
-    # Save to JSON
     with open(args.output_json, "w", encoding="utf-8") as f:
         json.dump(summary, f, indent=2)
     print(f"Saved EDA summary to: {args.output_json}")

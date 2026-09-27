@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { getSessionRecs } from "../lib/api";
 import ProductCard from "./ProductCard";
+import ProductCardSkeleton from "./ProductCardSkeleton";
 
 export default function RecommendationsRail() {
   const [data, setData] = useState({ items: [], strategy: "cold_popularity" });
@@ -18,8 +19,7 @@ export default function RecommendationsRail() {
         if (!cancelled && res && res.items) {
           setData(res);
         }
-      } catch (err) {
-        // best effort
+      } catch {
       } finally {
         if (!cancelled) {
           setLoading(false);
@@ -34,7 +34,29 @@ export default function RecommendationsRail() {
     };
   }, []);
 
-  if (loading || !data.items || data.items.length === 0) {
+  if (loading) {
+    return (
+      <section className="border-b border-border bg-surface/50 py-10" aria-busy="true">
+        <div className="mx-auto max-w-6xl px-7">
+          <div className="flex flex-col gap-1">
+            <div className="h-5 w-44 animate-pulse rounded bg-border motion-reduce:animate-none" />
+            <div className="mt-1 h-3 w-64 animate-pulse rounded bg-border motion-reduce:animate-none" />
+          </div>
+
+          <div className="mt-5 grid grid-cols-2 gap-4 sm:grid-cols-4">
+            <span className="sr-only" role="status">
+              Loading recommendations
+            </span>
+            {Array.from({ length: 4 }, (_, index) => (
+              <ProductCardSkeleton key={index} />
+            ))}
+          </div>
+        </div>
+      </section>
+    );
+  }
+
+  if (!data.items || data.items.length === 0) {
     return null;
   }
 
@@ -79,7 +101,7 @@ export default function RecommendationsRail() {
               onClick={handleLoadMore}
               className="inline-flex items-center gap-1.5 rounded-full border border-border bg-surface px-5 py-2 text-xs font-medium text-foreground shadow-xs transition-colors hover:border-foreground hover:bg-surface/80 cursor-pointer"
             >
-              Load more recommendations ↓
+              Load more recommendations
             </button>
           </div>
         ) : null}

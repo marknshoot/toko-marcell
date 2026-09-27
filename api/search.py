@@ -43,8 +43,6 @@ STOPWORDS = frozenset(
     "this to was were will with you your".split()
 )
 
-# Field -> weight. See the module docstring for why these are applied to term
-# frequencies rather than as separate indexes.
 FIELD_WEIGHTS = {
     "title": 3.0,
     "brand": 2.0,
@@ -56,25 +54,15 @@ FIELD_WEIGHTS = {
 
 
 def stem(token: str) -> str:
-    """Fold the common English plurals. Not a real stemmer — see docstring.
-
-    The subtle case is `-es`: English adds it only after a sibilant (watches,
-    dresses, boxes), otherwise the plural is just `-s` (shoes, houses). Stripping
-    `es` unconditionally turns "shoes" into "sho", which matches nothing, since
-    the singular "shoe" stays "shoe".
-
-    Genuinely ambiguous words are left alone: "potatoes" folds to "potatoe".
-    A real stemmer or a lemmatiser is the fix, and it is not worth a dependency
-    for a fashion catalog where the ambiguous cases barely occur.
-    """
+    """Fold the common English plurals."""
     if not token.isalpha():
-        return token  # keep numbers intact: "501" is a real query (Levi's 501)
+        return token
     if len(token) > 4 and token.endswith("ies"):
-        return token[:-3] + "y"          # batteries -> battery
+        return token[:-3] + "y"
     if len(token) > 4 and token.endswith("es") and token[:-2].endswith(("ch", "sh", "ss", "x", "z")):
-        return token[:-2]                  # watches -> watch, dresses -> dress
+        return token[:-2]
     if len(token) > 3 and token.endswith("s") and not token.endswith("ss"):
-        return token[:-1]                  # shoes -> shoe, jeans -> jean
+        return token[:-1]
     return token
 
 
@@ -92,10 +80,10 @@ class BM25Index:
         self.k1 = k1
         self.b = b
         self.doc_ids: list = []
-        self.doc_keys: list = []  # optional dedupe key per document (the title)
-        self.id_to_key: dict = {}  # doc_id -> dedupe_key lookup
+        self.doc_keys: list = []
+        self.id_to_key: dict = {}
         self.doc_lengths: dict = {}
-        self.postings: dict[str, dict] = defaultdict(dict)  # term -> {doc_index: weighted tf}
+        self.postings: dict[str, dict] = defaultdict(dict)
         self.avg_length = 0.0
         self._built = False
 
@@ -353,4 +341,35 @@ def embed_image_bytes(image_bytes: bytes) -> list[float] | None:
     except Exception as e:
         print(f"[search] embed_image_bytes failed: {e}")
         return None
+
+
+_CLIP_TEXT_MODEL = None
+_CLIP_TEXT_LOCK = threading.Lock()
+
+
+def get_clip_text_model():
+    """Load the fastembed CLIP text model lazily (Qdrant/clip-ViT-B-32-text, 512-dim)."""
+    global _CLIP_TEXT_MODEL
+    if _CLIP_TEXT_MODEL is None:
+        with _CLIP_TEXT_LOCK:
+            if _CLIP_TEXT_MODEL is None:
+                from fastembed import TextEmbedding
+                cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", "/tmp/fastembed_cache")
+                _CLIP_TEXT_MODEL = TextEmbedding(
+                    model_name="Qdrant/clip-ViT-B-32-text",
+                    cache_dir=cache_dir,
+                )
+    return _CLIP_TEXT_MODEL
+
+
+def embed_query_clip_text(query: str) -> list[float] | None:
+    """Generate 512-dim CLIP text embedding to query products.image_embedding cross-modally."""
+    try:
+        model = get_clip_text_model()
+        vectors = list(model.embed([query]))
+        return [float(x) for x in vectors[0]]
+    except Exception as e:
+        print(f"[search] embed_query_clip_text failed: {e}")
+        return None
+
 

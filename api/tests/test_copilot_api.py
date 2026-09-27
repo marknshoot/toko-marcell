@@ -19,13 +19,13 @@ BASE_URL = "http://localhost:8001"
 
 
 def api_request(method, path, data=None):
-    time.sleep(0.8)  # Prevent back-to-back LLM reservation spikes
+    time.sleep(1.2)  # Prevent back-to-back LLM reservation spikes
     url = f"{BASE_URL}{path}"
     headers = {"Content-Type": "application/json"} if data else {}
     body = json.dumps(data).encode("utf-8") if data else None
     req = urllib.request.Request(url, data=body, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=30) as resp:
+        with urllib.request.urlopen(req, timeout=45) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
     except urllib.error.HTTPError as e:
         raw = e.read().decode("utf-8")
@@ -45,10 +45,10 @@ def test_copilot_tools_schema():
     tool_names = [t["function"]["name"] for t in body["tools"]]
     assert "search_catalog" in tool_names
     assert "get_product_details" in tool_names
-    assert "get_product_reviews" in tool_names
     assert "search_by_image" in tool_names
     assert "lookup_store_policy" in tool_names
     assert "get_order_status" in tool_names
+    assert "get_product_reviews" not in tool_names
 
 
 # ── 2. Node 0: Guardrail & Greeting Fast-Path ────────────────────────────────
@@ -208,7 +208,7 @@ def test_copilot_uc6_social_proof():
     status, body = api_request("POST", "/copilot/chat", payload)
     assert status == 200
     assert "reply" in body
-    assert any(tc["name"] in ("get_product_reviews", "search_catalog") for tc in body.get("tool_calls", []))
+    assert any(tc["name"] in ("search_catalog", "get_product_details") for tc in body.get("tool_calls", []))
 
 
 # ── 9. UC-7: Store Policies & QRIS Demo ───────────────────────────────────────

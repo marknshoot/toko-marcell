@@ -35,7 +35,6 @@ export default function ProductReviews({ reviewsData }) {
   return (
     <section className="mt-12 border-t border-border pt-8">
       <div className="flex flex-col gap-8 md:flex-row md:items-start md:justify-between">
-        {/* Left: Summary & Score */}
         <div className="w-full md:w-1/3">
           <h2 className="text-sm font-semibold uppercase tracking-[0.12em] text-foreground">
             Customer Reviews
@@ -53,7 +52,6 @@ export default function ProductReviews({ reviewsData }) {
             </div>
           </div>
 
-          {/* Star breakdown bar chart */}
           <div className="mt-6 space-y-2">
             {[5, 4, 3, 2, 1].map((stars) => {
               const count = breakdown[String(stars)] || 0;
@@ -74,7 +72,6 @@ export default function ProductReviews({ reviewsData }) {
           </div>
         </div>
 
-        {/* Right: Curated Reviews List */}
         <div className="w-full md:w-2/3">
           <div className="space-y-6 divide-y divide-border">
             {reviews.map((rev) => (

@@ -1,0 +1,56 @@
+{
+  "test_split_size": 539,
+  "train_split_size": 4302,
+  "val_split_size": 537,
+  "total_verified_pairs": 5378,
+  "hardware": "Nvidia Tesla T4 (Kaggle GPU)",
+  "precision": "Mixed Precision (AMP FP16)",
+  "epochs": 3,
+  "batch_size": 64,
+  "base_lr": 0.000005,
+  "leaderboard": [
+    {
+      "Experiment": "Zero-Shot Base CLIP",
+      "Architecture": "openai/clip-vit-base-patch32 (Frozen Pre-trained)",
+      "Recall@1": 26.53,
+      "Recall@5": 54.92,
+      "Recall@10": 70.69,
+      "MRR": 0.4033,
+      "Latency_ms": 13.98
+    },
+    {
+      "Experiment": "LORA",
+      "Architecture": "PEFT LoRA (r=16, alpha=32 on q_proj, v_proj; 983k params)",
+      "Recall@1": 30.61,
+      "Recall@5": 64.38,
+      "Recall@10": 77.37,
+      "MRR": 0.4595,
+      "Latency_ms": 9.47
+    },
+    {
+      "Experiment": "DECOUPLED_LR",
+      "Architecture": "WiSE-FT Decoupled LR (ViT 0-5 Frozen, Vision 0.2x, Text 1.0x, Proj 2.0x)",
+      "Recall@1": 36.92,
+      "Recall@5": 77.18,
+      "Recall@10": 86.09,
+      "MRR": 0.5411,
+      "Latency_ms": 9.43
+    },
+    {
+      "Experiment": "SIGLIP",
+      "Architecture": "Sigmoid Loss for Language Image Pre-Training (Pairwise BCE, learned temp/bias)",
+      "Recall@1": 29.68,
+      "Recall@5": 68.46,
+      "Recall@10": 81.82,
+      "MRR": 0.4666,
+      "Latency_ms": 10.0
+    }
+  ],
+  "champion": {
+    "experiment": "DECOUPLED_LR",
+    "recall_at_1_delta_pct": 39.16,
+    "recall_at_5_delta_pct": 40.53,
+    "recall_at_10_delta_pct": 21.78,
+    "mrr_delta": 0.1378
+  }
+}

@@ -89,13 +89,11 @@ def main():
     log(f"Connecting to Postgres at {args.database_url}...")
     with psycopg.connect(args.database_url) as conn:
         with conn.cursor() as cur:
-            # 1. Ensure image_embedding column exists
             cur.execute(
                 "ALTER TABLE products ADD COLUMN IF NOT EXISTS image_embedding vector(512);"
             )
             conn.commit()
 
-            # 2. Fetch products needing image embedding
             query = """
                 SELECT id, asin, image_url
                 FROM products
@@ -114,7 +112,6 @@ def main():
 
     log(f"Found {len(targets):,} products needing image embeddings.")
 
-    # 3. Concurrent image downloads to local cache
     log(f"Downloading images using {args.download_workers} parallel threads...")
     t_dl = time.perf_counter()
     downloaded_paths = {}
@@ -138,7 +135,6 @@ def main():
     embed_model = ImageEmbedding(model_name=MODEL_NAME, specific_model_path=model_path)
     log(f"Model loaded in {time.perf_counter() - t_model:.1f}s.")
 
-    # 5. Batch embed and write to Postgres
     valid_items = [(pid, asin, downloaded_paths[pid]) for pid, asin, _ in targets if pid in downloaded_paths]
     total_valid = len(valid_items)
     log(f"Encoding {total_valid:,} images in batches of {args.batch_size}...")
@@ -153,7 +149,6 @@ def main():
                 batch_pids = [b[0] for b in batch]
                 batch_paths = [str(b[2]) for b in batch]
 
-                # FastEmbed ImageEmbedding accepts file paths directly!
                 vecs = list(embed_model.embed(batch_paths, batch_size=len(batch)))
 
                 updates = [(format_vector(v), pid) for pid, v in zip(batch_pids, vecs)]
@@ -169,7 +164,6 @@ def main():
                 if total_embedded % 256 == 0 or total_embedded == total_valid:
                     log(f"  Embedded {total_embedded:,}/{total_valid:,} images ({rate:.1f} img/s)...")
 
-            # 6. Build HNSW Index
             log("Building HNSW cosine index `products_image_embedding_idx` on products(image_embedding)...")
             t_idx = time.perf_counter()
             cur.execute(

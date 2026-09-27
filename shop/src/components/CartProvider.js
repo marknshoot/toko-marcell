@@ -5,22 +5,21 @@ import { postEvent } from "../lib/api";
 
 export const CartContext = createContext(null);
 
+const CART_STORAGE_KEY = "toko-cart-v2";
+
 export function CartProvider({ children }) {
     const [items, setItems] = useState([]);
     const [hasLoaded, setHasLoaded] = useState(false);
 
     useEffect(() => {
         try {
-            // v2: cart lines now carry `asin`, which is what checkout sends to the
-            // server. Old v1 carts have no asin, so the key is bumped instead of
-            // migrating — a cart line that cannot be priced is worse than no cart.
-            const raw = localStorage.getItem("toko-cart-v2");
+            const raw = localStorage.getItem(CART_STORAGE_KEY);
             if (raw) {
-            const parsed = JSON.parse(raw);
-            if (Array.isArray(parsed)) {
-                // eslint-disable-next-line react-hooks/set-state-in-effect
-                setItems(parsed);
-            }
+                const parsed = JSON.parse(raw);
+                if (Array.isArray(parsed)) {
+                    // eslint-disable-next-line react-hooks/set-state-in-effect
+                    setItems(parsed);
+                }
             }
         } catch {
             
@@ -28,17 +27,14 @@ export function CartProvider({ children }) {
             setHasLoaded(true);
         }
 
-        // Cross-tab sync: when another tab modifies the cart in localStorage,
-        // the browser fires the native "storage" event to keep all tabs in sync.
         function handleStorage(event) {
-            if (event.key === "toko-cart-v2") {
+            if (event.key === CART_STORAGE_KEY) {
                 try {
                     const parsed = event.newValue ? JSON.parse(event.newValue) : [];
                     if (Array.isArray(parsed)) {
                         setItems(parsed);
                     }
                 } catch {
-                    // best effort on malformed payload
                 }
             }
         }
@@ -47,12 +43,9 @@ export function CartProvider({ children }) {
         return () => window.removeEventListener("storage", handleStorage);
     }, []); 
 
-
     const cartCount = items.reduce((sum, item) => sum + item.qty, 0);
 
     function addToCart(product, q) {
-        // Funnel event (M2). Fired here because this is the single place a cart
-        // line is created, so every entry point is covered by construction.
         postEvent({
             eventType: "add_to_cart",
             asin: product.asin,
@@ -126,13 +119,12 @@ export function CartProvider({ children }) {
     );
 
     function clearCart() {
-        // Keep same [] reference if already empty — avoids extra re-renders
         setItems((prev) => (prev.length === 0 ? prev : []));
     }
 
     useEffect(() => {
-        if (!hasLoaded) return; // important!
-        localStorage.setItem("toko-cart-v2", JSON.stringify(items));
+        if (!hasLoaded) return;
+        localStorage.setItem(CART_STORAGE_KEY, JSON.stringify(items));
     }, [items, hasLoaded]);
 
     return (

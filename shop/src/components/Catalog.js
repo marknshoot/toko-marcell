@@ -9,9 +9,6 @@ import { getProducts, searchProducts, searchByImage, getCategories, postEvent } 
 const PAGE_SIZE = 24;
 const DEBOUNCE_MS = 250;
 
-// Build the page URL from the current state. URLSearchParams is the same tool
-// lib/api.js uses for API queries — here it builds the *page* URL. Defaults are
-// omitted, so "/" means "no filter, page 1, no query".
 function buildUrl({ department, page, q }) {
   const params = new URLSearchParams();
   if (department && department !== "All") {
@@ -31,20 +28,13 @@ export default function Catalog() {
   const router = useRouter();
   const searchParams = useSearchParams();
 
-  // The URL is the single source of truth for what is being shown. Nothing here
-  // is duplicated in useState, so Back, refresh and a shared link all agree.
   const department = searchParams.get("department") || "All";
   const page = Math.max(1, Number(searchParams.get("page")) || 1);
   const urlQuery = searchParams.get("q") || "";
 
-  // The input is the one exception, and deliberately so: what you are typing must
-  // appear instantly, while the *request* waits for a pause. Two values, two jobs.
   const [searchInput, setSearchInput] = useState(urlQuery);
   const [prevUrlQuery, setPrevUrlQuery] = useState(urlQuery);
 
-  // Keep the input in step when the URL changes from somewhere else (Back button,
-  // a pasted link, a chip click that clears the query). Adjusting state during render
-  // avoids cascading effect renders (React 19 pattern).
   if (urlQuery !== prevUrlQuery) {
     setPrevUrlQuery(urlQuery);
     setSearchInput(urlQuery);
@@ -81,7 +71,6 @@ export default function Catalog() {
 
   const totalPages = Math.max(1, Math.ceil(total / PAGE_SIZE));
 
-  // Facets: fetched once — they describe the catalog, not the current page.
   useEffect(() => {
     let cancelled = false;
 
@@ -91,8 +80,7 @@ export default function Catalog() {
         if (!cancelled) {
           setDepartments(data.departments);
         }
-      } catch (err) {
-        // chips are a nice-to-have: if they fail, the catalog must still work
+      } catch {
         if (!cancelled) {
           setDepartments([]);
         }
@@ -105,9 +93,6 @@ export default function Catalog() {
     };
   }, []);
 
-  // Typing pause -> URL. This is where the debounce finally earns its keep: each
-  // request is now a server search, so without it every keystroke would be one.
-  // A new search also resets to page 1, for the same reason a chip does.
   useEffect(() => {
     const trimmed = searchInput.trim();
     if (trimmed === urlQuery) {
@@ -121,11 +106,8 @@ export default function Catalog() {
     return () => clearTimeout(timer);
   }, [searchInput, urlQuery, department, router]);
 
-  // Search event bookkeeping: which query has already been reported.
-  const lastLoggedQuery = useRef("");
+  const lastLoggedQueryRef = useRef("");
 
-  // Items: server search when there is a query, plain catalog otherwise. Both
-  // return the same envelope, so the grid and the pager do not care which one ran.
   useEffect(() => {
     let cancelled = false;
 
@@ -151,17 +133,11 @@ export default function Catalog() {
           setProducts(data.items);
           setTotal(data.total);
 
-          // Search event (M2), fired from the response we are about to render so
-          // the count is the one the shopper sees. A separate effect would fire on
-          // the render where `urlQuery` changed but the fetch had not returned yet,
-          // reporting the *previous* query's total.
-          if (urlQuery && urlQuery !== lastLoggedQuery.current) {
-            lastLoggedQuery.current = urlQuery;
+          if (urlQuery && urlQuery !== lastLoggedQueryRef.current) {
+            lastLoggedQueryRef.current = urlQuery;
             postEvent({ eventType: "search", query: urlQuery, resultsCount: data.total });
           }
 
-          // A stale link can point past the end (e.g. ?department=Girls&page=99).
-          // Snap to the last real page instead of showing an empty grid.
           const lastPage = Math.max(1, Math.ceil(data.total / PAGE_SIZE));
           if (data.items.length === 0 && data.total > 0 && page > lastPage) {
             router.replace(buildUrl({ department, page: lastPage, q: urlQuery }), {
@@ -187,8 +163,6 @@ export default function Catalog() {
   }, [department, page, urlQuery, imageFile, router]);
 
   function selectDepartment(name) {
-    // changing the filter must go back to page 1, otherwise page 40 of a
-    // 5-page department would show nothing
     router.push(buildUrl({ department: name, page: 1, q: urlQuery }), { scroll: false });
   }
 
@@ -260,7 +234,6 @@ export default function Catalog() {
           ) : null}
         </div>
 
-        {/* Visual search active pill */}
         {imageFile && imagePreview ? (
           <div className="mt-3 flex items-center gap-2.5 rounded-lg border border-border bg-surface px-3 py-2 text-xs">
             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -300,15 +273,13 @@ export default function Catalog() {
           })}
         </div>
 
-        <div className="mt-6 grid grid-cols-2 gap-3 md:grid-cols-3 lg:grid-cols-4">
+        <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
           {loading ? (
-            // Skeleton cards instead of a "Loading…" line: the grid keeps its
-            // shape, so nothing jumps when the real products arrive.
             <>
               <span className="sr-only" role="status">
                 Loading products
               </span>
-              {Array.from({ length: 6 }, (_, index) => (
+              {Array.from({ length: 24 }, (_, index) => (
                 <ProductCardSkeleton key={index} />
               ))}
             </>
@@ -341,7 +312,7 @@ export default function Catalog() {
               disabled={page <= 1}
               className="rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             >
-              ← Prev
+              Prev
             </button>
 
             <p className="text-xs text-muted">
@@ -354,7 +325,7 @@ export default function Catalog() {
               disabled={page >= totalPages}
               className="rounded-full border border-border bg-surface px-4 py-2 text-xs font-medium text-foreground disabled:cursor-not-allowed disabled:opacity-40"
             >
-              Next →
+              Next
             </button>
           </div>
         ) : null}
