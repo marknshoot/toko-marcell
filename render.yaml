@@ -10,9 +10,9 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: 3.11.9
-      - key: DATABASE_URL
-        value: postgresql://neondb_owner:npg_xw1AGs7KiQCz@ep-young-king-b32vf1ya.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require
-      - key: GEMINI_API_KEY
-        value: AIzaSyCOVmobTKxfai-9Y0wz7Aw-0ySceUD7K-8
       - key: CORS_ORIGINS
         value: "*"
+      - key: DATABASE_URL
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
