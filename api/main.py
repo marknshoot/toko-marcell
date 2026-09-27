@@ -21,14 +21,19 @@ from search import (
 
 app = FastAPI(title="Toko Marcell API")
 
+cors_origins_raw = os.environ.get(
+    "CORS_ORIGINS",
+    "*,http://localhost:3000,https://toko-marcell.vercel.app",
+)
 origins = [
     origin.strip()
-    for origin in os.environ.get("CORS_ORIGINS", "http://localhost:3000").split(",")
+    for origin in cors_origins_raw.split(",")
     if origin.strip()
 ]
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
+    allow_origins=["*"] if "*" in origins else origins,
+    allow_origin_regex=r"^https:\/\/.*\.vercel\.app$",
     allow_methods=["*"],
     allow_headers=["*"],
 )
