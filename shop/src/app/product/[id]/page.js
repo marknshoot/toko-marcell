@@ -48,13 +48,6 @@ export default async function ProductPage({ params }) {
         <main className="py-12">
             <TrackView asin={product.asin} priceIdr={product.priceIdr} />
             <div className="mx-auto max-w-6xl px-7">
-                <Link
-                    href="/#catalog"
-                    className="text-xs text-muted no-underline transition-colors hover:text-foreground"
-                >
-                    All products
-                </Link>
-
                 <div className="mt-6 grid gap-8 md:grid-cols-2">
                     <ProductImage src={product.imageUrl} alt={product.title} padding="p-6" />
 

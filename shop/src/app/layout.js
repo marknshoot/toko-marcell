@@ -44,13 +44,13 @@ export default function RootLayout({ children }) {
           <FloatingCopilot />
 
           <footer className="border-t border-border bg-surface px-5 py-6 sm:px-8 text-xs text-muted">
-            <div className="mx-auto flex max-w-6xl flex-col items-center justify-between gap-3 sm:flex-row">
+            <div className="mx-auto flex max-w-6xl flex-col items-start gap-3">
               <p>
                 © 2026 Toko Marcell — Karya Marcell Hermawan Kristianto (Binus DS).
               </p>
               <div>
                 <a
-                  href="https://github.com/marknshoot"
+                  href="https://github.com/marknshoot/toko-marcell"
                   target="_blank"
                   rel="noopener noreferrer"
                   className="hover:text-foreground hover:underline"
