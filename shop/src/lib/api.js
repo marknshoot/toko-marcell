@@ -9,7 +9,12 @@ export async function checkHealth() {
     const response = await fetch(`${API_URL}/health`, { cache: "no-store" });
     return response.ok;
   } catch {
-    return false;
+    try {
+      const fallback = await fetch(`${API_URL}/categories`, { cache: "no-store" });
+      return fallback.ok;
+    } catch {
+      return false;
+    }
   }
 }
 
