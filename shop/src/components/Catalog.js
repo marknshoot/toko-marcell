@@ -48,12 +48,8 @@ export default function Catalog() {
   const [error, setError] = useState(null);
 
   useEffect(() => {
-    let timer;
-    if (loading) {
-      timer = setTimeout(() => setIsSlowLoading(true), 1000);
-    } else {
-      setIsSlowLoading(false);
-    }
+    if (!loading) return;
+    const timer = setTimeout(() => setIsSlowLoading(true), 1000);
     return () => clearTimeout(timer);
   }, [loading]);
 
@@ -124,6 +120,7 @@ export default function Catalog() {
 
     async function load() {
       setLoading(true);
+      setIsSlowLoading(false);
       setError(null);
       try {
         if (imageFile) {
@@ -163,6 +160,7 @@ export default function Catalog() {
       } finally {
         if (!cancelled) {
           setLoading(false);
+          setIsSlowLoading(false);
         }
       }
     }
