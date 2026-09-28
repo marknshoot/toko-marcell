@@ -4,6 +4,7 @@ import "./globals.css";
 import { CartProvider } from "@/components/CartProvider";
 import CartLink from "@/components/CartLink";
 import FloatingCopilot from "@/components/FloatingCopilot";
+import ServerWakeup from "@/components/ServerWakeup";
 
 const geist = Geist({
   subsets: ["latin"],
@@ -14,7 +15,7 @@ const geist = Geist({
 export const metadata = {
   title: "Toko Marcell",
   description:
-    "6,000-product fashion catalog with hybrid search, session recommendations and a QRIS demo checkout.",
+    "4,670-product curated fashion catalog with hybrid search, session recommendations and a QRIS demo checkout.",
 };
 
 export default function RootLayout({ children }) {
@@ -41,6 +42,7 @@ export default function RootLayout({ children }) {
 
           <div className="flex-1">{children}</div>
 
+          <ServerWakeup />
           <FloatingCopilot />
 
           <footer className="border-t border-border bg-surface px-5 py-6 sm:px-8 text-xs text-muted">

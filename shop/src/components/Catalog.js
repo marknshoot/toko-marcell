@@ -44,7 +44,18 @@ export default function Catalog() {
   const [total, setTotal] = useState(0);
   const [departments, setDepartments] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [isSlowLoading, setIsSlowLoading] = useState(false);
   const [error, setError] = useState(null);
+
+  useEffect(() => {
+    let timer;
+    if (loading) {
+      timer = setTimeout(() => setIsSlowLoading(true), 1000);
+    } else {
+      setIsSlowLoading(false);
+    }
+    return () => clearTimeout(timer);
+  }, [loading]);
 
   const [imageFile, setImageFile] = useState(null);
   const [imagePreview, setImagePreview] = useState(null);
@@ -276,6 +287,20 @@ export default function Catalog() {
             );
           })}
         </div>
+
+        {isSlowLoading && loading ? (
+          <div className="mt-4 flex items-center gap-3 rounded-xl border border-border bg-surface px-4 py-3 shadow-xs">
+            <span className="relative flex h-4 w-4 shrink-0" aria-hidden="true">
+              <span className="h-4 w-4 animate-spin rounded-full border-2 border-foreground border-t-transparent" />
+            </span>
+            <div className="text-xs">
+              <span className="font-semibold text-foreground">Membangunkan server... </span>
+              <span className="text-muted">
+                Hosting gratis (Render Free Tier) sedang aktif dari mode tidur (~30–50 detik). Katalog produk akan langsung muncul begitu server aktif.
+              </span>
+            </div>
+          </div>
+        ) : null}
 
         <div className="mt-6 grid grid-cols-2 gap-3 sm:grid-cols-4">
           {loading ? (

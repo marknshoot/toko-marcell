@@ -4,6 +4,15 @@ const API_URL =
     ? process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
     : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
+export async function checkHealth() {
+  try {
+    const response = await fetch(`${API_URL}/health`, { cache: "no-store" });
+    return response.ok;
+  } catch {
+    return false;
+  }
+}
+
 export async function getProducts({ department, limit = 24, offset = 0 } = {}) {
   const params = new URLSearchParams();
   params.set("limit", String(limit));

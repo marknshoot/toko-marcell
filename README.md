@@ -49,7 +49,7 @@ flowchart TD
     subgraph Search["Tier 3: Hybrid Retrieval & Fusion"]
         BM25["Lexical Ranker (BM25 Engine)"]
         DenseText["Dense Text Embeddings (all-MiniLM-L6-v2)"]
-        VLM["Champion Fine-Tuned Fashion-CLIP (ONNX)"]
+        VLM["Champion Fine-Tuned CLIP ViT-B/32 (ONNX)"]
         RRF["Reciprocal Rank Fusion (RRF, k=60)"]
     end
 
@@ -80,17 +80,19 @@ To solve the fine-grained semantic gap in zero-shot vision-language models (e.g.
 
 ### Benchmark Scoreboard (539 Held-Out Test Pairs)
 
-| Experiment | Architecture / Approach | Recall@1 | Recall@5 | Recall@10 | MRR | Inference Latency |
+| Experiment | Architecture / Approach | Recall@1 | Recall@5 | Recall@10 | MRR | Latency (T4 GPU) |
 |---|---|:---:|:---:|:---:|:---:|:---:|
-| **Zero-Shot Base** | `openai/clip-vit-base-patch32` (Frozen) | 26.53% | 54.92% | 70.69% | 0.4033 | 13.98 ms |
-| **PEFT LoRA** | LoRA ($r=16, \alpha=32$ on $W_q, W_v$; 983k params) | 30.61% | 64.38% | 77.37% | 0.4595 | 9.47 ms |
-| **🏆 Champion (WiSE-FT)** | **Decoupled LR (ViT 0–5 frozen, Vision 0.2x, Text 1.0x, Proj 2.0x)** | **36.92%** | **77.18%** | **86.09%** | **0.5411** | **9.43 ms** |
-| **SigLIP** | Sigmoid Loss Pre-Training (Pairwise BCE, learned temp/bias) | 29.68% | 68.46% | 81.82% | 0.4666 | 10.00 ms |
+| **Zero-Shot Base** | `openai/clip-vit-base-patch32` (Frozen) | 26.53% | 54.92% | 70.69% | 0.4033 | 27.80 ms |
+| **PEFT LoRA** | LoRA (EarlyStopped, $r=16, \alpha=32$ on $W_q, W_v$) | 33.40% | 71.61% | 83.49% | 0.5038 | 15.50 ms |
+| **SigLIP** | Sigmoid Loss Pre-Training (Pairwise BCE, learned temp/bias) | 35.25% | 71.43% | 82.19% | 0.5091 | 19.38 ms |
+| **WiSE-FT** | Weight-Space Ensemble (Decoupled LR + Zero-Shot, $\alpha=0.35$) | 37.85% | 73.28% | 85.53% | 0.5363 | 9.76 ms |
+| **🏆 Champion** | **Decoupled LR (ViT 0–5 frozen, Vision 0.2x, Text 1.0x, Proj 2.0x)** | **39.15%** | **78.11%** | **87.20%** | **0.5592** | **14.01 ms** |
 
 #### Key Research Takeaways:
-1. **+39.16% Relative Gain in Recall@1:** Decoupling learning rates across transformer depths (preserving early visual edge filters while adapting high-level projection layers) strongly outperformed uniform LoRA.
-2. **Hardware Export to ONNX:** The fine-tuned champion text encoder was exported to ONNX format ([`models/champion_text_encoder.onnx`](./models/champion_text_encoder.onnx)) with FP16 post-processing, dropping inference latency to **9.43 ms** for real-time model serving.
-3. **Structured Failure Mode Analysis:** Documented in [`pipelines/failure_case_analysis.md`](./pipelines/failure_case_analysis.md)—analyzing exact failure modes when visual textures conflict with multi-attribute text tokens.
+1. **+47.57% Relative Gain in Recall@1 (26.53% → 39.15%, +12.6 pts):** Decoupling learning rates across transformer depths (preserving early visual edge filters while adapting high-level projection layers) strongly outperformed uniform LoRA and SigLIP.
+2. **WiSE-FT Weight Ensembling Ablation:** Weight-space ensembling ($\alpha=0.35$) yielded 37.85% Recall@1, while single-model early-stopped Decoupled LR delivered the highest overall retrieval accuracy (39.15% R@1, 0.5592 MRR).
+3. **Hardware Export to ONNX:** The fine-tuned champion text encoder was exported to ONNX format ([`models/champion_text_encoder.onnx`](./models/champion_text_encoder.onnx)) with FP16 post-processing for fast CPU/GPU inference serving.
+4. **Structured Failure Mode Analysis:** Documented in [`pipelines/failure_case_analysis.md`](./pipelines/failure_case_analysis.md)—analyzing exact failure modes when visual textures conflict with multi-attribute text tokens.
 
 ---
 
