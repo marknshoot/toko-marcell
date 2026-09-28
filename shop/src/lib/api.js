@@ -1,6 +1,8 @@
 import { getSessionId } from "./session";
-
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
+const API_URL =
+  typeof window === "undefined"
+    ? process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
+    : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
 export async function getProducts({ department, limit = 24, offset = 0 } = {}) {
   const params = new URLSearchParams();

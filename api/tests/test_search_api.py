@@ -144,5 +144,5 @@ def test_search_department_filtering():
 def test_search_reindex():
     status, body = api_request("POST", "/search/reindex")
     assert status == 202
-    assert body["documents"] == 6000
+    assert body["documents"] == 4670
     assert body["mode"] == "hybrid"

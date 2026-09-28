@@ -12,9 +12,9 @@ import sys
 import time
 import psycopg
 
-NEON_URL = os.environ.get(
+DEFAULT_DATABASE_URL = os.environ.get(
     "DATABASE_URL",
-    "postgresql://neondb_owner:npg_xw1AGs7KiQCz@ep-young-king-b32vf1ya.c-4.ap-southeast-1.aws.neon.tech/neondb?sslmode=require",
+    "postgresql://toko:toko@localhost:5432/toko",
 )
 
 
@@ -23,10 +23,10 @@ def log(msg: str):
 
 
 def main():
-    log("=== Starting Catalog Clean-Up on Neon PostgreSQL ===")
+    log("=== Starting Catalog Clean-Up ===")
     t0 = time.perf_counter()
 
-    with psycopg.connect(NEON_URL) as conn:
+    with psycopg.connect(DEFAULT_DATABASE_URL) as conn:
         with conn.cursor() as cur:
             # Step 1: Initial state
             cur.execute("SELECT COUNT(*) FROM products;")

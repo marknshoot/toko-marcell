@@ -10,6 +10,7 @@ services:
       POSTGRES_DB: toko
     volumes:
       - pgdata:/var/lib/postgresql/data
+      - ../data/seed/init.sql.gz:/docker-entrypoint-initdb.d/01_init.sql.gz:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U toko -d toko"]
       interval: 5s
@@ -25,9 +26,9 @@ services:
       - "8001:8000"
     environment:
       DATABASE_URL: postgresql://toko:toko@db:5432/toko
-      CORS_ORIGINS: http://localhost:3000,http://localhost:3001
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://localhost:8001
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
-      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-3.5-flash-lite}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       HF_HUB_CACHE: /tmp/hf_cache
     env_file:
@@ -35,8 +36,8 @@ services:
         required: false
     volumes:
       - .:/app
-      - /home/marcell/.cache/fastembed:/tmp/fastembed_cache:ro
-      - /home/marcell/.cache/huggingface:/root/.cache/huggingface:ro
+      - cache_fastembed:/tmp/fastembed_cache
+      - cache_hf:/root/.cache/huggingface
     depends_on:
       db:
         condition: service_healthy
@@ -68,3 +69,5 @@ services:
 
 volumes:
   pgdata:
+  cache_fastembed:
+  cache_hf:

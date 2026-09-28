@@ -58,7 +58,7 @@ def test_products_default_pagination():
     assert status == 200
     assert body["limit"] == 24
     assert body["offset"] == 0
-    assert body["total"] == 6000
+    assert body["total"] == 4670
     assert len(body["items"]) == 24
     
     first = body["items"][0]

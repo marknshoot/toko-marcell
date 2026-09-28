@@ -1,0 +1,67 @@
+name: toko-marcell
+
+services:
+  db:
+    image: pgvector/pgvector:pg16
+    container_name: toko-db
+    restart: unless-stopped
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: toko
+      POSTGRES_PASSWORD: toko
+      POSTGRES_DB: toko
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./data/seed/init.sql.gz:/docker-entrypoint-initdb.d/01_init.sql.gz:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U toko -d toko"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+
+  api:
+    build:
+      context: ./api
+      dockerfile: dockerfile
+    container_name: toko-api
+    restart: unless-stopped
+    ports:
+      - "8001:8000"
+    environment:
+      DATABASE_URL: postgresql://toko:toko@db:5432/toko
+      CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://localhost:8001
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
+    env_file:
+      - path: .env
+        required: false
+    volumes:
+      - ./models:/models:ro
+      - cache_hf:/root/.cache/huggingface
+      - cache_fastembed:/tmp/fastembed_cache
+    depends_on:
+      db:
+        condition: service_healthy
+
+  shop:
+    build:
+      context: ./shop
+      dockerfile: Dockerfile
+      args:
+        NEXT_PUBLIC_API_URL: http://localhost:8001
+    container_name: toko-shop
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      NEXT_PUBLIC_API_URL: http://localhost:8001
+      INTERNAL_API_URL: http://api:8000
+    depends_on:
+      - api
+
+volumes:
+  pgdata:
+  cache_hf:
+  cache_fastembed:

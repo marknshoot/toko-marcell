@@ -415,6 +415,7 @@ def get_onnx_champion_encoder():
 
                     here = os.path.dirname(os.path.abspath(__file__))
                     local_candidates = [
+                        "/models/champion_text_encoder.onnx",
                         os.path.join(here, "..", "models", "champion_text_encoder.onnx"),
                         os.path.join(here, "models", "champion_text_encoder.onnx"),
                         os.path.join(here, "champion_text_encoder.onnx"),

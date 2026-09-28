@@ -8,6 +8,9 @@ import ProductCard from "@/components/ProductCard";
 import ProductReviews from "@/components/ProductReviews";
 import TrackView from "@/components/TrackView";
 
+// Incremental Static Regeneration (ISR): Cache at Edge CDN and revalidate in background every 5 minutes.
+export const revalidate = 300;
+
 export async function generateMetadata({ params }) {
   const { id } = await params;
   const product = await getProduct(id);

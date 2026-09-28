@@ -4,7 +4,7 @@ import time
 from typing import Literal
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File
+from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -23,7 +23,7 @@ app = FastAPI(title="Toko Marcell API")
 
 cors_origins_raw = os.environ.get(
     "CORS_ORIGINS",
-    "*,http://localhost:3000,https://toko-marcell.vercel.app",
+    "http://localhost:3000,https://toko-marcell.vercel.app",
 )
 origins = [
     origin.strip()
@@ -300,9 +300,19 @@ def health():
     return {"status": "ok"}
 
 
+_CATEGORIES_CACHE: dict = {"timestamp": 0.0, "data": None}
+_CATEGORIES_TTL_SECONDS: float = 300.0
+
+
 @app.get("/categories")
-def categories():
-    """Facets for the shop filter chips — real counts, so the UI never invents one."""
+def categories(response: Response):
+    """Facets for the shop filter chips — cached in-memory (TTL 5m) and on HTTP clients."""
+    response.headers["Cache-Control"] = "public, max-age=300, stale-while-revalidate=60"
+
+    now = time.time()
+    if _CATEGORIES_CACHE["data"] is not None and (now - _CATEGORIES_CACHE["timestamp"]) < _CATEGORIES_TTL_SECONDS:
+        return _CATEGORIES_CACHE["data"]
+
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -321,17 +331,23 @@ def categories():
             )
             top_categories = [{"name": name, "count": count} for name, count in cur.fetchall()]
 
-    return {"departments": departments, "categories": top_categories}
+    data = {"departments": departments, "categories": top_categories}
+    _CATEGORIES_CACHE["timestamp"] = now
+    _CATEGORIES_CACHE["data"] = data
+    return data
 
 
 @app.get("/products")
 def products(
+    response: Response,
     limit: int = Query(24, ge=1, le=24),
     offset: int = Query(0, ge=0),
     department: str | None = None,
     category: str | None = None,
 ):
     """Paginated catalog. `department` and `category` are exact-match facets."""
+    response.headers["Cache-Control"] = "public, max-age=60, s-maxage=300, stale-while-revalidate=60"
+
     filters = []
     params = []
     if department:
@@ -366,7 +382,9 @@ def products(
 
 
 @app.get("/products/{product_id}")
-def get_product(product_id: int):
+def get_product(product_id: int, response: Response):
+    response.headers["Cache-Control"] = "public, max-age=300, s-maxage=600, stale-while-revalidate=60"
+
     with psycopg.connect(DATABASE_URL) as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -713,6 +731,7 @@ def reindex_search():
     endpoint because "why are my new products not searchable" is a confusing hour
     otherwise.
     """
+    _CATEGORIES_CACHE["data"] = None
     reset_index()
     index = get_index(build_search_index)
     return {"documents": index.size, "mode": "hybrid"}
@@ -1269,14 +1288,14 @@ def get_asin_reviews(asin: str, limit: int = Query(10, ge=1, le=50)):
 
 class CopilotMessage(BaseModel):
     role: Literal["user", "assistant", "system"]
-    content: str
-    imageUrl: str | None = None
+    content: str = Field(min_length=1, max_length=2000)
+    imageUrl: str | None = Field(default=None, max_length=8_000_000)
 
 
 class CopilotChatIn(BaseModel):
-    session_id: str | None = None
-    messages: list[CopilotMessage]
-    image_url: str | None = None
+    session_id: str | None = Field(default=None, max_length=64)
+    messages: list[CopilotMessage] = Field(min_length=1, max_length=20)
+    image_url: str | None = Field(default=None, max_length=8_000_000)
 
 
 @app.post("/copilot/chat")
