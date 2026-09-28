@@ -45,21 +45,28 @@ The `seed` service is behind a compose profile, so it never starts with `up`.
 
 | Method | Path | Notes |
 |---|---|---|
-| `GET` | `/health` | liveness |
-| `GET` | `/products` | paginated catalog. `limit` 1–24 (default 24), `offset` ≥ 0, `department=`, `category=` |
-| `GET` | `/products/{id}` | one product · `404` missing · `422` id not an integer |
-| `GET` | `/categories` | facets with real counts: departments + top 24 category names |
-| `POST` | `/events` | record one funnel event → `201` · `422` if malformed |
-| `GET` | `/events/summary` | funnel KPIs computed from the events table. `since_days` (default 30) |
-| `POST` | `/checkout/confirm` | turn a cart into a paid order → `201` with a token · `400` unknown asin · `422` bad body |
-| `GET` | `/orders/{token}` | read an order back · `404` unknown token |
-| `GET` | `/search` | BM25 search. `q` (1–100 chars), `limit` 1–24, `offset`, `department=`, `category=` |
-| `POST` | `/search/reindex` | rebuild the in-memory search index (needed after reseeding) |
+| `GET` | `/health` | Liveness and cold-start server wakeup ping |
+| `GET` | `/categories` | Facets with real counts: departments + top 24 categories (in-memory TTL cache ~2ms) |
+| `GET` | `/products` | Paginated catalog (`limit`, `offset`, `department=`, `category=`) |
+| `GET` | `/products/{id}` | Single product details · `404` missing · `422` invalid id |
+| `GET` | `/search` | 3-way hybrid search: BM25 + dense text vectors + CLIP text with RRF ($k=60$) |
+| `POST` | `/search/image` | Visual similarity search by uploading image bytes via CLIP ViT-B/32 |
+| `POST` | `/search/reindex` | Rebuild in-memory BM25 index & refresh pgvector caches |
+| `GET` | `/recs/popular` | Popularity baseline recommendations (Bayesian smoothed) |
+| `GET` | `/recs/item/{asin}` | Item-to-item co-occurrence & category-aware collaborative recommendations |
+| `GET` | `/recs/session` | Real-time session-based recommendations from user browsing history |
+| `GET` | `/reviews/{asin}` | Real customer reviews and ratings for a given ASIN |
+| `POST` | `/copilot/chat` | Tri-Modal LangChain Agent Copilot (planner, tool execution, RAG, styling) |
+| `GET` | `/copilot/tools` | Whitelisted copilot tool definitions & schemas |
+| `POST` | `/events` | Record user funnel event (`view`, `cart`, `search`) → `201` |
+| `GET` | `/events/summary` | Funnel conversion KPIs computed from PostgreSQL events table |
+| `POST` | `/checkout/confirm` | Create paid order with secret token → `201` · `422` bad payload |
+| `GET` | `/orders/{token}` | Retrieve paid order receipt · `404` unknown token |
 
 `/products` returns an envelope, never a bare array:
 
 ```json
-{ "items": [ ... ], "total": 6000, "limit": 24, "offset": 0 }
+{ "items": [ ... ], "total": 4670, "limit": 24, "offset": 0 }
 ```
 
 A product is the shape the storefront renders (`camelCase`, numbers as numbers):
@@ -81,8 +88,7 @@ A product is the shape the storefront renders (`camelCase`, numbers as numbers):
 
 ### Products in the catalog today
 
-6,000 real products from the Amazon Reviews 2018 *Clothing, Shoes & Jewelry* dataset:
-Women 3,405 · Men 1,897 · Other 307 · Girls 152 · Boys 128 · Baby 111.
+4,670 curated, deduplicated real products from the Amazon Reviews 2018 *Clothing, Shoes & Jewelry* dataset, with 46,700 real customer reviews and precomputed 384-dim (sentence) and 512-dim (CLIP) vector embeddings.
 Full provenance: [`../pipelines/README.md`](../pipelines/README.md).
 
 ---

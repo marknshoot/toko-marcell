@@ -25,6 +25,7 @@ flowchart TD
     subgraph Client["Shopper Experience (Next.js 16 App Router)"]
         UI["Web Storefront (Tailwind v4)"]
         Chat["Copilot Floating Assistant"]
+        Wakeup["Cold-Start Server Wakeup Overlay<br/>(Render Health Ping)"]
         ClientState["Client Storage (localStorage Cart + sessionStorage ID)"]
     end
 
@@ -124,6 +125,7 @@ An autonomous in-store stylist and customer assistant engineered with LangChain 
 
 Designed to operate reliably and fast on cloud free tiers (Render + Neon Postgres + Vercel):
 
+* **Cold-Start Server Wakeup Overlay (`ServerWakeup.js`):** Next.js intercepts initial visits with a debounced (600ms) background health check against `/health`. If Render's free tier backend is spinning up from idle, a sleek blurred modal notifies the user (*"Membangunkan server... Render free tier cold start (~30-50 dtk)"*) with an animated spinner, automatically transitioning to a green success badge (*"Server siap & aktif!"*) for 2.5s once responsive, preventing silent API failures during cold start.
 * **Edge CDN Caching (Next.js ISR):** Product detail routes export `revalidate = 300` (5 minutes) for automatic stale-while-revalidate caching on Vercel's Edge CDN, dropping TTFB to **<40ms**.
 * **Database Offloading:** Frequently queried facets (`/categories`) utilize in-memory TTL caching, reducing Neon PostgreSQL `GROUP BY` database queries from ~60ms to **~2ms**.
 * **HTTP Cache-Control Headers:** Public catalog endpoints emit `public, max-age=60, s-maxage=300, stale-while-revalidate=60`.
@@ -171,10 +173,10 @@ docker compose down       # Graceful shutdown
 
 ### 4. Run Automated Test Suites
 ```bash
-# Frontend component & session tests (13 tests)
+# Frontend component, session & wakeup tests (15 tests across 5 suites)
 cd shop && npm test
 
-# Backend API integration & search tests (40 tests)
+# Backend API integration & search tests
 cd api && python3 -m pytest tests/
 ```
 

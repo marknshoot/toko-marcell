@@ -1,8 +1,10 @@
 # `pipelines/` — dataset → catalog + interactions
 
 This folder turns an **open research dataset** into the real data Toko Marcell runs on:
-the product catalog that FastAPI serves, and the interaction log the recommendation
-model will be trained and evaluated on.
+the product catalog that FastAPI serves, the interaction log for recommendations, and the multimodal image-text dataset for VLM fine-tuning.
+
+* **Catalog Size:** 4,670 deduplicated, verified products with 46,700 real reviews (derived from an initial 6,000 candidate extraction).
+* **Multimodal Fine-Tuning:** 5,378 fashion image-text pairs evaluated across 4 architectures. Champion **Decoupled LR** scored **39.15% Recall@1** (+12.6 pts over baseline) and **0.5592 MRR** (see [`multimodal_benchmark_results.json`](./multimodal_benchmark_results.json) and [`failure_case_analysis.md`](./failure_case_analysis.md)).
 
 Nothing here is a mock. `manual/shop` no longer ships a hard-coded product array.
 
