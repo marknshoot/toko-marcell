@@ -1,0 +1,19 @@
+{
+  "base_model": "openai/clip-vit-base-patch32",
+  "epochs": 1,
+  "batch_size": 8,
+  "learning_rate": 5e-06,
+  "best_val_r1": 0.875,
+  "best_val_loss": 0.24699312448501587,
+  "total_time_seconds": 53.01,
+  "history": [
+    {
+      "epoch": 1,
+      "train_loss": 0.2875,
+      "train_r1": 0.9062,
+      "val_loss": 0.247,
+      "val_r1": 0.875,
+      "time_seconds": 24.6
+    }
+  ]
+}

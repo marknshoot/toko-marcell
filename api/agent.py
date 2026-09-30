@@ -22,7 +22,6 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
 from agent_tools import (
-    get_order_status,
     get_product_details,
     lookup_store_policy,
     search_by_image,
@@ -81,7 +80,7 @@ def _extract_text(content: Any) -> str:
         return "".join(texts)
     return str(content)
 
-# Tool definitions for OpenRouter function calling
+# Tool definitions for Gemini function calling
 TOOLS_SCHEMA = [
     {
         "type": "function",
@@ -204,7 +203,6 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall sty
 - Comparing products (A vs B): Invoke `get_product_details` for both products.
 - Customer ratings & satisfaction: Invoke `search_catalog` or `get_product_details` to inspect official average rating and rating count from catalog data.
 - Shipping, QRIS demo, returns: Invoke `lookup_store_policy`.
-- Order tracking / Status pesanan: Toko Marcell menggunakan simulasi checkout QRIS instan di mana setiap pesanan otomatis terkonfirmasi lunas saat checkout. Jelaskan secara ramah kepada pembeli bahwa pesanan langsung tercatat dan dapat dilihat pada halaman konfirmasi pesanan.
 
 ### STRICT GROUNDING & ANTI-HALLUCINATION RULES:
 1. ZERO PRODUCT INVENTIONS:
@@ -226,8 +224,9 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall sty
    - Payment: Instant QRIS digital simulation (honest disclosure: realistic demo, zero real funds charged).
    - Shipping: Dispatched from South Jakarta (1–2 days Jabodetabek, 3–5 days outer islands). Free shipping for orders >= Rp 300.000!
    - Returns: 7-day size exchange guarantee for unworn items with original tags.
-6. ORDER TRACKING & DEMO RULES:
-   - Di toko demo portofolio ini, checkout bersifat simulasi real-time. Pesanan langsung tervalidasi. Ajak shopper untuk mengecek koleksi busana atau meminta rekomendasi styling lain.
+6. CHECKOUT IS A SIMULATION — NO FULFILLMENT:
+   - Ini adalah toko demo portofolio: checkout QRIS bersifat simulasi dan tidak ada pengiriman, nomor resi, atau pelacakan pesanan nyata.
+   - Jangan pernah menjanjikan status pengiriman atau nomor resi. Jika shopper menanyakan status pesanan, jelaskan dengan ramah bahwa demo ini tidak memiliki pelacakan pesanan, lalu tawarkan bantuan styling atau rekomendasi produk.
 7. STRICT OUT-OF-SCOPE GUARDRAIL & REFUSAL DIRECTIVE:
    - You are EXCLUSIVELY an in-store assistant and personal stylist for Toko Marcell (Jakarta, Indonesia).
    - You MUST STRICTLY REFUSE any off-topic, non-store questions including:
@@ -315,14 +314,6 @@ def _compact_tool_result(name: str, res: Any) -> Any:
             {"title": p.get("title"), "content": p.get("content", "")[:300]}
             for p in res[:3]
         ]
-    if name == "get_order_status" and isinstance(res, dict):
-        return {
-            "token": res.get("token"),
-            "status": res.get("status"),
-            "totalIdr": res.get("totalIdr"),
-            "itemCount": res.get("itemCount"),
-            "items": res.get("items"),
-        }
     return res
 
 
@@ -365,14 +356,6 @@ async def _execute_tool_call(tool_name: str, args: dict[str, Any], db_url: str) 
                 lookup_store_policy,
                 query=args.get("query", ""),
                 limit=args.get("limit", 3),
-                db_url=db_url,
-            )
-            return {"name": tool_name, "result": res}
-
-        elif tool_name == "get_order_status":
-            res = await asyncio.to_thread(
-                get_order_status,
-                token=args.get("token", ""),
                 db_url=db_url,
             )
             return {"name": tool_name, "result": res}

@@ -74,12 +74,20 @@ This literature review synthesizes findings from 5 foundational research papers 
 Based on the literature review, we establish four controlled ablation experiments against the baseline:
 
 ```text
-Baseline (Current):
-  - Model: openai/clip-vit-base-patch32 (Full Fine-Tuning)
-  - Loss: Symmetric InfoNCE with Category-Aware In-Batch Negatives
-  - LR: Uniform 5e-6, AdamW, Cosine Scheduler
-  - Test Score: Recall@1 = 66.0%, MRR = 0.7912
+Baseline (measured on the 539-pair held-out test split):
+  - Model: openai/clip-vit-base-patch32 (zero-shot, frozen)
+  - Recall@1 = 26.53%  Recall@5 = 54.92%  Recall@10 = 70.69%  MRR = 0.4033
+
+Shared adaptation regime for the four experiments:
+  - Loss: Symmetric InfoNCE (Exp 3 replaces it with the SigLIP pairwise sigmoid loss)
+  - Optimisation: AdamW, base LR 5e-6, cosine schedule, AMP FP16, category-aware hard negatives
 ```
+
+> **Post-study reconciliation.** Earlier drafts quoted a ~66% baseline from a small local eval slice.
+> The authoritative 539-pair evaluation measured the true zero-shot baseline at **26.53% Recall@1**,
+> so the absolute targets in the matrix below were optimistic. The measured outcome of each experiment
+> is in [`multimodal_benchmark_results.json`](./multimodal_benchmark_results.json) — the
+> **Decoupled-LR champion reached 39.15% Recall@1 / 0.5592 MRR**.
 
 ### Experiment Matrix
 

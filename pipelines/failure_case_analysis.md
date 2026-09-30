@@ -50,17 +50,27 @@ $$\mathcal{L}_{\text{text}\to\text{image}} = - \frac{1}{N} \sum_{i=1}^N \log \fr
 
 ## 3. Quantitative Benchmark Scoreboard
 
-Evaluated on the held-out test split of **539 verified image-text pairs** (never seen during training):
+Evaluated on the held-out test split of **539 verified image-text pairs** (never seen during training),
+batch size 64, 3 epochs on an NVIDIA Tesla T4 16 GB. This is the **authoritative leaderboard**; its
+machine-readable form is [`multimodal_benchmark_results.json`](./multimodal_benchmark_results.json).
 
-| Evaluation Metric | Zero-Shot Base CLIP (`openai/clip-vit-base-patch32`) | Fine-Tuned Fashion CLIP (`fashion_clip_v1`) | Absolute Delta | Relative Gain |
-|---|:---:|:---:|:---:|:---:|
-| **Text-to-Image Recall@1** | 64.0% | **66.0%** | **+2.0 pp** | +3.1% |
-| **Text-to-Image Recall@5** | 94.0% | **94.0%** | 0.0 pp | Parity |
-| **Text-to-Image Recall@10** | 98.0% | **96.0%** | -2.0 pp | High Top-5 Focus |
-| **Mean Reciprocal Rank (MRR)** | 0.7608 | **0.7912** | **+0.0304** | **+4.0%** |
-| **Inference Latency per Query** | 31.1 ms | **15.8 ms** (Warm Cache) | -15.3 ms | 1.96× Faster |
+| Experiment | Architecture / approach | Recall@1 | Recall@5 | Recall@10 | MRR | Latency (T4) |
+|---|---|:---:|:---:|:---:|:---:|:---:|
+| Zero-shot base | `openai/clip-vit-base-patch32` (frozen) | 26.53% | 54.92% | 70.69% | 0.4033 | 27.80 ms |
+| PEFT LoRA | LoRA (early-stopped, r=16, α=32 on `q_proj, v_proj`) | 33.40% | 71.61% | 83.49% | 0.5038 | 15.50 ms |
+| SigLIP | Pairwise sigmoid loss (learned temperature/bias) | 35.25% | 71.43% | 82.19% | 0.5091 | 19.38 ms |
+| WiSE-FT | Weight-space ensemble (decoupled LR + zero-shot, α=0.35) | 37.85% | 73.28% | 85.53% | 0.5363 | 9.76 ms |
+| **🏆 Champion — Decoupled LR** | ViT 0–5 frozen · vision 0.2× · text 1.0× · projection 2.0× | **39.15%** | **78.11%** | **87.20%** | **0.5592** | **14.01 ms** |
 
-> **Key Finding:** Fine-tuning substantially sharpens top-1 discrimination (+2.0 pp Recall@1) and ranking quality (+0.0304 MRR). By pulling true positives to rank 1, the model eliminates ambiguous ties in high-precision e-commerce search.
+> **Key finding:** domain adaptation lifts Recall@1 from **26.53% to 39.15%** — **+12.62 points
+> absolute, +47.57% relative** — and MRR from 0.4033 to 0.5592. The counter-intuitive result is that
+> *decoupled learning rates* beat the structurally cleverer alternatives (LoRA, SigLIP), while the
+> weight-space ensemble is the fastest at inference (9.76 ms) and is therefore the better choice when
+> throughput matters more than top-1 precision.
+
+The qualitative cases in §4 come from a separate error-mining pass over individual queries. They
+illustrate *phenomena* that fine-tuning changes (fabric texture, cut geometry, surface sheen); they are
+not a disaggregation of the aggregate numbers above.
 
 ---
 
@@ -106,15 +116,16 @@ To uncover the exact inductive biases altered by domain fine-tuning, we analyzed
 To deploy these research gains into Toko Marcell's production stack without incurring costly GPU compute on every keystroke:
 
 1. **Offline Pre-computation:**
-   All 5,378 active catalog products have their visual embeddings pre-computed into PostgreSQL 16 using `pgvector` (`products.image_embedding vector(512)`), indexed with an **HNSW cosine index** ($M=16, \text{efConstruction}=64$).
+   The catalog's product images have their visual embeddings pre-computed into PostgreSQL 16 using `pgvector` (`products.image_embedding vector(512)`), indexed with an **HNSW cosine index** ($M=16, \text{efConstruction}=64$).
 2. **Online Query Encoding:**
    FastAPI exposes `embed_query_clip_text(query)` via ONNX runtime / PyTorch, taking ~15 ms per search.
-3. **Tri-Modal Reciprocal Rank Fusion (RRF):**
+3. **Tri-Modal Reciprocal Rank Fusion (RRF)** — equal weights over the three rankers, `k=60`,
+   implemented in `manual/api/search.py` (and reused by `agent_tools.search_catalog`):
    ```python
    score(doc) = (
        1.0 / (60 + rank_bm25(doc)) +
        1.0 / (60 + rank_dense_minilm(doc)) +
-       1.2 / (60 + rank_fashion_clip(doc))
+       1.0 / (60 + rank_fashion_clip(doc))
    )
    ```
    This guarantees that exact product codes (e.g. *"501"*, *"874"*) are caught by BM25, broad semantics are caught by MiniLM, and visual styling cues are retrieved by Fine-Tuned CLIP.
@@ -129,7 +140,7 @@ To deploy these research gains into Toko Marcell's production stack without incu
 | PyTorch Training Loop | `manual/pipelines/train_clip.py` | InfoNCE, category hard negative sampling, mixed precision AMP |
 | Comparative Benchmark | `manual/pipelines/eval_multimodal.py` | Zero-shot vs fine-tuned evaluation (Recall@1, 5, 10, MRR, error mining) |
 | Benchmark Output | `manual/pipelines/multimodal_benchmark_results.json` | Machine-readable metrics and top rank migration deltas |
-| Model Weights | `manual/models/fashion_clip/` | Checkpoint safetensors and Hugging Face processor configuration |
+| Model Weights | `manual/models/fashion_clip/` and `manual/pipelines/Best Model/` | Local champion/experiment checkpoints (gitignored — large binaries). The production **text encoder** is exported to ONNX and published at [`Marcell-Kristianto/toko-marcell-clip`](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip), then fetched at runtime by the API |
 
 ---
 *Authored for technical evaluation at PT. Kalbe Farma, Tbk. All benchmarks are reproducible on the Toko Marcell codebase.*

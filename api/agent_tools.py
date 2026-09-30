@@ -1,7 +1,7 @@
 """
 Deterministic Grounding Tools for Toko Marcell AI Copilot.
 
-All tools access authoritative database tables (products, reviews, orders, store_knowledge)
+All tools access authoritative database tables (products, reviews, store_knowledge)
 with zero hallucination, strict price handling (IDR), and robust error handling.
 """
 
@@ -383,57 +383,3 @@ def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -
         }
         for r in rows
     ]
-
-
-def get_order_status(token: str, db_url: str | None = None) -> dict[str, Any]:
-    """Retrieve live order status, total IDR, and purchased items by unique checkout token."""
-    url = db_url or DATABASE_URL
-    clean_token = token.strip().strip("'\"`")
-    with psycopg.connect(url) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, token, total_idr, item_count, status, created_at
-                FROM orders
-                WHERE token = %s OR token ILIKE %s
-                """,
-                (clean_token, f"%{clean_token}%"),
-            )
-            order_row = cur.fetchone()
-            if not order_row:
-                return {
-                    "error": f"Pesanan dengan token '{token}' tidak ditemukan dalam sistem Toko Marcell.",
-                    "found": False,
-                }
-
-            order_id = order_row[0]
-            cur.execute(
-                """
-                SELECT asin, title, qty, unit_price_idr
-                FROM order_items
-                WHERE order_id = %s
-                ORDER BY id ASC
-                """,
-                (order_id,),
-            )
-            item_rows = cur.fetchall()
-            items = [
-                {
-                    "asin": r[0],
-                    "title": r[1],
-                    "qty": r[2],
-                    "unitPriceIdr": r[3],
-                }
-                for r in item_rows
-            ]
-
-            return {
-                "found": True,
-                "orderId": order_id,
-                "token": order_row[1],
-                "totalIdr": order_row[2],
-                "itemCount": order_row[3],
-                "status": order_row[4],
-                "createdAt": order_row[5].isoformat() if order_row[5] else None,
-                "items": items,
-            }

@@ -24,7 +24,7 @@ def api_request(method, path, data=None):
 
 
 def test_copilot_tools_registry_contains_all_tools():
-    """Verify copilot tools schema endpoint registers all 5 active tools."""
+    """Verify copilot tools schema endpoint registers all 4 active tools."""
     status, body = api_request("GET", "/copilot/tools")
     assert status == 200
     assert "tools" in body
@@ -34,7 +34,6 @@ def test_copilot_tools_registry_contains_all_tools():
         "get_product_details",
         "search_by_image",
         "lookup_store_policy",
-        "get_order_status",
     }
     assert names == expected
 

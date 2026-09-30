@@ -13,7 +13,6 @@ const QUICK_PROMPTS = [
   { label: "📏 Cek ukuran (TB 170cm, BB 65kg)", text: "Tinggi badan 170 cm berat 65 kg, rekomendasi ukuran kemeja atau kaos yang pas?" },
   { label: "👖 Beda Levis 501 vs 511", text: "Apa perbedaan potongan Levis 501 vs 511?" },
   { label: "🚚 Info pengiriman & QRIS", text: "Bagaimana kebijakan pengiriman dan pembayaran QRIS di Toko Marcell?" },
-  { label: "📦 Lacak status pesanan", text: "Saya mau cek status pesanan dengan token tk_" },
 ];
 
 const MAX_IMAGE_SIZE_BYTES = 5 * 1024 * 1024;

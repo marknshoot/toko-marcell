@@ -1302,7 +1302,7 @@ class CopilotChatIn(BaseModel):
 async def copilot_chat(payload: CopilotChatIn):
     """End-to-End Multimodal AI Shopping Copilot (Admin Toko Marcell).
 
-    Covers the 8 core e-commerce use cases:
+    Covers the 7 core e-commerce use cases:
     1. Visual Search & Style Matching
     2. Sizing & Fit Consultation (TB/BB + Brand Deviations)
     3. Outfit Builder under Budget (Top + Bottom + Shoes <= Budget)
@@ -1310,7 +1310,9 @@ async def copilot_chat(payload: CopilotChatIn):
     5. Head-to-Head Product Comparison (A vs B)
     6. Aspect-Based Social Proof & Review Highlights
     7. Store Operations, Shipping & QRIS Demo Rules
-    8. Live Order Status Lookup (token-backed)
+
+    Checkout is a portfolio demo simulation: there is no fulfillment, courier or
+    order tracking, so deliberately no order-status tool is exposed to the model.
     """
     from agent import chat_copilot
 

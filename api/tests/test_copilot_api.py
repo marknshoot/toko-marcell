@@ -4,7 +4,7 @@ Test Suite for Toko Marcell AI Copilot API (/copilot/chat & /copilot/tools).
 Covers:
 - Tool Registry Discovery
 - Node 0 Guardrail & Greeting Fast-Path
-- All 8 Core Shopping & Operations Use Cases (UC-1 through UC-8)
+- All 7 Core Shopping & Operations Use Cases (UC-1 through UC-7)
 - Anti-Hallucination & Off-Topic Deflection
 - Strict Currency (Rp) & Pricing Verification
 """
@@ -47,7 +47,7 @@ def test_copilot_tools_schema():
     assert "get_product_details" in tool_names
     assert "search_by_image" in tool_names
     assert "lookup_store_policy" in tool_names
-    assert "get_order_status" in tool_names
+    assert "get_order_status" not in tool_names  # no order tool: checkout is a simulation
     assert "get_product_reviews" not in tool_names
 
 
@@ -228,39 +228,3 @@ def test_copilot_uc7_store_policy_qris():
     assert "reply" in body
     reply = body["reply"].lower()
     assert any(term in reply for term in ["jakarta", "qris", "7 hari", "tukar", "garansi"])
-
-
-# ── 10. UC-8: Live Order Status Lookup (Token Backed) ─────────────────────────
-
-def test_copilot_uc8_order_status_lookup():
-    # 1. Create a genuine order via checkout endpoint
-    # Find a valid product ASIN first
-    st_prod, prods = api_request("GET", "/products?limit=1")
-    assert st_prod == 200
-    asin = prods["items"][0]["asin"]
-
-    checkout_payload = {
-        "session_id": "test_sess_order_checkout_01",
-        "items": [{"asin": asin, "qty": 1}],
-    }
-    st_order, order_data = api_request("POST", "/checkout/confirm", checkout_payload)
-    assert st_order == 201
-    token = order_data["token"]
-    assert token.startswith("tk_")
-
-    # 2. Ask copilot to lookup order using this token
-    chat_payload = {
-        "session_id": "test_sess_order_chat",
-        "messages": [
-            {
-                "role": "user",
-                "content": f"Min tolong cek status pesanan saya dong, tokennya {token}",
-            }
-        ],
-    }
-    status, body = api_request("POST", "/copilot/chat", chat_payload)
-    assert status == 200
-    assert "reply" in body
-    reply = body["reply"].lower()
-    assert "paid" in reply or "dibayar" in reply or token.lower() in reply
-    assert any(tc["name"] == "get_order_status" for tc in body.get("tool_calls", []))

@@ -5,8 +5,8 @@ Build Item-to-Item Recommendations & Popularity Baseline (M8 & M9).
 Combines:
   1. User co-occurrence from 3.36M interactions (cosine similarity of user sets)
   2. Amazon metadata co-buy (`also_buy`) and co-view (`also_view`) graphs
-  3. Semantic embedding nearest-neighbor backfill (via pgvector) for cold items
-  4. Popularity rankings (global and per-department)
+  3. Bayesian-smoothed popularity rankings (global and per-department)
+  4. Category/department popularity backfill for items with too few neighbours
 
 Outputs:
   - data/processed/item_recs.json: {asin: [rec_asin1, rec_asin2, ...]}

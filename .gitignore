@@ -20,7 +20,26 @@ __pycache__/
 plan/
 
 # fine-tuned model checkpoints and weights
-models/
+#
+# Large binaries stay local (and the production ONNX text encoder lives on Hugging Face Hub).
+# Only small, reviewable artifacts are published: model cards, adapter configs, experiment
+# summaries and training histories.
+models/*
+!models/experiments/
+models/experiments/*
+!models/experiments/README.md
+!models/experiments/lora/
+!models/experiments/siglip/
+models/experiments/lora/*
+models/experiments/siglip/*
+!models/experiments/lora/README.md
+!models/experiments/lora/adapter_config.json
+!models/experiments/lora/experiment_summary.json
+!models/experiments/siglip/README.md
+!models/experiments/siglip/experiment_summary.json
+!models/fashion_clip/
+models/fashion_clip/*
+!models/fashion_clip/training_history.json
 pipelines/Best Model/
 deploy/
 *.onnx
