@@ -28,8 +28,42 @@
 
 > **Note on the live API:** the backend runs on Render's free tier, so it sleeps after 15 minutes of
 > inactivity and takes 30–50 s to wake. The storefront handles this explicitly with a health-check
-> overlay (see [Cold-start UX](#%EF%B8%8F-cold-start-ux-turning-a-free-tier-constraint-into-a-feature))
+> overlay (see [Cold-start UX](#-cold-start-ux-turning-a-free-tier-constraint-into-a-feature))
 > instead of silently failing. The catalog itself is served from Vercel's edge cache and stays fast.
+
+---
+
+## TL;DR
+
+**Toko Marcell is a working e-commerce engine, not a UI mock** — a Next.js storefront, a FastAPI
+backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed live.
+
+**The four things worth inspecting** (each backed by a committed artifact):
+
+| # | What | Result | Where |
+|---|---|---|---|
+| 1 | **VLM fine-tuning study** — 5 ablations, 5,378 image–text pairs, 539 held-out test | champion lifts text→image **Recall@1 26.53% → 39.15%** (+47.57% rel) | [leaderboard](./pipelines/multimodal_benchmark_results.json) |
+| 2 | **Hybrid retrieval** — BM25 + MiniLM (384-d) + CLIP (512-d) → RRF (k=60) → ONNX cross-encoder | exact SKUs *and* semantic/visual queries; `?mode=` switchable | [API internals](./api/README.md#search--how-it-ranks) |
+| 3 | **Grounded agentic copilot** — LangChain + Gemini, 4 bound tools, policy RAG | answers only from tool evidence; refuses off-topic and injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
+| 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe | [recommendation engine](./README.md#-recommendation-engine) |
+
+**Stack:** Next.js 16 · React 19 · FastAPI · PostgreSQL 16 + pgvector · PyTorch/CLIP · LangChain +
+Gemini · Docker · Vercel + Render + Neon.
+
+**Try it in ~30 seconds**
+
+```bash
+git clone https://github.com/marknshoot/toko-marcell.git && cd toko-marcell/manual
+./run-local.sh      # full stack → http://localhost:3000 (everything works without a Gemini key)
+```
+
+Or open the live [storefront](https://toko-marcell.vercel.app) / [API docs](https://toko-marcell-api.onrender.com/docs).
+
+**Scope, honestly:** the storefront, QRIS checkout, couriers and order flow are a **demo simulation** —
+they charge nothing and ship nothing. What is real: the catalog, the vector search, the ML study, the
+recommendations and the agent's grounding. Every headline number is tagged in
+[`BENCHMARKS.md`](./pipelines/BENCHMARKS.md) as committed-artifact / locally-reproducible /
+author-measured. Open gaps are in [Honest limitations](#-honest-limitations--what-is-not-built).
 
 ---
 
@@ -55,6 +89,7 @@ Nothing is invented. Where something is simplified or unfinished, it is written 
 
 ## Table of contents
 
+- [TL;DR](#tldr)
 - [System architecture](#-system-architecture)
 - [Research pillar 1 — the VLM contrastive fine-tuning study](#-research-pillar-1--the-vlm-contrastive-fine-tuning-study)
 - [Research pillar 2 — tri-modal hybrid retrieval](#-research-pillar-2--tri-modal-hybrid-retrieval)
