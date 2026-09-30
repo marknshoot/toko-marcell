@@ -51,6 +51,16 @@ _load_env()
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
 
+# OpenRouter is preferred when a key is present: its free text-model tier is far
+# more generous than the Gemini free tier, and the API is OpenAI-compatible.
+DEFAULT_OPENROUTER_MODEL = "openrouter/free"
+# `openrouter/free` already auto-routes across OpenRouter's free pool, so no
+# extra fallbacks are needed. Set LLM_FALLBACK_MODELS to a comma-separated list
+# to pin specific fallbacks instead.
+DEFAULT_OPENROUTER_FALLBACKS = ""
+OPENROUTER_BASE_URL = os.environ.get("LLM_BASE_URL") or "https://openrouter.ai/api/v1"
+_LLM_LOGGED = False
+
 def _get_gemini_key() -> str:
     key = (
         os.environ.get("GEMINI_API_KEY")
@@ -66,6 +76,67 @@ def _get_gemini_key() -> str:
 
 def _get_gemini_model() -> str:
     return os.environ.get("GEMINI_MODEL") or GEMINI_MODEL
+
+def _get_openrouter_key() -> str | None:
+    return os.environ.get("OPENROUTER_API_KEY") or None
+
+def _get_llm_model() -> str:
+    return os.environ.get("LLM_MODEL") or DEFAULT_OPENROUTER_MODEL
+
+def _get_llm_models() -> list[str]:
+    """Ordered OpenRouter routing list: primary first, then free fallbacks.
+
+    Free models periodically return 429/503 (upstream overload); OpenRouter
+    walks this list until one accepts the request.
+    """
+    primary = _get_llm_model()
+    raw = os.environ.get("LLM_FALLBACK_MODELS", DEFAULT_OPENROUTER_FALLBACKS)
+    fallbacks = [m.strip() for m in raw.split(",") if m.strip()]
+    return [primary, *[m for m in fallbacks if m != primary]]
+
+def _get_llm(temperature: float):
+    """Build the chat model for one turn.
+
+    Prefers OpenRouter (OpenAI-compatible) when OPENROUTER_API_KEY is set,
+    otherwise falls back to Google Gemini. Both are used through LangChain so
+    ``.bind_tools()`` and message handling stay identical.
+    """
+    or_key = _get_openrouter_key()
+    global _LLM_LOGGED
+    if not _LLM_LOGGED:
+        _LLM_LOGGED = True
+        # Printed once per process: env vars exported in the shell override .env,
+        # so this line is the only reliable way to see the model actually in use.
+        if or_key:
+            print(f"[LLM] provider=openrouter models={_get_llm_models()} base_url={OPENROUTER_BASE_URL}", flush=True)
+        else:
+            print(f"[LLM] provider=gemini model={_get_gemini_model()}", flush=True)
+    if or_key:
+        try:
+            from langchain_openai import ChatOpenAI
+        except ImportError:
+            raise HTTPException(
+                status_code=503,
+                detail="Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti.",
+            )
+        return ChatOpenAI(
+            model=_get_llm_model(),
+            api_key=or_key,
+            base_url=OPENROUTER_BASE_URL,
+            temperature=temperature,
+            extra_body={"models": _get_llm_models()},
+            default_headers={
+                "HTTP-Referer": os.environ.get(
+                    "LLM_SITE_URL", "https://toko-marcell.vercel.app"
+                ),
+                "X-Title": "Toko Marcell AI Copilot",
+            },
+        )
+    return ChatGoogleGenerativeAI(
+        model=_get_gemini_model(),
+        api_key=_get_gemini_key(),
+        temperature=temperature,
+    )
 
 def _extract_text(content: Any) -> str:
     if isinstance(content, str):
@@ -373,9 +444,12 @@ async def chat_copilot(
     image_url: str | None = None,
     db_url: str | None = None,
 ) -> dict[str, Any]:
-    """Run full Toko Marcell AI Copilot turn using Google Gemini (langchain-google-genai):
+    """Run one full Toko Marcell AI Copilot turn.
 
-    Node 1: Gemini Planner, Guardrail & Tool Decision Node
+    LLM provider: OpenRouter (OpenAI-compatible via LangChain) when
+    OPENROUTER_API_KEY is set, otherwise Google Gemini.
+
+    Node 1: Planner, Guardrail & Tool Decision Node
     Node 2: Tri-Modal Concurrent Tool Execution (asyncio.gather)
     Node 3: Grounded Synthesis with Admin Toko Marcell Persona
     """
@@ -392,8 +466,6 @@ async def chat_copilot(
         }
 
     latest_msg = messages[-1].get("content", "")
-    gemini_key = _get_gemini_key()
-    gemini_model = _get_gemini_model()
 
     browsing_ctx = _get_session_browsing_context(session_id, url)
     system_content = ADMIN_SYSTEM_PROMPT
@@ -414,16 +486,12 @@ async def chat_copilot(
     executed_tools_results = []
 
     try:
-        planner_llm = ChatGoogleGenerativeAI(
-            model=gemini_model,
-            api_key=gemini_key,
-            temperature=0.1,
-        ).bind_tools(TOOLS_SCHEMA)
+        planner_llm = _get_llm(0.1).bind_tools(TOOLS_SCHEMA)
 
         ai_msg = await asyncio.to_thread(planner_llm.invoke, convo_history)
         tool_calls = ai_msg.tool_calls or []
     except Exception as e:
-        print(f"[ERROR] Gemini Planner: {e}", flush=True)
+        print(f"[ERROR] Planner LLM: {e}", flush=True)
         raise HTTPException(
             status_code=502,
             detail="Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!",
@@ -458,15 +526,11 @@ async def chat_copilot(
         ]
 
         try:
-            syn_llm = ChatGoogleGenerativeAI(
-                model=gemini_model,
-                api_key=gemini_key,
-                temperature=0.3,
-            )
+            syn_llm = _get_llm(0.3)
             syn_res = await asyncio.to_thread(syn_llm.invoke, syn_prompt)
             final_reply = _extract_text(syn_res.content)
         except Exception as e:
-            print(f"[ERROR] Gemini Synthesis: {e}", flush=True)
+            print(f"[ERROR] Synthesis LLM: {e}", flush=True)
             raise HTTPException(
                 status_code=502,
                 detail="Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!",

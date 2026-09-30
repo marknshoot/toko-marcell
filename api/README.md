@@ -57,8 +57,12 @@ life of the process and would otherwise serve a stale catalog.
 | Variable | Required | Default | Purpose |
 |---|:---:|---|---|
 | `DATABASE_URL` | ✅ | — | Postgres connection string (Neon in production, `postgresql://toko:toko@db:5432/toko` in compose) |
-| `GEMINI_API_KEY` | for copilot | — | Google AI Studio key; without it `/copilot/chat` returns `503`, everything else works |
-| `GEMINI_MODEL` | | `gemini-3.5-flash-lite` (code) / `gemini-2.5-flash` (compose) | Any Gemini chat model |
+| `OPENROUTER_API_KEY` | for copilot | — | **Preferred provider.** When set, the copilot uses OpenRouter; without any LLM key `/copilot/chat` returns `503`, everything else works |
+| `LLM_MODEL` | | `openrouter/free` | Any OpenRouter model id. `openrouter/free` auto-routes across the free pool and handles tool-calling + the guardrail well (verified end-to-end). To pin one: `inclusionai/ling-3.0-flash-sante:free`, or `nvidia/nemotron-3-super-120b-a12b:free` (may emit tool-call JSON as the reply) |
+| `LLM_BASE_URL` | | `https://openrouter.ai/api/v1` | OpenAI-compatible endpoint |
+| `LLM_FALLBACK_MODELS` | | *(empty)* | Optional comma-separated fallbacks passed via OpenRouter `models`; tried when the primary returns 429/503. Unnecessary with `openrouter/free` |
+| `GEMINI_API_KEY` | fallback | — | Google AI Studio key; used **only** when `OPENROUTER_API_KEY` is empty |
+| `GEMINI_MODEL` | | `gemini-3.5-flash-lite` (code) / `gemini-2.5-flash` (compose) | Any Gemini chat model (fallback path) |
 | `CORS_ORIGINS` | | `http://localhost:3000,https://toko-marcell.vercel.app` | Comma-separated allowlist; `*` opens it up |
 | `HF_MODEL_REPO` | | `Marcell-Kristianto/toko-marcell-clip` | HF repo for the champion ONNX text encoder |
 | `CLIP_MODEL_DIR` / `CLIP_MODEL_PATH` | | auto-detected | Optional local paths for the champion CLIP **PyTorch** weights |
@@ -258,9 +262,9 @@ contains **46,700** of them. The copilot can reason over them for aspect-level s
 The copilot is an **agentic RAG loop**, not a chat completion with the catalog pasted in.
 
 ```text
-Node 1  Planner / guardrail   one Gemini call with the tool schema bound → 0..n tool calls
+Node 1  Planner / guardrail   one LLM call with the tool schema bound → 0..n tool calls
 Node 2  Tool fan-out          asyncio.gather over deterministic DB tools
-Node 3  Grounded synthesis    second Gemini call that may only use tool evidence
+Node 3  Grounded synthesis    second LLM call that may only use tool evidence
 ```
 
 **Bound tools (4):**
@@ -440,7 +444,7 @@ an `embedding` column (search is disabled rather than crashing).
 # Pure unit tests — no database needed (also what CI runs)
 python3 -m pytest tests/test_search_unit.py
 
-# Full API suite — needs a running Postgres (docker compose up), the champion vision ONNX for image tests, and a Gemini key for the copilot tests
+# Full API suite — needs a running Postgres (docker compose up), the champion vision ONNX for image tests, and an LLM key (OpenRouter or Gemini) for the copilot tests
 python3 -m pytest tests/
 ```
 
@@ -459,7 +463,7 @@ python3 -m pytest tests/
 | `test_agent_tools_real.py` | 4 | real-tool grounding against the live DB |
 
 CI (`.github/workflows/ci.yml`) runs the offline-safe subset (`test_search_unit.py` +
-`pipelines/tests/test_pipeline_math.py`) because hosted runners have no Postgres or Gemini key.
+`pipelines/tests/test_pipeline_math.py`) because hosted runners have no Postgres or LLM key.
 
 ---
 
