@@ -893,8 +893,10 @@ This section exists because a portfolio that hides its edges is less useful than
   encoder is **fp16** (~127 MB, identical embeddings) — see
   [`pipelines/BENCHMARKS.md`](./pipelines/BENCHMARKS.md). Even so, loading every model at once
   (vision + text + MiniLM + reranker) can approach the 512 MB Render free-tier budget; a ≥1 GB plan
-  removes the cliff. If no encoder is present the endpoint returns **`503`** by design (a zero-shot
-  encoder would occupy a different space). Text search and the copilot are unaffected.
+  removes the cliff. Because `mode=trimodal` is the one request that loads **both** the text ONNX and
+  MiniLM, it is **disabled by default** on the deployment (`ENABLE_TRIMODAL`) and returns `400` when
+  off. If no encoder is present the endpoint returns **`503`** by design (a zero-shot encoder would
+  occupy a different space). Text search and the copilot are unaffected.
 - **Live API sleeps.** Render free tier cold-starts in 30–50 s; the UI handles it, but the first
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA

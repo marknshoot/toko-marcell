@@ -29,6 +29,7 @@ services:
       CORS_ORIGINS: http://localhost:3000,http://127.0.0.1:3000,http://localhost:8001
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
+      ENABLE_TRIMODAL: "true"
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       HF_HUB_CACHE: /tmp/hf_cache
     env_file:

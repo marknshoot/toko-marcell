@@ -16,3 +16,5 @@ services:
         sync: false
       - key: GEMINI_API_KEY
         sync: false
+      - key: ENABLE_TRIMODAL
+        value: "false"

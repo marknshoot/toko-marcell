@@ -752,6 +752,16 @@ def search_products(
     Fuses lexical term matching (BM25), dense semantic embeddings (all-MiniLM-L6-v2),
     and cross-modal visual embeddings (CLIP text-to-image) using Reciprocal Rank Fusion (RRF, k=60).
     """
+    if mode == "trimodal" and os.environ.get("ENABLE_TRIMODAL", "false").strip().lower() not in ("1", "true", "yes"):
+        # Loads BOTH the fastembed MiniLM model and the champion ONNX text encoder, which can
+        # exceed a 512 MB free tier. Off by default so a single request cannot crash the service.
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                "mode=trimodal is disabled on this deployment to protect memory; "
+                "set ENABLE_TRIMODAL=true (and give the instance >=1 GB) to enable it."
+            ),
+        )
     started = time.perf_counter()
 
     clean_tokens = tokenize(q)

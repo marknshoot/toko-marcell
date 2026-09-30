@@ -65,6 +65,7 @@ life of the process and would otherwise serve a stale catalog.
 | `CLIP_VISION_ONNX_PATH` | | auto-detected | Explicit path to the champion ONNX **vision** encoder |
 | `CLIP_VISION_ONNX_PREFER` | | `int8` | Prefer `int8` or `fp32` ONNX vision encoder |
 | `CLIP_TEXT_ONNX_PATH` | | auto-detected | Explicit path to the champion ONNX **text** encoder (fp16 preferred) |
+| `ENABLE_TRIMODAL` | | `false` (set `true` in local Compose) | Enable `mode=trimodal`; it loads both MiniLM and the text ONNX, so it needs ≥1 GB RAM |
 | `FASTEMBED_CACHE_DIR` | | `/tmp/fastembed_cache` | Cache for MiniLM/CLIP fastembed models |
 | `HF_HUB_CACHE` | | `/tmp/hf_cache` | Cache for the ONNX cross-encoder |
 
@@ -155,6 +156,9 @@ other rankers — which is exactly why the baseline is measured first.
 - 512-d CLIP embeddings → `products.image_embedding` (HNSW cosine).
 - `/search?mode=` switches ranker: `bm25`, `vector`, `hybrid` (default: BM25+vector), `trimodal`
   (BM25+dense+CLIP-text). All fused lists go through **Reciprocal Rank Fusion** with `k=60`.
+  `trimodal` is the one mode that loads **both** the fastembed MiniLM model and the champion ONNX
+  text encoder, so it is **off by default** (`ENABLE_TRIMODAL=false`) and returns `400` when disabled —
+  a single such request can exceed a 512 MB instance. Local Compose sets it to `true`.
 
 $$
 \text{RRF}(d) = \sum_{m \in M} \frac{1}{60 + r_m(d)}
