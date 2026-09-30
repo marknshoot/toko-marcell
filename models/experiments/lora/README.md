@@ -42,8 +42,8 @@ a real, loadable artifact — but it is **not** the study's winning model. Read
 | **Base model** | `openai/clip-vit-base-patch32` |
 | **Library** | `peft` 0.21.0 + `transformers` |
 | **Adapter config** | `r=16`, `lora_alpha=32`, `lora_dropout=0.1`, `bias="none"`, `inference_mode=true` |
-| **Target modules** | `q_proj`, `v_proj` (attention projections, both towers + projection heads via PEFT) |
-| **Trainable parameters** | ~1.2% of the base model (LoRA matrices only) |
+| **Target modules** | `q_proj`, `v_proj` attention projections in **both** the vision and text towers (96 LoRA tensors) |
+| **Trainable parameters** | **983,040** (~0.65% of the ~151 M-parameter base), measured from `adapter_model.safetensors` |
 | **Language** | English (fashion catalog captions) |
 | **Licence** | Research / non-commercial (inherits the Amazon Reviews 2018 dataset terms) |
 

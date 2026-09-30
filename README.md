@@ -265,7 +265,7 @@ embedding half exists to close. That is why the baseline was measured *first*.
 'levis 501'            → exact model numbers, four distinct variants
 'waterproof jacket'    → raincoats and watertight shells
 'shoes'  == 'shoe'     → plural folding makes the two score identically
-'zzzz'                 → 0 results, ~0.05 ms
+'zzzz'                 → 0 results (no matching postings, returns immediately)
 ```
 
 **Duplicate-title suppression.** 842 of the 6,000 built products are variants sharing a title with a

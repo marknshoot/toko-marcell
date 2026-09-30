@@ -4,16 +4,18 @@ This folder packages the multimodal contrastive fine-tuning study so it can be r
 **Kaggle's free GPU tier (NVIDIA Tesla T4 16 GB or P100 16 GB)** from the command line, without
 owning a GPU.
 
-The study trains and evaluates four CLIP adaptation strategies against a zero-shot baseline and
-produces the `experiment_summary` files and the [leaderboard](../multimodal_benchmark_results.json)
-used in the top-level README:
+The study evaluates four CLIP adaptation strategies against a frozen zero-shot baseline and produces
+the `experiment_summary` files and the [leaderboard](../multimodal_benchmark_results.json) used in
+the top-level README:
 
-- **Baseline / full fine-tune** — symmetric InfoNCE, uniform learning rate
 - **LoRA** — PEFT adapters on `q_proj`, `v_proj` (r=16, α=32, dropout 0.1)
 - **Decoupled LR** — ViT layers 0–5 frozen, asymmetric LRs per module (the champion)
 - **SigLIP** — pairwise sigmoid loss replacing the batch softmax
 - **WiSE-FT** — weight-space ensemble of the fine-tuned and zero-shot weights (α = 0.35), plus
   test-time prompt ensembling
+
+(`experiments_clip.py` also exposes a `--exp baseline` flag for a plain full fine-tune, but the
+committed leaderboard uses the frozen zero-shot model as the reference row.)
 
 ---
 

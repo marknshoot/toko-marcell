@@ -76,38 +76,47 @@ not a disaggregation of the aggregate numbers above.
 
 ## 4. Deep-Dive Qualitative Failure Case Analysis
 
-To uncover the exact inductive biases altered by domain fine-tuning, we analyzed test queries that experienced significant rank migrations.
+To surface the inductive biases that domain fine-tuning changes, we reviewed queries whose top-ranked
+results shifted after adaptation. Cases 1–2 use real catalog items (ASINs verified against
+`data/processed/products.jsonl`); Cases 3–4 are stated as **general failure modes**, not tied to a
+specific product. The exact rank numbers from the original local error-mining pass are
+**illustrative** and are not reproduced by the committed 539-pair leaderboard in
+[`multimodal_benchmark_results.json`](./multimodal_benchmark_results.json), so they are described
+qualitatively here.
 
 ### Case 1: Specificity on Distressed & Frayed Denim
-- **Test Item:** *Levi's Men's 501 Original Distressed Straight Leg Jean* (`ASIN: B000YXC2LI`)
+- **Test Item:** *Levi's Men's 501 Original-Fit Jean* (`ASIN: B000YXC2LI`, present in the catalog)
 - **Query:** `"distressed raw blue denim with ripped knee accents and classic button fly straight leg"`
-- **Base CLIP Behavior (Rank #42):**
-  Base CLIP assigned higher affinity to dark-wash, pristine dress chinos and clean denim because the general token *"denim"* dominated the visual embedding, ignoring the sub-token modifier *"distressed/ripped"*.
-- **Fine-Tuned Model Behavior (Rank #1):**
-  Fine-tuning with category-aware jeans batches forced the vision encoder to attend to high-frequency edge textures (frayed cotton threads and localized wash contrasts), moving the true positive directly to Rank #1.
+- **Base CLIP behaviour (ranked well below the top):**
+  Base CLIP assigned higher affinity to dark-wash, pristine dress chinos and clean denim because the
+  general token *"denim"* dominated the visual embedding while the sub-token modifier *"distressed/ripped"*
+  was largely ignored.
+- **Fine-tuned behaviour (moved into the top ranks):**
+  Category-aware jeans batches pushed the vision encoder toward high-frequency edge textures (frayed
+  cotton threads and localised wash contrasts), lifting the true positive sharply.
 
 ### Case 2: Structural Cut & Silhouette Geometry
-- **Test Item:** *Dickies Men's Original 874 Work Pant* (`ASIN: B00028AVDG`)
+- **Test Item:** *Dickies Men's Original 874 Work Pant* (`ASIN: B00028AVDG`, present in the catalog)
 - **Query:** `"heavyweight 8.5 oz twill flat-front loose straight rise utility work pant"`
-- **Base CLIP Behavior (Rank #18):**
-  Base CLIP confused the structured 874 silhouette with slim-tapered modern dress slacks, as both shared similar neutral tan/khaki color palettes.
-- **Fine-Tuned Model Behavior (Rank #2):**
-  The domain-adapted model learned that *"8.5 oz twill"* correlates with stiff, non-tapered geometric drape lines, successfully elevating the true product into the top 2.
+- **Base CLIP behaviour (confused with slim slacks sharing its khaki palette):**
+  Base CLIP confused the structured 874 silhouette with slim-tapered modern dress slacks, as both share
+  a neutral tan/khaki colour profile.
+- **Fine-tuned behaviour (elevated into the top ranks):**
+  The domain-adapted model associated *"8.5 oz twill"* with stiff, non-tapered geometric drape lines.
 
-### Case 3: Outerwear Surface Sheen & Materiality
-- **Test Item:** *Columbia Men's Watertight II Packable Rain Jacket* (`ASIN: B0058YG92Q`)
+### Case 3: Outerwear Surface Sheen & Materiality (general failure mode)
 - **Query:** `"waterproof hooded packable rain jacket nylon shell"`
-- **Base CLIP Behavior (Rank #29):**
-  Retrieved cotton fleece hoodies and softshell casual jackets that matched the navy color profile, failing to distinguish between matte cotton absorption and specular nylon reflection.
-- **Fine-Tuned Model Behavior (Rank #3):**
-  By pairing textile composition feature bullets with product photography, the model aligned specular highlight reflections with the semantic descriptor *"waterproof nylon shell"*.
+- **Observed behaviour:** retrieval returned cotton fleece hoodies and softshell casual jackets that
+  matched the query's navy colour profile, failing to separate matte cotton absorption from specular
+  nylon reflection. Colour tends to dominate sheen unless the caption explicitly carries
+  textile-composition bullets.
 
-### Case 4: Remaining Failure Mode (Sub-brand Logo Invariance)
-- **Test Item:** *Champion Heritage Embroidered Logo Crewneck* (`ASIN: B01N4A9E21`)
-- **Observed Limitation (Rank #11):**
-  When multiple gray heather sweatshirts exist in the candidate pool, both Base CLIP and Fine-Tuned CLIP struggle to discriminate between a micro-embroidered *Champion "C"* patch on the cuff versus a clean unbranded sweatshirt.
-- **Mitigation / Next Iteration:**
-  Incorporate high-resolution patch cropping (e.g., RoI Align or multi-crop augmentations) during training to elevate sensitivity to localized logos and embroidery.
+### Case 4: Remaining Failure Mode — Sub-brand Logo Invariance (general failure mode)
+- **Observed limitation:** when several grey-heather sweatshirts are in the candidate pool, both base and
+  fine-tuned CLIP struggle to discriminate a small embroidered brand logo from an otherwise identical
+  unbranded garment. The failure is visual and local: the logo occupies a tiny fraction of the image.
+- **Mitigation / next iteration:** high-resolution patch cropping (e.g. RoI Align or multi-crop
+  augmentation) during training, to raise sensitivity to localised logos and embroidery.
 
 ---
 

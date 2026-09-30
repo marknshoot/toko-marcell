@@ -47,8 +47,8 @@ This literature review synthesizes findings from 5 foundational research papers 
   Freezes the pre-trained weights $W_0 \in \mathbb{R}^{d \times k}$ and decomposes updates into low-rank matrices:
   $$W = W_0 + \Delta W = W_0 + \frac{\alpha}{r} (B \cdot A)$$
   where $B \in \mathbb{R}^{d \times r}$, $A \in \mathbb{R}^{r \times k}$ with rank $r \ll \min(d, k)$ (e.g. $r=16$).
-  - Target modules: Attention projections (`q_proj`, `v_proj`) in both vision and text encoders, plus the linear projection heads.
-  - **Result:** Only ~1.8M trainable parameters (~1.2% of the model). General visual competence is perfectly preserved while the projection space aligns to fashion vocabulary.
+  - Target modules: attention projections (`q_proj`, `v_proj`) in both the vision and text encoders (no projection heads are adapted).
+  - **Result:** 983,040 trainable parameters (~0.65% of the ~151 M-parameter base, measured from `adapter_model.safetensors`). General visual competence is preserved while the shared embedding space aligns to fashion vocabulary.
 
 ### 2.4 Asymmetric Learning Rates & Visual Layer Freezing (WiSE-FT)
 - **Reference:** Wortsman, M., Ilharco, G., Gadre, S. Y., et al. (2022). *"Robust Fine-Tuning of Zero-Shot Models (WiSE-FT)."* *CVPR*, 2022.
