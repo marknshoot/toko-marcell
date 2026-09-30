@@ -301,15 +301,16 @@ def embed_query(query: str) -> list[float] | None:
 
 _CHAMPION_CLIP_MODEL = None
 _CHAMPION_CLIP_PROCESSOR = None
+_CHAMPION_CLIP_FAILED = False
 _CHAMPION_CLIP_LOCK = threading.Lock()
 
 
 def get_champion_clip():
     """Load local fine-tuned Champion CLIP model if present."""
-    global _CHAMPION_CLIP_MODEL, _CHAMPION_CLIP_PROCESSOR
-    if _CHAMPION_CLIP_MODEL is None:
+    global _CHAMPION_CLIP_MODEL, _CHAMPION_CLIP_PROCESSOR, _CHAMPION_CLIP_FAILED
+    if _CHAMPION_CLIP_MODEL is None and not _CHAMPION_CLIP_FAILED:
         with _CHAMPION_CLIP_LOCK:
-            if _CHAMPION_CLIP_MODEL is None:
+            if _CHAMPION_CLIP_MODEL is None and not _CHAMPION_CLIP_FAILED:
                 here = os.path.dirname(os.path.abspath(__file__))
                 candidates = [
                     os.environ.get("CLIP_MODEL_DIR"),
@@ -333,47 +334,166 @@ def get_champion_clip():
                             break
                         except Exception as e:
                             print(f"[search] Could not load champion CLIP from {candidate}: {e}")
+                if _CHAMPION_CLIP_MODEL is None:
+                    _CHAMPION_CLIP_FAILED = True
     return _CHAMPION_CLIP_MODEL, _CHAMPION_CLIP_PROCESSOR
 
 
-_IMAGE_EMBED_MODEL = None
-_IMAGE_EMBED_LOCK = threading.Lock()
+def vision_encoder_ready() -> bool:
+    """True if a fine-tuned champion vision encoder is available (ONNX or torch).
+
+    Image search has **no** zero-shot fallback on purpose: the stored
+    `products.image_embedding` vectors come from the fine-tuned champion, so mixing
+    in a different encoder's vectors would silently return wrong results.
+    """
+    session, _ = get_onnx_champion_vision()
+    if session is not None:
+        return True
+    model, _ = get_champion_clip()
+    return model is not None
 
 
-def get_image_embed_model():
-    """Load the fastembed CLIP image model lazily."""
-    global _IMAGE_EMBED_MODEL
-    if _IMAGE_EMBED_MODEL is None:
-        with _IMAGE_EMBED_LOCK:
-            if _IMAGE_EMBED_MODEL is None:
-                from fastembed import ImageEmbedding
-                cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", "/tmp/fastembed_cache")
-                specific_path = None
-                for candidate in [
-                    os.environ.get("CLIP_MODEL_PATH"),
-                    "/tmp/fastembed_cache/models--Qdrant--clip-ViT-B-32-vision",
-                    os.path.expanduser("~/.cache/fastembed/models--Qdrant--clip-ViT-B-32-vision"),
-                ]:
-                    if candidate and os.path.exists(candidate):
-                        specific_path = candidate
-                        break
+_CLIP_MEAN = (0.48145466, 0.4578275, 0.40821073)
+_CLIP_STD = (0.26862954, 0.26130258, 0.27577711)
+_CLIP_IMAGE_SIZE = 224
 
-                kwargs = {"model_name": "Qdrant/clip-ViT-B-32-vision", "cache_dir": cache_dir}
-                if specific_path:
-                    kwargs["specific_model_path"] = specific_path
 
-                _IMAGE_EMBED_MODEL = ImageEmbedding(**kwargs)
-    return _IMAGE_EMBED_MODEL
+def _preprocess_clip_image(img):
+    """Replicate CLIPImageProcessor: shortest-edge resize -> center crop -> normalize.
+
+    Matches the processor used to build the stored `image_embedding` vectors; verified
+    to yield identical embeddings (cosine 1.0) to transformers' CLIPImageProcessor.
+    Uses only PIL + numpy so no torch/transformers is needed at serving time.
+    """
+    import numpy as np
+    from PIL import Image
+
+    img = img.convert("RGB")
+    w, h = img.size
+    if w <= h:
+        nw, nh = _CLIP_IMAGE_SIZE, int(round(h * _CLIP_IMAGE_SIZE / w))
+    else:
+        nh, nw = _CLIP_IMAGE_SIZE, int(round(w * _CLIP_IMAGE_SIZE / h))
+    img = img.resize((nw, nh), Image.BICUBIC)
+
+    left = (nw - _CLIP_IMAGE_SIZE) // 2
+    top = (nh - _CLIP_IMAGE_SIZE) // 2
+    img = img.crop((left, top, left + _CLIP_IMAGE_SIZE, top + _CLIP_IMAGE_SIZE))
+
+    arr = np.asarray(img, dtype=np.float32) / 255.0
+    arr = (arr - np.array(_CLIP_MEAN, dtype=np.float32)) / np.array(_CLIP_STD, dtype=np.float32)
+    return np.transpose(arr, (2, 0, 1))[None, ...].astype(np.float32)
+
+
+_ONNX_VISION_SESSION = None
+_ONNX_VISION_PATH = None
+_ONNX_VISION_FAILED = False
+_ONNX_VISION_LOCK = threading.Lock()
+
+
+def get_onnx_champion_vision():
+    """Load the champion ONNX **vision** encoder (int8 preferred) — no torch required.
+
+    This is the correct encoder to match the stored `products.image_embedding`
+    vectors, which were produced by the fine-tuned champion. Falls back to Hugging
+    Face Hub (`HF_MODEL_REPO`) when no local copy is mounted.
+    """
+    global _ONNX_VISION_SESSION, _ONNX_VISION_PATH, _ONNX_VISION_FAILED
+    if _ONNX_VISION_SESSION is not None:
+        return _ONNX_VISION_SESSION, _ONNX_VISION_PATH
+    if _ONNX_VISION_FAILED:
+        return None, None
+    with _ONNX_VISION_LOCK:
+        if _ONNX_VISION_SESSION is not None:
+            return _ONNX_VISION_SESSION, _ONNX_VISION_PATH
+        if _ONNX_VISION_FAILED:
+            return None, None
+        try:
+            import onnxruntime as ort
+
+            here = os.path.dirname(os.path.abspath(__file__))
+            prefer = os.environ.get("CLIP_VISION_ONNX_PREFER", "int8").lower()
+            names = (
+                ["champion_vision_encoder_int8.onnx", "champion_vision_encoder.onnx"]
+                if prefer != "fp32"
+                else ["champion_vision_encoder.onnx", "champion_vision_encoder_int8.onnx"]
+            )
+
+            candidates = []
+            if os.environ.get("CLIP_VISION_ONNX_PATH"):
+                candidates.append(os.environ["CLIP_VISION_ONNX_PATH"])
+            for name in names:
+                candidates += [
+                    os.path.join("/models", name),
+                    os.path.join(here, "..", "models", name),
+                    os.path.join(here, "models", name),
+                    os.path.join(here, name),
+                ]
+            path = next((c for c in candidates if c and os.path.exists(c)), None)
+
+            if not path:
+                try:
+                    from huggingface_hub import hf_hub_download
+                    repo_id = os.environ.get("HF_MODEL_REPO", "Marcell-Kristianto/toko-marcell-clip")
+                    for name in names:
+                        try:
+                            path = hf_hub_download(repo_id=repo_id, filename=name)
+                            break
+                        except Exception:
+                            continue
+                except Exception as e:
+                    print(f"[search] HF vision encoder download note: {e}")
+
+            if path and os.path.exists(path):
+                opts = ort.SessionOptions()
+                opts.intra_op_num_threads = 2
+                opts.inter_op_num_threads = 1
+                opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+                _ONNX_VISION_SESSION = ort.InferenceSession(
+                    path, opts, providers=["CPUExecutionProvider"]
+                )
+                _ONNX_VISION_PATH = path
+                print(f"[search] Loaded champion ONNX vision encoder: {os.path.basename(path)}")
+            else:
+                print("[search] No champion ONNX vision encoder found; trying torch/fastembed")
+                _ONNX_VISION_FAILED = True
+        except Exception as e:
+            print(f"[search] Could not initialize ONNX vision encoder: {e}")
+            _ONNX_VISION_FAILED = True
+    return _ONNX_VISION_SESSION, _ONNX_VISION_PATH
 
 
 def embed_image_bytes(image_bytes: bytes) -> list[float] | None:
-    """Generate 512-dim CLIP vision embedding for an uploaded image. Returns None if fails."""
+    """Generate a 512-dim CLIP vision embedding for an uploaded image.
+
+    Order matters: the champion ONNX vision encoder runs first because it matches the
+    fine-tuned vectors stored in the database. It needs no torch. The torch champion
+    is used in dev environments, and the zero-shot fastembed model is only a
+    last-resort fallback (its space differs from the stored champion embeddings).
+    """
     try:
         import io
         from PIL import Image
+
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
-        
-        # Try Champion model first
+
+        # 0. Champion ONNX vision encoder (correct space, no torch)
+        session, _ = get_onnx_champion_vision()
+        if session is not None:
+            try:
+                import numpy as np
+
+                pixel_values = _preprocess_clip_image(img)
+                feats = session.run(None, {"pixel_values": pixel_values})[0][0]
+                vec = np.asarray(feats, dtype=np.float32)
+                norm = float(np.linalg.norm(vec))
+                if norm > 0:
+                    vec = vec / norm
+                return [float(x) for x in vec]
+            except Exception as e:
+                print(f"[search] champion ONNX vision failed: {e}")
+
+        # 1. Champion PyTorch model (dev / self-hosted with torch)
         champ_model, champ_proc = get_champion_clip()
         if champ_model is not None and champ_proc is not None:
             import torch
@@ -385,16 +505,11 @@ def embed_image_bytes(image_bytes: bytes) -> list[float] | None:
                 norm_feats = feats / feats.norm(dim=-1, keepdim=True)
                 return [float(x) for x in norm_feats[0].cpu().numpy()]
     except Exception as e:
-        print(f"[search] Champion embed_image_bytes fallback: {e}")
+        print(f"[search] Champion image embedding failed: {e}")
 
-    # Fallback to fastembed
-    try:
-        model = get_image_embed_model()
-        vectors = list(model.embed([img]))
-        return [float(x) for x in vectors[0]]
-    except Exception as e:
-        print(f"[search] embed_image_bytes failed: {e}")
-        return None
+    # No zero-shot fallback: a different vector space must never be mixed with the
+    # fine-tuned champion embeddings stored in the database. Fail instead.
+    return None
 
 
 _ONNX_TEXT_SESSION = None

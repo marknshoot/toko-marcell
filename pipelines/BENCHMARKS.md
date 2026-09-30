@@ -78,6 +78,34 @@ their metrics (e.g. LoRA test R@1 0.8125) are **sanity checks only** — never q
 
 ---
 
+## Champion vision encoder — ONNX export & int8 quantization
+
+**Artifact:** [`models/champion_vision_encoder.json`](../models/champion_vision_encoder.json)
+(Tier A metadata; the `.onnx` weights are large and gitignored).
+
+This is the encoder the serving API uses for image search, so query embeddings land in the **same
+space** as the stored `products.image_embedding` vectors. It runs on ONNX Runtime with **no `torch`**.
+
+| Artifact | Size | Cosine vs torch fp32 | Cosine vs stored DB vector |
+|---|---:|---:|---:|
+| `champion_vision_encoder.onnx` (fp32, opset 17) | 351.6 MB | 1.000000 | 1.000000 |
+| `champion_vision_encoder_int8.onnx` (dynamic int8, MatMul only) | 95.8 MB | 0.991256 | 0.991256 |
+
+- Preprocessing parity vs transformers' `CLIPImageProcessor`: embedding cosine **1.0** (pixel
+  max-abs diff 0.015 — immaterial).
+- Quantization recipe: dynamic `QInt8`, `op_types_to_quantize=["MatMul"]`. Quantizing every op dropped
+  cosine to ~0.95; per-channel was unstable (~0.46). Both were measured.
+
+```bash
+python3 pipelines/export_vision_onnx.py        # needs torch + onnx>=1.16 + onnxruntime
+```
+
+The exporter loads `pipelines/Best Model`, exports the vision tower
+(`vision_model -> pooler_output -> visual_projection -> L2 normalize`), quantizes it, and verifies the
+cosines above (failing the run if int8 drops below 0.99).
+
+---
+
 ## Information retrieval — BM25 vs hybrid
 
 **Artifact:** none committed yet (Tier B). `pipelines/eval_search.py` evaluates **32 queries** in four

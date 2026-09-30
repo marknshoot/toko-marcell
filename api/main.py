@@ -17,6 +17,7 @@ from search import (
     embed_image_bytes,
     embed_query_clip_text,
     tokenize,
+    vision_encoder_ready,
 )
 
 app = FastAPI(title="Toko Marcell API")
@@ -931,11 +932,20 @@ async def search_by_image(
         raise HTTPException(status_code=400, detail="Image file exceeds 10MB limit")
 
     started = time.perf_counter()
+    if not vision_encoder_ready():
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Image search is unavailable: the fine-tuned CLIP vision encoder is "
+                "not loaded on this deployment."
+            ),
+        )
+
     vec = embed_image_bytes(contents)
     if not vec:
         raise HTTPException(
-            status_code=500,
-            detail="Failed to generate image embedding from vision model",
+            status_code=400,
+            detail="Could not read an image from the uploaded file.",
         )
     embed_ms = round((time.perf_counter() - started) * 1000, 2)
 

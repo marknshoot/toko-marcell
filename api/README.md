@@ -61,7 +61,9 @@ life of the process and would otherwise serve a stale catalog.
 | `GEMINI_MODEL` | | `gemini-3.5-flash-lite` (code) / `gemini-2.5-flash` (compose) | Any Gemini chat model |
 | `CORS_ORIGINS` | | `http://localhost:3000,https://toko-marcell.vercel.app` | Comma-separated allowlist; `*` opens it up |
 | `HF_MODEL_REPO` | | `Marcell-Kristianto/toko-marcell-clip` | HF repo for the champion ONNX text encoder |
-| `CLIP_MODEL_DIR` / `CLIP_MODEL_PATH` | | auto-detected | Optional local paths for the champion CLIP weights |
+| `CLIP_MODEL_DIR` / `CLIP_MODEL_PATH` | | auto-detected | Optional local paths for the champion CLIP **PyTorch** weights |
+| `CLIP_VISION_ONNX_PATH` | | auto-detected | Explicit path to the champion ONNX **vision** encoder |
+| `CLIP_VISION_ONNX_PREFER` | | `int8` | Prefer `int8` or `fp32` ONNX vision encoder |
 | `FASTEMBED_CACHE_DIR` | | `/tmp/fastembed_cache` | Cache for MiniLM/CLIP fastembed models |
 | `HF_HUB_CACHE` | | `/tmp/hf_cache` | Cache for the ONNX cross-encoder |
 
@@ -163,12 +165,21 @@ bounded; RRF needs only ranks, so heterogeneous rankers combine with no calibrat
 ### Image search (`POST /search/image`)
 
 1. Validate MIME (`image/*`) and size (50 B–10 MB).
-2. Encode with the **fine-tuned champion CLIP vision tower** (512-d, L2-normalized), falling back to
-   fastembed's general CLIP if the champion is unavailable.
+2. Encode with the **fine-tuned champion CLIP vision tower** — always. It is served as a quantized
+   ONNX model (`champion_vision_encoder_int8.onnx`, ~96 MB) via ONNX Runtime, so it needs no `torch`.
+   Preprocessing replicates `CLIPImageProcessor` exactly (verified: embedding cosine 1.0 vs the
+   official processor, 0.991 vs the fp32 encoder).
 3. Cosine search against `image_embedding`, ordered by HNSW, returning `visualSimilarity` per item.
 
+**There is deliberately no zero-shot fallback.** The stored `image_embedding` vectors were produced by
+the fine-tuned champion; mixing in fastembed's zero-shot CLIP would silently return wrong results. If
+no champion encoder is available the endpoint returns **`503`** (“fine-tuned CLIP vision encoder is not
+loaded”) rather than a 500 or a wrong answer. A corrupt upload that still passes the MIME/size checks
+returns `400`.
+
 The response includes a `timings: { embed_ms, db_ms }` breakdown so encoding cost is never confused
-with database cost.
+with database cost. To regenerate the ONNX encoder:
+`python3 pipelines/export_vision_onnx.py` — see [`../pipelines/README.md`](../pipelines/README.md).
 
 ### Stage-2 cross-encoder reranking
 
@@ -422,7 +433,7 @@ an `embedding` column (search is disabled rather than crashing).
 # Pure unit tests — no database needed (also what CI runs)
 python3 -m pytest tests/test_search_unit.py
 
-# Full API suite — needs a running Postgres (docker compose up) and, for copilot tests, a Gemini key
+# Full API suite — needs a running Postgres (docker compose up), the champion vision ONNX for image tests, and a Gemini key for the copilot tests
 python3 -m pytest tests/
 ```
 

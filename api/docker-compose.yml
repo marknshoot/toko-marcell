@@ -36,6 +36,7 @@ services:
         required: false
     volumes:
       - .:/app
+      - ../models:/models:ro
       - cache_fastembed:/tmp/fastembed_cache
       - cache_hf:/root/.cache/huggingface
     depends_on:

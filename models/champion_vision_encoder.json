@@ -1,0 +1,24 @@
+{
+  "source_model_dir": "/home/marcell/Projects/marcell-portfolio/toko-marcell/manual/pipelines/Best Model",
+  "projection_dim": 512,
+  "image_size": 224,
+  "opset": 17,
+  "quantization": {
+    "scheme": "dynamic",
+    "weight_type": "QInt8",
+    "op_types_to_quantize": [
+      "MatMul"
+    ]
+  },
+  "fp32_onnx_mb": 351.6,
+  "int8_onnx_mb": 95.8,
+  "preprocess_parity_max_abs_diff": 0.015007972717285156,
+  "cosine_official_vs_manual_preprocess": 1.0,
+  "verify_image": "B000YXC2LI.jpg",
+  "cosine_torch_vs_fp32": 1.0,
+  "cosine_torch_vs_int8": 0.991256,
+  "embedding_dim": 512,
+  "db_asin": "B000YXC2LI",
+  "cosine_torch_vs_db": 1.0,
+  "cosine_int8_vs_db": 0.991256
+}

@@ -339,8 +339,11 @@ An uploaded photo is encoded with the **fine-tuned CLIP vision tower** to a 512-
 against `products.image_embedding` (HNSW cosine). The same 512-d space lets a *text* query search
 product *images* (`mode=trimodal`) — so "waterproof hooded packable rain jacket nylon shell" can be
 retrieved by the visual sheen of the garment, not only by words. Encoders are loaded lazily and
-cached per process; the champion ONNX text encoder is fetched from HF Hub if it is not on disk, and
-the code falls back gracefully to fastembed's general CLIP if the champion is unavailable.
+cached per process. The champion fine-tuned encoders are served as **ONNX** (no `torch`): the text
+tower is a published artifact and the vision tower is exported + int8-quantized to ~96 MB
+([`pipelines/export_vision_onnx.py`](./pipelines/export_vision_onnx.py)). If no champion vision
+encoder is present, image search returns `503` rather than falling back to a mismatched zero-shot
+space.
 
 ### 4. Reciprocal Rank Fusion (k = 60)
 
@@ -880,15 +883,12 @@ This section exists because a portfolio that hides its edges is less useful than
   a helper but is not bound to the planner; aspect-level social proof is assembled from
   `search_catalog` / `get_product_details` evidence. There is deliberately **no order-status tool**:
   checkout is a demo simulation with no fulfillment, shipping or tracking to report.
-- **Visual (image) search is not dependable outside a full local build.** The catalog's image upload
-  needs the fine-tuned CLIP vision encoder, which requires `torch` + the local weights (`models/`) —
-  **not present** in the Docker image or on the deployed free tier. The API then falls back to a
-  zero-shot CLIP whose embedding space does **not** match the champion vectors stored in the database
-  (the stored vectors are the fine-tuned model's), and loading the ~335 MB vision ONNX can exceed the
-  Render free-tier memory limit — which is why `/search/image` can return **500 / OOM**. Text search
-  and the copilot are unaffected. Fix path: export the champion vision tower to a quantized ONNX and
-  serve it the same way as the champion text encoder. Until then, treat visual search as
-  local/self-hosted only.
+- **Image search needs the champion vision encoder (~96 MB int8 ONNX), and has no fallback.** It runs
+  without `torch` and matches the stored fine-tuned vectors (cosine 0.991 vs fp32). If the encoder is
+  absent the endpoint returns **`503`** by design — a zero-shot encoder occupies a different vector
+  space and would silently return wrong results. The artifact is not yet published to Hugging Face
+  Hub, so on the Render free tier image search is effectively **local/self-hosted only** until it is
+  (the free tier's 512 MB is also tight). Text search and the copilot are unaffected.
 - **Live API sleeps.** Render free tier cold-starts in 30–50 s; the UI handles it, but the first
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA
@@ -904,10 +904,10 @@ This section exists because a portfolio that hides its edges is less useful than
 
 Ordered by value to the product, not by ease:
 
-1. **Make visual search honest in production** — either export the champion vision tower to a
-   quantized ONNX (served like the champion text encoder) and raise the memory headroom, or gate
-   `/search/image` behind a `503` and hide the upload control when the encoder is unavailable. This
-   removes the 500 / OOM on the free tier.
+1. **Ship the champion vision ONNX to production.** The export + int8 quantization now exist and are
+   wired in (see [`pipelines/BENCHMARKS.md`](./pipelines/BENCHMARKS.md)); the remaining work is
+   publishing the ~96 MB artifact to Hugging Face Hub and confirming the Render memory budget, so the
+   deployed API can enable visual search instead of returning `503`.
 2. Bind `get_product_reviews` into the copilot tool schema (aspect-level social proof) if the
    conversational path proves too thin.
 3. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`
