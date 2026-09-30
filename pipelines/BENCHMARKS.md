@@ -81,7 +81,9 @@ their metrics (e.g. LoRA test R@1 0.8125) are **sanity checks only** — never q
 ## Champion vision encoder — ONNX export & int8 quantization
 
 **Artifact:** [`models/champion_vision_encoder.json`](../models/champion_vision_encoder.json)
-(Tier A metadata; the `.onnx` weights are large and gitignored).
+(Tier A metadata). The `.onnx` weights are large and gitignored; the int8 model is published at
+[HF Hub: `Marcell-Kristianto/toko-marcell-clip/champion_vision_encoder_int8.onnx`](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip)
+and fetched by the API at runtime (public repo, no token required).
 
 This is the encoder the serving API uses for image search, so query embeddings land in the **same
 space** as the stored `products.image_embedding` vectors. It runs on ONNX Runtime with **no `torch`**.

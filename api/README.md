@@ -167,6 +167,8 @@ bounded; RRF needs only ranks, so heterogeneous rankers combine with no calibrat
 1. Validate MIME (`image/*`) and size (50 B–10 MB).
 2. Encode with the **fine-tuned champion CLIP vision tower** — always. It is served as a quantized
    ONNX model (`champion_vision_encoder_int8.onnx`, ~96 MB) via ONNX Runtime, so it needs no `torch`.
+   Loaded from a mounted local path when present, otherwise fetched from `HF_MODEL_REPO` (default
+   `Marcell-Kristianto/toko-marcell-clip`).
    Preprocessing replicates `CLIPImageProcessor` exactly (verified: embedding cosine 1.0 vs the
    official processor, 0.991 vs the fp32 encoder).
 3. Cosine search against `image_embedding`, ordered by HNSW, returning `visualSimilarity` per item.

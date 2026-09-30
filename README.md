@@ -884,11 +884,15 @@ This section exists because a portfolio that hides its edges is less useful than
   `search_catalog` / `get_product_details` evidence. There is deliberately **no order-status tool**:
   checkout is a demo simulation with no fulfillment, shipping or tracking to report.
 - **Image search needs the champion vision encoder (~96 MB int8 ONNX), and has no fallback.** It runs
-  without `torch` and matches the stored fine-tuned vectors (cosine 0.991 vs fp32). If the encoder is
-  absent the endpoint returns **`503`** by design — a zero-shot encoder occupies a different vector
-  space and would silently return wrong results. The artifact is not yet published to Hugging Face
-  Hub, so on the Render free tier image search is effectively **local/self-hosted only** until it is
-  (the free tier's 512 MB is also tight). Text search and the copilot are unaffected.
+  without `torch` and matches the stored fine-tuned vectors (cosine 0.991 vs fp32). The artifact is
+  published at
+  [HF Hub: Marcell-Kristianto/toko-marcell-clip](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip)
+  and fetched at runtime, so it works for a local build (mounted `models/`) and for a public deploy.
+  The remaining constraint is memory: the Render **free** tier is 512 MB, and loading **both** the
+  vision ONNX (~96 MB) and the champion text ONNX (~254 MB) in one process risks OOM — so the
+  deployed free-tier API may need the text encoder quantized too, or a larger plan. If no encoder is
+  present the endpoint returns **`503`** by design (a zero-shot encoder would occupy a different
+  space). Text search and the copilot are unaffected.
 - **Live API sleeps.** Render free tier cold-starts in 30–50 s; the UI handles it, but the first
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA
@@ -904,10 +908,9 @@ This section exists because a portfolio that hides its edges is less useful than
 
 Ordered by value to the product, not by ease:
 
-1. **Ship the champion vision ONNX to production.** The export + int8 quantization now exist and are
-   wired in (see [`pipelines/BENCHMARKS.md`](./pipelines/BENCHMARKS.md)); the remaining work is
-   publishing the ~96 MB artifact to Hugging Face Hub and confirming the Render memory budget, so the
-   deployed API can enable visual search instead of returning `503`.
+1. **Fit both CLIP encoders in the Render budget.** The vision ONNX is published and wired in; the
+   open item is memory — int8-quantize the champion **text** encoder (~254 MB → ~65 MB) or move the
+   API to a ≥1 GB plan so `/search/image` and trimodal text search can coexist without OOM.
 2. Bind `get_product_reviews` into the copilot tool schema (aspect-level social proof) if the
    conversational path proves too thin.
 3. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`
