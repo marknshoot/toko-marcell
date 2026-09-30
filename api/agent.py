@@ -151,7 +151,7 @@ def _extract_text(content: Any) -> str:
         return "".join(texts)
     return str(content)
 
-# Tool definitions for Gemini function calling
+# Tool definitions (OpenAI-style schema; bound by both OpenRouter and Gemini via LangChain)
 TOOLS_SCHEMA = [
     {
         "type": "function",

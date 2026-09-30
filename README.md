@@ -7,6 +7,7 @@
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL%2016-pgvector%20HNSW-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Model%20Serving-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![LangChain](https://img.shields.io/badge/LangChain-Agentic%20Copilot-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)](https://langchain.com)
+[![OpenRouter](https://img.shields.io/badge/LLM-OpenRouter%20Free-6B46C1?style=for-the-badge)](https://openrouter.ai/)
 [![Next.js](https://img.shields.io/badge/Next.js%2016-Edge%20ISR-000000?style=for-the-badge&logo=next.js&logoColor=white)](https://nextjs.org)
 [![Docker](https://img.shields.io/badge/Docker-Compose-2496ED?style=for-the-badge&logo=docker&logoColor=white)](https://docker.com)
 [![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)](./.github/workflows/ci.yml)
@@ -44,11 +45,11 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 |---|---|---|---|
 | 1 | **VLM fine-tuning study** — 5 ablations, 5,378 image–text pairs, 539 held-out test | champion lifts text→image **Recall@1 26.53% → 39.15%** (+47.57% rel) | [leaderboard](./pipelines/multimodal_benchmark_results.json) |
 | 2 | **Hybrid retrieval** — BM25 + MiniLM (384-d) + CLIP (512-d) → RRF (k=60) → ONNX cross-encoder | exact SKUs *and* semantic/visual queries; `?mode=` switchable | [API internals](./api/README.md#search--how-it-ranks) |
-| 3 | **Grounded agentic copilot** — LangChain + Gemini, 4 bound tools, policy RAG | answers only from tool evidence; refuses off-topic and injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
+| 3 | **Grounded agentic copilot** — LangChain + OpenRouter (free tier), 4 bound tools, policy RAG | answers only from tool evidence; refuses off-topic and injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
 | 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe | [recommendation engine](./README.md#-recommendation-engine) |
 
 **Stack:** Next.js 16 · React 19 · FastAPI · PostgreSQL 16 + pgvector · PyTorch/CLIP · LangChain +
-Gemini · Docker · Vercel + Render + Neon.
+OpenRouter (free tier, Gemini fallback) · Docker · Vercel + Render + Neon.
 
 **Try it locally**
 
@@ -60,9 +61,9 @@ the host, and the database seeds itself on first boot.
 git clone https://github.com/marknshoot/toko-marcell.git
 cd toko-marcell/manual
 
-# 2. (optional) enable the AI copilot with a free Google Gemini key
-#    https://aistudio.google.com/  — skip this and everything else still works
-cp .env.example .env        # then set GEMINI_API_KEY=... in .env
+# 2. (optional) enable the AI copilot with a free OpenRouter key
+#    https://openrouter.ai/keys  — skip this and everything else still works
+cp .env.example .env        # then set OPENROUTER_API_KEY=... in .env
 
 # 3. start the full stack
 ./run-local.sh              # → http://localhost:3000
@@ -71,7 +72,7 @@ cp .env.example .env        # then set GEMINI_API_KEY=... in .env
 `run-local.sh` also **prompts for the key** if `.env` is empty — press Enter to skip. Pressing Enter
 leaves the copilot disabled; the rest of the site is unaffected.
 
-| Works with no configuration | Needs a Gemini key |
+| Works with no configuration | Needs an LLM key (OpenRouter, or Gemini as fallback) |
 |---|---|
 | catalog, hybrid text search, recommendations, reviews, demo checkout | the copilot's answers (`/copilot/chat` returns a friendly `503` without one) |
 
@@ -150,7 +151,7 @@ flowchart TD
         CORS["Configurable CORS allowlist"]
         Cache["In-memory facet TTL cache (300s)"]
         Val["Pydantic bounds<br/>(token & payload safeguards)"]
-        subgraph Orchestration["Agentic orchestrator (LangChain + Gemini)"]
+        subgraph Orchestration["Agentic orchestrator (LangChain + OpenRouter)"]
             Planner["Planner / guardrail node<br/>decides tools (0..n)"]
             Fanout["Concurrent tool fan-out<br/>(asyncio.gather)"]
             Synth["Grounded synthesizer<br/>Admin Toko Marcell persona"]
@@ -192,7 +193,7 @@ flowchart TD
 |---|---|---|---|
 | 0 — Client | Next.js 16 (App Router), React 19, Tailwind v4 | Rendering, cart state, session id, cold-start UX | Touch the database, know prices |
 | 1 — Edge | Vercel CDN + ISR | Caching product pages, security headers | Hold business logic |
-| 2 — API | FastAPI, Pydantic, LangChain, Gemini | REST validation, search, recs, copilot, checkout | Render HTML |
+| 2 — API | FastAPI, Pydantic, LangChain, OpenRouter | REST validation, search, recs, copilot, checkout | Render HTML |
 | 3 — Retrieval | BM25, fastembed (MiniLM + CLIP), ONNX reranker | Ranking | Persist state |
 | 4 — Storage | PostgreSQL 16 + pgvector (Neon) | Catalog, vectors, events, orders, reviews, knowledge | Serve HTTP |
 
@@ -441,8 +442,10 @@ and popularity baselines.
 
 ## 🤖 The agentic copilot (Admin Toko Marcell)
 
-An in-store stylist and customer assistant built with **LangChain + Google Gemini**. The design
-principle is boring on purpose: **the model never invents a product, a price, or a policy.**
+An in-store stylist and customer assistant built with **LangChain**. The provider is
+**OpenRouter** (OpenAI-compatible) whenever `OPENROUTER_API_KEY` is set — its free tier is far more
+generous than Gemini's free tier — and it falls back to **Google Gemini** when that key is absent.
+The design principle is boring on purpose: **the model never invents a product, a price, or a policy.**
 
 ### Execution model
 
@@ -450,7 +453,7 @@ principle is boring on purpose: **the model never invents a product, a price, or
 sequenceDiagram
     participant S as Shopper
     participant API as /copilot/chat
-    participant P as Planner (Gemini + tool schema)
+    participant P as Planner (LLM + tool schema)
     participant T as Tools (asyncio.gather)
     participant D as Postgres + pgvector
     S->>API: message(s) [+ optional image]
@@ -465,7 +468,7 @@ sequenceDiagram
     P-->>S: reply + structured product cards + tool trace
 ```
 
-1. **Planner / guardrail node.** One Gemini call with the tool schema bound. Greetings and off-topic
+1. **Planner / guardrail node.** One LLM call with the tool schema bound. Greetings and off-topic
    questions (code, SQL, maths, politics, medical/legal advice, prompt-injection attempts) return
    **zero tool calls** — the system prompt forbids them and the tests assert it.
 2. **Concurrent tool fan-out.** Every tool the planner requested runs in parallel via
@@ -680,7 +683,7 @@ embeddings and knowledge base on first boot** — no manual pipelines, no downlo
 
 - **Docker** + **Docker Compose** (Docker Desktop, or `docker` + the Compose plugin).
 - Python, Node and PostgreSQL are **not** required on the host.
-- Optional: a free [Google Gemini API key](https://aistudio.google.com/) to enable the AI copilot.
+- Optional: a free [OpenRouter API key](https://openrouter.ai/keys) — or a [Gemini key](https://aistudio.google.com/) as a fallback — to enable the AI copilot.
 
 ### Configure (optional)
 
@@ -689,13 +692,17 @@ set the key — or let `run-local.sh` prompt you for it:
 
 ```bash
 cp .env.example .env
-# edit .env →  GEMINI_API_KEY=AIza...
+# edit .env →  OPENROUTER_API_KEY=sk-or-...
 ```
 
 | Variable | Needed for | Default |
 |---|---|---|
-| `GEMINI_API_KEY` | the AI copilot only | empty → copilot disabled |
-| `GEMINI_MODEL` | copilot model override | `gemini-3.5-flash-lite` |
+| `OPENROUTER_API_KEY` | the AI copilot (preferred provider) | empty → copilot disabled |
+| `LLM_MODEL` | OpenRouter model id | `openrouter/free` (auto-routes the free pool) |
+| `LLM_BASE_URL` | OpenRouter endpoint | `https://openrouter.ai/api/v1` |
+| `LLM_FALLBACK_MODELS` | optional OpenRouter fallbacks (429/503) | *(empty)* |
+| `GEMINI_API_KEY` | the copilot **fallback** provider | empty → Gemini not used |
+| `GEMINI_MODEL` | fallback model override | `gemini-3.5-flash-lite` |
 | `DATABASE_URL` · `NEXT_PUBLIC_API_URL` · `INTERNAL_API_URL` | wiring the three services | pre-set in `.env.example` and `docker-compose.yml` |
 
 ### Run
@@ -718,7 +725,7 @@ docker compose logs -f    # stream logs
 docker compose down       # stop
 ```
 
-### What works without a Gemini key
+### What works without an LLM key
 
 Browsing, filtering, **hybrid text search**, recommendations, reviews and the demo checkout all run
 against the seeded database. Without a key, `/copilot/chat` returns a clean `503` with a friendly
@@ -759,7 +766,7 @@ manual/
 │   ├── main.py                   #   REST API, schema creation, caching, checkout
 │   ├── search.py                 #   BM25 + embeddings + RRF + CLIP encoders
 │   ├── reranker.py               #   Stage-2 ONNX cross-encoder
-│   ├── agent.py                  #   LangChain/Gemini orchestrator + tool schema
+│   ├── agent.py                  #   LangChain orchestrator (OpenRouter/Gemini) + tools
 │   ├── agent_tools.py            #   deterministic grounding tools
 │   ├── knowledge_seed.py         #   markdown → embedded store_knowledge chunks
 │   ├── knowledge/                #   authored size charts + store policies (RAG source)
@@ -826,7 +833,7 @@ Every push and PR runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
 | **Backend & pipelines** (Python 3.11) | install → `pytest api/tests/test_search_unit.py pipelines/tests/test_pipeline_math.py` |
 
 CI deliberately runs the **offline-safe** subset (BM25 maths, tokenizer, pipeline maths) because a
-hosted runner has no Postgres or Gemini key. The full 76-case API suite runs locally against the
+hosted runner has no Postgres or LLM key. The full 76-case API suite runs locally against the
 Docker stack. The API tests cover the things that are easy to get wrong: price-tampering rejection,
 duplicate-ASIN aggregation, event-type validation, session-id bounds, search modes/filters/reindex,
 recommendation cold-start fallbacks, review aggregates, and the copilot's use cases + guardrails.
@@ -858,9 +865,10 @@ These are the choices that shaped the project. Each is stated with the alternati
    not a person. No names, no emails, no PII, no login — `sessionStorage` + `crypto.randomUUID()`.
 9. **Honest emptiness.** Rates are `null` when undefined; missing catalog fields stay missing. A demo
    that reports "0%" from an empty table is worse than one that says "no data yet".
-10. **Degrade, don't break.** Missing Gemini key → clean 503. Missing reranker → Stage-1 order.
-    Missing champion CLIP → fastembed fallback. Couriers/shipping/QRIS are explicitly labelled
-    simulations, so nobody mistakes the demo for a real store.
+10. **Degrade, don't break.** Missing LLM key → clean 503. Missing reranker → Stage-1 order.
+    Missing champion CLIP vision encoder → image search returns `503` (never a mismatched zero-shot
+    fallback). Couriers/shipping/QRIS are explicitly labelled simulations, so nobody mistakes the
+    demo for a real store.
 
 ---
 

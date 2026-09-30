@@ -261,6 +261,10 @@ contains **46,700** of them. The copilot can reason over them for aspect-level s
 
 The copilot is an **agentic RAG loop**, not a chat completion with the catalog pasted in.
 
+Provider: **OpenRouter** (OpenAI-compatible via LangChain) whenever `OPENROUTER_API_KEY` is set,
+otherwise **Google Gemini**. `LLM_MODEL` defaults to `openrouter/free`, which auto-routes across
+OpenRouter's free pool; the exact `LLM_MODEL`/`LLM_BASE_URL` in use is printed once at startup.
+
 ```text
 Node 1  Planner / guardrail   one LLM call with the tool schema bound → 0..n tool calls
 Node 2  Tool fan-out          asyncio.gather over deterministic DB tools

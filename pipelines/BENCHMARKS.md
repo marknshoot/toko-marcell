@@ -168,7 +168,7 @@ are read directly from `pipelines/build_recs.py` (Tier A).
 
 | Suite | Count | Tier | Command |
 |---|---:|:---:|---|
-| API (pytest, needs DB; copilot needs a Gemini key) | 76 | B | `cd api && python3 -m pytest tests/` |
+| API (pytest, needs DB; copilot needs an LLM key) | 76 | B | `cd api && python3 -m pytest tests/` |
 | Offline-safe unit tests (CI) | 17 | B | `pytest api/tests/test_search_unit.py pipelines/tests/test_pipeline_math.py` |
 | Pipelines maths | 6 | B | `python3 -m pytest pipelines/tests/` |
 | Frontend (Vitest) | 15 | B | `cd shop && npm test` |
