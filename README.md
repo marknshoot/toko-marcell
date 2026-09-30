@@ -50,14 +50,32 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 **Stack:** Next.js 16 · React 19 · FastAPI · PostgreSQL 16 + pgvector · PyTorch/CLIP · LangChain +
 Gemini · Docker · Vercel + Render + Neon.
 
-**Try it in ~30 seconds**
+**Try it locally**
+
+Prerequisite: **Docker with Compose**. Nothing else — Python, Node and PostgreSQL are not needed on
+the host, and the database seeds itself on first boot.
 
 ```bash
-git clone https://github.com/marknshoot/toko-marcell.git && cd toko-marcell/manual
-./run-local.sh      # full stack → http://localhost:3000 (everything works without a Gemini key)
+# 1. get the code
+git clone https://github.com/marknshoot/toko-marcell.git
+cd toko-marcell/manual
+
+# 2. (optional) enable the AI copilot with a free Google Gemini key
+#    https://aistudio.google.com/  — skip this and everything else still works
+cp .env.example .env        # then set GEMINI_API_KEY=... in .env
+
+# 3. start the full stack
+./run-local.sh              # → http://localhost:3000
 ```
 
-Or open the live [storefront](https://toko-marcell.vercel.app) / [API docs](https://toko-marcell-api.onrender.com/docs).
+`run-local.sh` also **prompts for the key** if `.env` is empty — press Enter to skip. Pressing Enter
+leaves the copilot disabled; the rest of the site is unaffected.
+
+| Works with no configuration | Needs a Gemini key |
+|---|---|
+| catalog, hybrid text search, recommendations, reviews, demo checkout | the copilot's answers (`/copilot/chat` returns a friendly `503` without one) |
+
+Or use the hosted build: [storefront](https://toko-marcell.vercel.app) / [API docs](https://toko-marcell-api.onrender.com/docs).
 
 **Scope, honestly:** the storefront, QRIS checkout, couriers and order flow are a **demo simulation** —
 they charge nothing and ship nothing. What is real: the catalog, the vector search, the ML study, the
@@ -654,17 +672,35 @@ The whole stack is containerized. **Docker Compose** boots the Next.js storefron
 backend, and PostgreSQL 16 with pgvector **auto-seeded with the real catalog, reviews, vector
 embeddings and knowledge base on first boot** — no manual pipelines, no downloads.
 
+### Prerequisites
+
+- **Docker** + **Docker Compose** (Docker Desktop, or `docker` + the Compose plugin).
+- Python, Node and PostgreSQL are **not** required on the host.
+- Optional: a free [Google Gemini API key](https://aistudio.google.com/) to enable the AI copilot.
+
+### Configure (optional)
+
+Everything runs with **no configuration**. To turn on the copilot, create `.env` from the example and
+set the key — or let `run-local.sh` prompt you for it:
+
+```bash
+cp .env.example .env
+# edit .env →  GEMINI_API_KEY=AIza...
+```
+
+| Variable | Needed for | Default |
+|---|---|---|
+| `GEMINI_API_KEY` | the AI copilot only | empty → copilot disabled |
+| `GEMINI_MODEL` | copilot model override | `gemini-3.5-flash-lite` |
+| `DATABASE_URL` · `NEXT_PUBLIC_API_URL` · `INTERNAL_API_URL` | wiring the three services | pre-set in `.env.example` and `docker-compose.yml` |
+
+### Run
+
 ```bash
 git clone https://github.com/marknshoot/toko-marcell.git
 cd toko-marcell/manual
-
-# 1. (optional) configure the Gemini key for the AI copilot
-cp .env.example .env
-#   → set GEMINI_API_KEY=...   (free key: https://aistudio.google.com/)
-
-# 2. launch everything
-./run-local.sh
-#   or: docker compose up -d --build
+./run-local.sh              # builds + starts everything, waits for health, prints the URLs
+# or: docker compose up -d --build
 ```
 
 | Service | URL |
@@ -678,10 +714,15 @@ docker compose logs -f    # stream logs
 docker compose down       # stop
 ```
 
-**Everything works without a Gemini key** except the copilot's language generation: browsing,
-filtering, hybrid search, visual search, recommendations, reviews and the demo checkout all run
+### What works without a Gemini key
+
+Browsing, filtering, **hybrid text search**, recommendations, reviews and the demo checkout all run
 against the seeded database. Without a key, `/copilot/chat` returns a clean `503` with a friendly
-message instead of crashing.
+message instead of crashing, and the copilot panel simply can't produce answers.
+
+> **Got a 500 or an out-of-memory from the API instead?** That's a known image-search issue, not a
+> setup problem — see [Honest limitations](#-honest-limitations--what-is-not-built). Text search is
+> unaffected.
 
 > **How the auto-seed works.** The Postgres container mounts `data/seed/init.sql.gz` into
 > `/docker-entrypoint-initdb.d/`, so the official image restores the complete schema, 4,670 products,
@@ -839,6 +880,15 @@ This section exists because a portfolio that hides its edges is less useful than
   a helper but is not bound to the planner; aspect-level social proof is assembled from
   `search_catalog` / `get_product_details` evidence. There is deliberately **no order-status tool**:
   checkout is a demo simulation with no fulfillment, shipping or tracking to report.
+- **Visual (image) search is not dependable outside a full local build.** The catalog's image upload
+  needs the fine-tuned CLIP vision encoder, which requires `torch` + the local weights (`models/`) —
+  **not present** in the Docker image or on the deployed free tier. The API then falls back to a
+  zero-shot CLIP whose embedding space does **not** match the champion vectors stored in the database
+  (the stored vectors are the fine-tuned model's), and loading the ~335 MB vision ONNX can exceed the
+  Render free-tier memory limit — which is why `/search/image` can return **500 / OOM**. Text search
+  and the copilot are unaffected. Fix path: export the champion vision tower to a quantized ONNX and
+  serve it the same way as the champion text encoder. Until then, treat visual search as
+  local/self-hosted only.
 - **Live API sleeps.** Render free tier cold-starts in 30–50 s; the UI handles it, but the first
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA
@@ -854,15 +904,19 @@ This section exists because a portfolio that hides its edges is less useful than
 
 Ordered by value to the product, not by ease:
 
-1. Bind `get_product_reviews` into the copilot tool schema (aspect-level social proof) if the
+1. **Make visual search honest in production** — either export the champion vision tower to a
+   quantized ONNX (served like the champion text encoder) and raise the memory headroom, or gate
+   `/search/image` behind a `503` and hide the upload control when the encoder is unavailable. This
+   removes the 500 / OOM on the free tier.
+2. Bind `get_product_reviews` into the copilot tool schema (aspect-level social proof) if the
    conversational path proves too thin.
-2. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`
+3. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`
    becomes a true CTR.
-3. Add `Idempotency-Key` support to checkout.
-4. Introduce Alembic migrations and a scheduled reindex.
-5. Add the qualitative failure analysis' logo/patch fix (multi-crop or RoI-Align training) and
+4. Add `Idempotency-Key` support to checkout.
+5. Introduce Alembic migrations and a scheduled reindex.
+6. Add the qualitative failure analysis' logo/patch fix (multi-crop or RoI-Align training) and
    re-run the 5-experiment leaderboard.
-6. Publish a reproducible eval report artifact per CI run so leaderboard numbers can be re-generated
+7. Publish a reproducible eval report artifact per CI run so leaderboard numbers can be re-generated
    with one command.
 
 ---
