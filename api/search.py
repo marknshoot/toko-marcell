@@ -514,58 +514,76 @@ def embed_image_bytes(image_bytes: bytes) -> list[float] | None:
 
 _ONNX_TEXT_SESSION = None
 _ONNX_TOKENIZER = None
+_ONNX_TEXT_FAILED = False
 _ONNX_LOCK = threading.Lock()
+
+_TEXT_ONNX_NAMES = ["champion_text_encoder_fp16.onnx", "champion_text_encoder.onnx"]
 
 
 def get_onnx_champion_encoder():
-    """Load ONNX Champion Text Encoder lazily (local or auto-downloaded from HF Hub)."""
-    global _ONNX_TEXT_SESSION, _ONNX_TOKENIZER
-    if _ONNX_TEXT_SESSION is None:
-        with _ONNX_LOCK:
-            if _ONNX_TEXT_SESSION is None:
+    """Load the champion ONNX text encoder lazily (fp16 preferred), local or from HF Hub.
+
+    fp16 is preferred: it is half the size (127 MB vs 254 MB) with identical embeddings
+    (cosine 1.0), which matters on a 512 MB instance. Falls back to the fp32 model.
+    """
+    global _ONNX_TEXT_SESSION, _ONNX_TOKENIZER, _ONNX_TEXT_FAILED
+    if _ONNX_TEXT_SESSION is not None:
+        return _ONNX_TEXT_SESSION, _ONNX_TOKENIZER
+    if _ONNX_TEXT_FAILED:
+        return None, None
+    with _ONNX_LOCK:
+        if _ONNX_TEXT_SESSION is not None:
+            return _ONNX_TEXT_SESSION, _ONNX_TOKENIZER
+        if _ONNX_TEXT_FAILED:
+            return None, None
+        try:
+            import onnxruntime as ort
+            from transformers import CLIPTokenizer
+            from huggingface_hub import hf_hub_download
+
+            here = os.path.dirname(os.path.abspath(__file__))
+            candidates = []
+            if os.environ.get("CLIP_TEXT_ONNX_PATH"):
+                candidates.append(os.environ["CLIP_TEXT_ONNX_PATH"])
+            for name in _TEXT_ONNX_NAMES:
+                candidates += [
+                    os.path.join("/models", name),
+                    os.path.join(here, "..", "models", name),
+                    os.path.join(here, "models", name),
+                    os.path.join(here, name),
+                ]
+            onnx_path = next((c for c in candidates if c and os.path.exists(c)), None)
+
+            repo_id = os.environ.get("HF_MODEL_REPO", "Marcell-Kristianto/toko-marcell-clip")
+            if not onnx_path:
+                for name in _TEXT_ONNX_NAMES:
+                    try:
+                        print(f"[search] Downloading ONNX text encoder ({name}) from {repo_id}...")
+                        onnx_path = hf_hub_download(repo_id=repo_id, filename=name)
+                        break
+                    except Exception as e:
+                        print(f"[search] HF hub download note ({name}): {e}")
+
+            if onnx_path and os.path.exists(onnx_path):
+                sess_opts = ort.SessionOptions()
+                sess_opts.intra_op_num_threads = 2
+                sess_opts.inter_op_num_threads = 1
+                sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+                sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
+
+                _ONNX_TEXT_SESSION = ort.InferenceSession(
+                    onnx_path, sess_opts, providers=["CPUExecutionProvider"]
+                )
                 try:
-                    import onnxruntime as ort
-                    from transformers import CLIPTokenizer
-                    from huggingface_hub import hf_hub_download
-
-                    here = os.path.dirname(os.path.abspath(__file__))
-                    local_candidates = [
-                        "/models/champion_text_encoder.onnx",
-                        os.path.join(here, "..", "models", "champion_text_encoder.onnx"),
-                        os.path.join(here, "models", "champion_text_encoder.onnx"),
-                        os.path.join(here, "champion_text_encoder.onnx"),
-                    ]
-                    onnx_path = None
-                    for c in local_candidates:
-                        if os.path.exists(c):
-                            onnx_path = c
-                            break
-
-                    repo_id = os.environ.get("HF_MODEL_REPO", "Marcell-Kristianto/toko-marcell-clip")
-                    if not onnx_path:
-                        try:
-                            print(f"[search] Downloading ONNX text encoder from {repo_id}...")
-                            onnx_path = hf_hub_download(repo_id=repo_id, filename="champion_text_encoder.onnx")
-                        except Exception as e:
-                            print(f"[search] HF hub download note: {e}")
-
-                    if onnx_path and os.path.exists(onnx_path):
-                        sess_opts = ort.SessionOptions()
-                        sess_opts.intra_op_num_threads = 2
-                        sess_opts.inter_op_num_threads = 1
-                        sess_opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
-                        sess_opts.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
-
-                        _ONNX_TEXT_SESSION = ort.InferenceSession(
-                            onnx_path, sess_opts, providers=["CPUExecutionProvider"]
-                        )
-                        try:
-                            _ONNX_TOKENIZER = CLIPTokenizer.from_pretrained(repo_id)
-                        except Exception:
-                            _ONNX_TOKENIZER = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
-                        print(f"[search] Loaded Champion ONNX Text Encoder from {onnx_path} (<150MB RAM)")
-                except Exception as e:
-                    print(f"[search] Could not initialize ONNX text encoder: {e}")
+                    _ONNX_TOKENIZER = CLIPTokenizer.from_pretrained(repo_id)
+                except Exception:
+                    _ONNX_TOKENIZER = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
+                print(f"[search] Loaded champion ONNX text encoder from {os.path.basename(onnx_path)}")
+            else:
+                _ONNX_TEXT_FAILED = True
+        except Exception as e:
+            print(f"[search] Could not initialize ONNX text encoder: {e}")
+            _ONNX_TEXT_FAILED = True
     return _ONNX_TEXT_SESSION, _ONNX_TOKENIZER
 
 

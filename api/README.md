@@ -64,6 +64,7 @@ life of the process and would otherwise serve a stale catalog.
 | `CLIP_MODEL_DIR` / `CLIP_MODEL_PATH` | | auto-detected | Optional local paths for the champion CLIP **PyTorch** weights |
 | `CLIP_VISION_ONNX_PATH` | | auto-detected | Explicit path to the champion ONNX **vision** encoder |
 | `CLIP_VISION_ONNX_PREFER` | | `int8` | Prefer `int8` or `fp32` ONNX vision encoder |
+| `CLIP_TEXT_ONNX_PATH` | | auto-detected | Explicit path to the champion ONNX **text** encoder (fp16 preferred) |
 | `FASTEMBED_CACHE_DIR` | | `/tmp/fastembed_cache` | Cache for MiniLM/CLIP fastembed models |
 | `HF_HUB_CACHE` | | `/tmp/hf_cache` | Cache for the ONNX cross-encoder |
 

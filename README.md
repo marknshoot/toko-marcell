@@ -340,8 +340,9 @@ against `products.image_embedding` (HNSW cosine). The same 512-d space lets a *t
 product *images* (`mode=trimodal`) — so "waterproof hooded packable rain jacket nylon shell" can be
 retrieved by the visual sheen of the garment, not only by words. Encoders are loaded lazily and
 cached per process. The champion fine-tuned encoders are served as **ONNX** (no `torch`): the text
-tower is a published artifact and the vision tower is exported + int8-quantized to ~96 MB
-([`pipelines/export_vision_onnx.py`](./pipelines/export_vision_onnx.py)). If no champion vision
+tower is fp16 (~127 MB) and the vision tower is int8 (~96 MB), both published and fetched at runtime
+([`pipelines/export_text_onnx.py`](./pipelines/export_text_onnx.py),
+[`pipelines/export_vision_onnx.py`](./pipelines/export_vision_onnx.py)). If no champion vision
 encoder is present, image search returns `503` rather than falling back to a mismatched zero-shot
 space.
 
@@ -888,11 +889,12 @@ This section exists because a portfolio that hides its edges is less useful than
   published at
   [HF Hub: Marcell-Kristianto/toko-marcell-clip](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip)
   and fetched at runtime, so it works for a local build (mounted `models/`) and for a public deploy.
-  The remaining constraint is memory: the Render **free** tier is 512 MB, and loading **both** the
-  vision ONNX (~96 MB) and the champion text ONNX (~254 MB) in one process risks OOM — so the
-  deployed free-tier API may need the text encoder quantized too, or a larger plan. If no encoder is
-  present the endpoint returns **`503`** by design (a zero-shot encoder would occupy a different
-  space). Text search and the copilot are unaffected.
+  Serving memory is trimmed for the free tier: the vision encoder is **int8** (~96 MB) and the text
+  encoder is **fp16** (~127 MB, identical embeddings) — see
+  [`pipelines/BENCHMARKS.md`](./pipelines/BENCHMARKS.md). Even so, loading every model at once
+  (vision + text + MiniLM + reranker) can approach the 512 MB Render free-tier budget; a ≥1 GB plan
+  removes the cliff. If no encoder is present the endpoint returns **`503`** by design (a zero-shot
+  encoder would occupy a different space). Text search and the copilot are unaffected.
 - **Live API sleeps.** Render free tier cold-starts in 30–50 s; the UI handles it, but the first
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA
@@ -908,9 +910,9 @@ This section exists because a portfolio that hides its edges is less useful than
 
 Ordered by value to the product, not by ease:
 
-1. **Fit both CLIP encoders in the Render budget.** The vision ONNX is published and wired in; the
-   open item is memory — int8-quantize the champion **text** encoder (~254 MB → ~65 MB) or move the
-   API to a ≥1 GB plan so `/search/image` and trimodal text search can coexist without OOM.
+1. **Confirm the Render memory budget end-to-end.** Both encoders are now size-reduced and published
+   (vision int8 ~96 MB, text fp16 ~127 MB); the remaining option is a ≥1 GB Render plan so every
+   model can be resident at once without approaching the 512 MB free-tier limit.
 2. Bind `get_product_reviews` into the copilot tool schema (aspect-level social proof) if the
    conversational path proves too thin.
 3. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`

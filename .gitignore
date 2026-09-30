@@ -26,6 +26,7 @@ plan/
 # summaries and training histories.
 models/*
 !models/champion_vision_encoder.json
+!models/champion_text_encoder.json
 !models/experiments/
 models/experiments/*
 !models/experiments/README.md

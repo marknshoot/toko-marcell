@@ -146,6 +146,7 @@ correct in their own context, and the READMEs say which is which.
 | `embed_images.py` | `Qdrant/clip-ViT-B-32-vision` (fastembed/ONNX) | 512 | `products.image_embedding` | HNSW cosine |
 | `embed_catalog_vlm.py` | **fine-tuned champion CLIP** from `pipelines/Best Model/` | 512 | `products.image_embedding` + offline `.npy`/`.json` | HNSW cosine |
 | `export_vision_onnx.py` | exports the champion **vision** tower to ONNX (fp32 + int8) for serving | 512 | `models/champion_vision_encoder{,_int8}.onnx` | — |
+| `export_text_onnx.py` | fp16 conversion of the champion **text** encoder ONNX (half size, identical embeddings) | 512 | `models/champion_text_encoder_fp16.onnx` | — |
 
 > **Do not mix encoders.** The served `products.image_embedding` vectors come from the **fine-tuned
 > champion** (`embed_catalog_vlm.py`). `embed_images.py` writes *zero-shot* fastembed vectors instead;
@@ -328,6 +329,7 @@ All harnesses print human-readable tables and are safe to run repeatedly against
 | `embed_images.py` | fastembed CLIP 512-d image embeddings + HNSW |
 | `embed_catalog_vlm.py` | fine-tuned champion CLIP image embeddings (+ offline `.npy`) |
 | `export_vision_onnx.py` | export the champion vision tower to ONNX (fp32 + int8) for torch-free serving |
+| `export_text_onnx.py` | convert the champion text encoder ONNX to fp16 (half size, identical embeddings) |
 | `build_recs.py` | co-occurrence + metadata boosts + Bayesian popularity + category/department backfill |
 | `extract_reviews.py` | ≤10 real reviews per ASIN → `reviews` |
 | `eda_interactions.py` | interaction EDA |

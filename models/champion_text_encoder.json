@@ -1,0 +1,12 @@
+{
+  "source_fp32": "/home/marcell/Projects/marcell-portfolio/toko-marcell/manual/models/champion_text_encoder.onnx",
+  "fp32_onnx_mb": 254.0,
+  "fp16_onnx_mb": 127.2,
+  "conversion": "float32 -> float16 (keep_io_types=True)",
+  "output_dim": 512,
+  "fp16_output_norm": 1.0,
+  "cosine_fp32_vs_fp16_mean": 1.0,
+  "cosine_fp32_vs_fp16_min": 0.999999,
+  "num_verify_queries": 7,
+  "rejected_alternative": "dynamic int8 (cosine ~0.77 mean / 0.62 min; token embeddings are quantization-sensitive)"
+}

@@ -108,6 +108,31 @@ cosines above (failing the run if int8 drops below 0.99).
 
 ---
 
+## Champion text encoder — fp16 conversion
+
+**Artifact:** [`models/champion_text_encoder.json`](../models/champion_text_encoder.json) (Tier A
+metadata). The `.onnx` weights are gitignored; the fp16 model is published at
+[HF Hub: `Marcell-Kristianto/toko-marcell-clip/champion_text_encoder_fp16.onnx`](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip)
+and fetched by the API at runtime (public repo, no token required).
+
+This is the encoder used for trimodal text→image search. It is the largest model the API loads, so it
+is converted to fp16 rather than int8.
+
+| Artifact | Size | Cosine vs fp32 |
+|---|---:|---:|
+| `champion_text_encoder.onnx` (fp32) | 254.0 MB | 1.000000 |
+| `champion_text_encoder_fp16.onnx` | 127.2 MB | 0.999999 (min) |
+
+- **Why fp16, not int8:** dynamic int8 was measured and **rejected** — text-embedding cosine collapsed
+  to ~0.77 mean / 0.62 min (the 49,408-row token-embedding table is quantization-sensitive). fp16
+  halves the file with no measurable loss (mean cosine 1.0, min 0.999999).
+
+```bash
+python3 pipelines/export_text_onnx.py     # needs onnx + onnxconverter-common + onnxruntime + transformers
+```
+
+---
+
 ## Information retrieval — BM25 vs hybrid
 
 **Artifact:** none committed yet (Tier B). `pipelines/eval_search.py` evaluates **32 queries** in four
