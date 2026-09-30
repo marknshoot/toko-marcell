@@ -24,6 +24,7 @@
 | 🔬 **Research report (failure analysis)** | [`pipelines/failure_case_analysis.md`](./pipelines/failure_case_analysis.md) |
 | 📑 **Literature review (CLIP fine-tuning)** | [`pipelines/literature_review_clip_finetuning.md`](./pipelines/literature_review_clip_finetuning.md) |
 | 📊 **Machine-readable leaderboard** | [`pipelines/multimodal_benchmark_results.json`](./pipelines/multimodal_benchmark_results.json) |
+| 🧾 **Benchmark source ledger** | [`pipelines/BENCHMARKS.md`](./pipelines/BENCHMARKS.md) — what each number is and how to reproduce it |
 
 > **Note on the live API:** the backend runs on Render's free tier, so it sleeps after 15 minutes of
 > inactivity and takes 30–50 s to wake. The storefront handles this explicitly with a health-check

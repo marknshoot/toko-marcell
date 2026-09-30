@@ -381,6 +381,7 @@ upload, kernel push, output download, and the web-UI alternative) live in
 
 ### Related docs
 
+- [`BENCHMARKS.md`](./BENCHMARKS.md) — the source ledger for every headline number
 - [`../README.md`](../README.md) — project overview and architecture
 - [`../api/README.md`](../api/README.md) — how the served catalog, search and copilot work
 - [`kaggle/README.md`](./kaggle/README.md) — running the GPU study
