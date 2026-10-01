@@ -87,7 +87,7 @@ def rerank(
     if len(candidates) <= 1:
         return candidates[:limit]
 
-    if os.environ.get("ENABLE_RERANKER", "true").strip().lower() not in ("1", "true", "yes"):
+    if os.environ.get("ENABLE_RERANKER", "false").strip().lower() not in ("1", "true", "yes"):
         # Cross-encoder disabled on memory-constrained deployments: keep the Stage-1 order.
         # Only the copilot's search_catalog uses this; the /search endpoint never did.
         return candidates[:limit]
