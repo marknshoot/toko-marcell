@@ -34,6 +34,7 @@ services:
       GEMINI_API_KEY: ${GEMINI_API_KEY:-}
       GEMINI_MODEL: ${GEMINI_MODEL:-gemini-2.5-flash}
       ENABLE_TRIMODAL: "true"
+      ENABLE_RERANKER: ${ENABLE_RERANKER:-true}
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-openrouter/free}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}

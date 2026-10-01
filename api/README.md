@@ -70,6 +70,7 @@ life of the process and would otherwise serve a stale catalog.
 | `CLIP_VISION_ONNX_PREFER` | | `int8` | Prefer `int8` or `fp32` ONNX vision encoder |
 | `CLIP_TEXT_ONNX_PATH` | | auto-detected | Explicit path to the champion ONNX **text** encoder (fp16 preferred) |
 | `ENABLE_TRIMODAL` | | `false` (set `true` in local Compose) | Enable `mode=trimodal`; it loads both MiniLM and the text ONNX, so it needs ≥1 GB RAM |
+| `ENABLE_RERANKER` | | `true` (set `false` on the free Render tier) | Cross-encoder reranking for the copilot's `search_catalog`. Off on 512 MB because the copilot image turn otherwise peaks at ~560 MB; `/search` never used it |
 | `FASTEMBED_CACHE_DIR` | | `/tmp/fastembed_cache` | Cache for MiniLM/CLIP fastembed models |
 | `HF_HUB_CACHE` | | `/tmp/hf_cache` | Cache for the ONNX cross-encoder |
 

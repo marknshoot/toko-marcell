@@ -916,6 +916,10 @@ This section exists because a portfolio that hides its edges is less useful than
   quotas, so no multimodal model is used. An attached photo is treated as a **search key**
   (CLIP vision → `image_embedding`), and the retrieved products are passed to the text model as tool
   evidence: the assistant can find visually similar products but cannot describe the image.
+- **On the 512 MB free tier the copilot's cross-encoder reranker is off** (`ENABLE_RERANKER=false`).
+  A copilot image turn (visual search + catalog search) otherwise peaks at ~560 MB and OOMs the
+  instance; without the reranker it peaks at ~460 MB and falls back to Stage-1 ranking. The `/search`
+  endpoint never used the reranker, so HTTP search quality is unchanged; local Compose keeps it on.
 - **Live API sleeps.** Render free tier cold-starts in 30–50 s; the UI handles it, but the first
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA

@@ -27,3 +27,6 @@ services:
         sync: false
       - key: ENABLE_TRIMODAL
         value: "false"
+      # Cross-encoder off on 512 MB: keeps the copilot image turn under the memory limit.
+      - key: ENABLE_RERANKER
+        value: "false"
