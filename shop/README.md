@@ -63,8 +63,10 @@ shield, because a false "down" is worse than a heavier probe.
   costs first paint.
 - Sends conversation history plus an optional image to `POST /copilot/chat`; renders the reply, the
   **structured product cards** the backend returns, and a tool trace.
-- **Image upload** (max 5 MB, validated client-side) is forwarded as a data URL for the copilot's
-  visual search tool.
+- **Image upload** (max 5 MB, validated client-side) is sent as a data URL. The copilot is
+  **text-only** (free vision models have tiny quotas), so the backend runs the CLIP visual search
+  deterministically and feeds the products back as evidence — the assistant *searches* the photo, it
+  cannot *see* it.
 - Quick prompts cover the demo's best paths (outfit under a budget, TB/BB sizing, Levi's fit
   comparison, shipping/QRIS).
 - Product cards in replies can be added to the cart inline.

@@ -265,6 +265,13 @@ Provider: **OpenRouter** (OpenAI-compatible via LangChain) whenever `OPENROUTER_
 otherwise **Google Gemini**. `LLM_MODEL` defaults to `openrouter/free`, which auto-routes across
 OpenRouter's free pool; the exact `LLM_MODEL`/`LLM_BASE_URL` in use is printed once at startup.
 
+**Text-only copilot — the image is a search key, not model input.** An attached image is never sent
+to the LLM. `search_by_image` runs **deterministically** on the request (and is then withheld from the
+planner's tool set, so it can't be called twice), and its products are injected as tool evidence before
+synthesis. The assistant finds visually similar products but never claims to see the photo. Free
+vision-capable models were rejected: their request quotas are too small for a chat that may also call
+tools.
+
 ```text
 Node 1  Planner / guardrail   one LLM call with the tool schema bound → 0..n tool calls
 Node 2  Tool fan-out          asyncio.gather over deterministic DB tools

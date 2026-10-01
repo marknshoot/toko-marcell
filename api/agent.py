@@ -274,6 +274,7 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall sty
 - Comparing products (A vs B): Invoke `get_product_details` for both products.
 - Customer ratings & satisfaction: Invoke `search_catalog` or `get_product_details` to inspect official average rating and rating count from catalog data.
 - Shipping, QRIS demo, returns: Invoke `lookup_store_policy`.
+- Image attachments: The shopper may attach a photo. You CANNOT see it — the system has already run a visual search and its results are in the tool evidence. Recommend those visually similar products; never claim to see or describe the photo.
 
 ### STRICT GROUNDING & ANTI-HALLUCINATION RULES:
 1. ZERO PRODUCT INVENTIONS:
@@ -479,14 +480,38 @@ async def chat_copilot(
         elif m["role"] == "assistant":
             convo_history.append(AIMessage(content=m["content"]))
 
-    if image_url:
-        convo_history[-1].content += f"\n[User attached an image: {image_url}]"
-
     tool_calls_executed = []
     executed_tools_results = []
 
+    # The copilot is text-only: free vision-capable models have very small usage quotas,
+    # so an attached image is never sent to the LLM. It is used as a retrieval key instead —
+    # the visual search runs deterministically and its products become tool evidence.
+    if image_url:
+        convo_history[-1].content += (
+            "\n[The shopper attached an image. You cannot see or describe it. Visual-search "
+            "results for that image are in the tool evidence — use them.]"
+        )
+        try:
+            image_hits = await asyncio.to_thread(
+                search_by_image, image_url_or_ref=image_url, limit=4, db_url=url
+            )
+        except Exception as e:
+            print(f"[copilot] user-image visual search failed: {e}", flush=True)
+            image_hits = []
+        if image_hits:
+            tool_calls_executed.append(
+                {"name": "search_by_image", "args": {"source": "user_attachment"}}
+            )
+            executed_tools_results.append({"name": "search_by_image", "result": image_hits})
+
+    # When an image was attached we already ran the visual search deterministically, so don't
+    # offer that tool to the planner — it cannot reproduce the image ref and would duplicate it.
+    planner_tools = TOOLS_SCHEMA
+    if image_url:
+        planner_tools = [t for t in TOOLS_SCHEMA if t["function"]["name"] != "search_by_image"]
+
     try:
-        planner_llm = _get_llm(0.1).bind_tools(TOOLS_SCHEMA)
+        planner_llm = _get_llm(0.1).bind_tools(planner_tools)
 
         ai_msg = await asyncio.to_thread(planner_llm.invoke, convo_history)
         tool_calls = ai_msg.tool_calls or []
@@ -506,19 +531,26 @@ async def chat_copilot(
             tasks.append(_execute_tool_call(name, args, url))
 
         raw_results = await asyncio.gather(*tasks)
-        executed_tools_results = raw_results
+        executed_tools_results.extend(raw_results)
 
+    if executed_tools_results:
         evidence_lines = []
-        for tc, res in zip(tool_calls, executed_tools_results):
-            compact_res = _compact_tool_result(tc["name"], res.get("result", res))
-            evidence_lines.append(f"Tool `{tc['name']}` results:\n{json.dumps(compact_res, default=str)}")
+        for item in executed_tools_results:
+            compact_res = _compact_tool_result(item["name"], item.get("result", item))
+            evidence_lines.append(f"Tool `{item['name']}` results:\n{json.dumps(compact_res, default=str)}")
 
         evidence_str = "\n\n".join(evidence_lines)
+        image_note = (
+            "\nCatatan: shopper melampirkan sebuah foto. Kamu TIDAK bisa melihat isi foto; "
+            "gunakan hasil visual search di bawah untuk merekomendasikan produk yang mirip.\n"
+            if image_url else ""
+        )
 
         syn_prompt = [
             SystemMessage(content=ADMIN_SYSTEM_PROMPT),
             HumanMessage(content=(
-                f"Pertanyaan shopper: {latest_msg}\n\n"
+                f"Pertanyaan shopper: {latest_msg}\n"
+                f"{image_note}\n"
                 f"Data resmi katalog & hasil sistem:\n{evidence_str}\n\n"
                 "Instruksi: Jawab shopper dengan gaya bahasa Admin Toko Marcell yang ramah, hangat, dan solutif. "
                 "Sebutkan nama produk, brand, harga dalam Rupiah (Rp), dan berikan rekomendasi jujur berdasarkan data di atas."

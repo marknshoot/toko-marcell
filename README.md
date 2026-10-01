@@ -447,6 +447,13 @@ An in-store stylist and customer assistant built with **LangChain**. The provide
 generous than Gemini's free tier — and it falls back to **Google Gemini** when that key is absent.
 The design principle is boring on purpose: **the model never invents a product, a price, or a policy.**
 
+**Text-only on purpose — it searches images, it doesn't see them.** The copilot runs on a text LLM, so
+it **cannot see or describe an attached photo**. Free vision-capable models have very small request
+quotas, so no multimodal LLM is used. Instead an image is a **retrieval key**: the CLIP vision encoder
+embeds it and searches `image_embedding` deterministically, then those products are handed to the text
+model as evidence. Net effect: it can *find* products that look like your photo, but it will never
+pretend to *see* it.
+
 ### Execution model
 
 ```mermaid
@@ -905,6 +912,10 @@ This section exists because a portfolio that hides its edges is less useful than
   MiniLM, it is **disabled by default** on the deployment (`ENABLE_TRIMODAL`) and returns `400` when
   off. If no encoder is present the endpoint returns **`503`** by design (a zero-shot encoder would
   occupy a different space). Text search and the copilot are unaffected.
+- **The copilot is text-only — it cannot see images.** Free vision-capable LLMs have very small usage
+  quotas, so no multimodal model is used. An attached photo is treated as a **search key**
+  (CLIP vision → `image_embedding`), and the retrieved products are passed to the text model as tool
+  evidence: the assistant can find visually similar products but cannot describe the image.
 - **Live API sleeps.** Render free tier cold-starts in 30–50 s; the UI handles it, but the first
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA
