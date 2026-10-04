@@ -31,8 +31,8 @@ def _get_reranker():
             return None, None
 
         try:
-            from huggingface_hub import hf_hub_download
             import onnxruntime as ort
+            from huggingface_hub import hf_hub_download
             from tokenizers import Tokenizer
 
             cache_dir = os.environ.get("HF_HUB_CACHE", "/tmp/hf_cache")
@@ -142,7 +142,7 @@ def rerank(
         scores = outputs[0].flatten().tolist()
 
         scored_candidates = []
-        for cand, score in zip(candidates, scores):
+        for cand, score in zip(candidates, scores, strict=True):
             cand_copy = dict(cand)
             cand_copy["cross_encoder_score"] = float(score)
             scored_candidates.append(cand_copy)

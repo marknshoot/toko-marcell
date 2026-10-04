@@ -64,6 +64,11 @@ life of the process and would otherwise serve a stale catalog.
 | `GEMINI_API_KEY` | fallback | — | Google AI Studio key; used **only** when `OPENROUTER_API_KEY` is empty |
 | `GEMINI_MODEL` | | `gemini-3.5-flash-lite` (code) / `gemini-2.5-flash` (compose) | Any Gemini chat model (fallback path) |
 | `CORS_ORIGINS` | | `http://localhost:3000,https://toko-marcell.vercel.app` | Comma-separated allowlist; `*` opens it up |
+| `ADMIN_TOKEN` | for reindex | — | Secret token for `POST /search/reindex`; endpoint returns `503` when unset. Docker Compose defaults to `dev-admin-token`; set a strong value in production |
+| `TRUST_PROXY` | | `false` | Set `true` on Render (behind their LB) so `X-Forwarded-For` is trusted for rate-limiting |
+| `COPILOT_RATE_LIMIT_PER_MIN` | | `10` | Max copilot requests per client IP per minute |
+| `COPILOT_RATE_LIMIT_PER_DAY` | | `100` | Max copilot requests per client IP per day |
+| `IMAGE_FETCH_ALLOWED_HOSTS` | | `images-na.ssl-images-amazon.com,m.media-amazon.com` | HTTPS hosts the copilot may fetch images from |
 | `HF_MODEL_REPO` | | `Marcell-Kristianto/toko-marcell-clip` | HF repo for the champion ONNX text encoder |
 | `CLIP_MODEL_DIR` / `CLIP_MODEL_PATH` | | auto-detected | Optional local paths for the champion CLIP **PyTorch** weights |
 | `CLIP_VISION_ONNX_PATH` | | auto-detected | Explicit path to the champion ONNX **vision** encoder |

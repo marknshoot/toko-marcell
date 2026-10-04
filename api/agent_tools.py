@@ -6,13 +6,16 @@ with zero hallucination, strict price handling (IDR), and robust error handling.
 """
 
 import base64
+import io
+import ipaddress
 import os
 import re
+import socket
 import urllib.request
 from typing import Any
 
 import psycopg
-
+from PIL import Image
 from reranker import rerank
 from search import (
     embed_image_bytes,
@@ -21,6 +24,133 @@ from search import (
     reciprocal_rank_fusion,
     tokenize,
 )
+
+# ---------------------------------------------------------------------------
+# Image input validation helpers (SSRF-safe)
+# ---------------------------------------------------------------------------
+
+_IMAGE_DATA_URL_RE = re.compile(
+    r"^data:image/(png|jpeg|webp|gif);base64,",
+    re.IGNORECASE,
+)
+
+# Max decoded image size: 10 MB
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+
+# Allowlisted hosts for HTTPS image fetching (env-configurable)
+_DEFAULT_ALLOWED_HOSTS = "images-na.ssl-images-amazon.com,m.media-amazon.com"
+
+
+def _get_allowed_hosts() -> frozenset[str]:
+    raw = os.environ.get("IMAGE_FETCH_ALLOWED_HOSTS", _DEFAULT_ALLOWED_HOSTS)
+    return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
+
+
+def _is_private_ip(ip_str: str) -> bool:
+    """Return True if the IP is private, loopback, link-local, or reserved."""
+    try:
+        addr = ipaddress.ip_address(ip_str)
+        return (
+            addr.is_private
+            or addr.is_loopback
+            or addr.is_link_local
+            or addr.is_reserved
+            or addr.is_multicast
+        )
+    except ValueError:
+        return True  # unparseable → reject
+
+
+def _fetch_image_from_url(url: str) -> bytes:
+    """Fetch image bytes from an HTTPS URL on the allowlist, with SSRF protections."""
+    from urllib.parse import urlparse
+
+    parsed = urlparse(url)
+    if parsed.scheme != "https":
+        raise ValueError("Only https:// URLs are allowed for image fetching")
+
+    host = (parsed.hostname or "").lower()
+    allowed = _get_allowed_hosts()
+    if host not in allowed:
+        raise ValueError(
+            f"Host '{host}' is not in the image fetch allowlist: {sorted(allowed)}"
+        )
+
+    # DNS resolution check: reject private/loopback/link-local IPs
+    try:
+        resolved = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
+    except socket.gaierror as exc:
+        raise ValueError(f"DNS resolution failed for '{host}': {exc}") from exc
+
+    for _family, _type, _proto, _canonname, sockaddr in resolved:
+        ip_str = sockaddr[0]
+        if _is_private_ip(ip_str):
+            raise ValueError(
+                f"Host '{host}' resolves to a private/reserved IP ({ip_str}); request blocked"
+            )
+
+    # Fetch with no redirects, 5 s timeout, size cap
+    req = urllib.request.Request(url, headers={"User-Agent": "TokoMarcell/1.0"})
+    # Use a custom opener that disallows redirects
+    class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+        def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ARG002
+            raise ValueError(f"Redirect to {newurl} is not allowed")
+
+    opener = urllib.request.build_opener(_NoRedirectHandler)
+    with opener.open(req, timeout=5) as resp:
+        data = resp.read(_MAX_IMAGE_BYTES + 1)
+        if len(data) > _MAX_IMAGE_BYTES:
+            raise ValueError("Fetched image exceeds 10 MB size limit")
+        return data
+
+
+def validate_image_input(
+    image_bytes: bytes | None = None,
+    image_url_or_ref: str | None = None,
+) -> bytes:
+    """Resolve image input to validated bytes. Accepts:
+    - Raw bytes (passed directly)
+    - data:image/(png|jpeg|webp|gif);base64,... data URLs
+    - https:// URLs on the allowlisted hosts only
+
+    Rejects file paths, http:// URLs, and non-allowlisted hosts.
+    All inputs are verified as valid images with Pillow and capped at 10 MB decoded.
+    """
+    contents: bytes | None = image_bytes
+
+    if contents is None and image_url_or_ref:
+        ref = image_url_or_ref.strip()
+
+        # Data URL
+        m = _IMAGE_DATA_URL_RE.match(ref)
+        if m:
+            b64data = ref[m.end():]
+            contents = base64.b64decode(b64data)
+        elif ref.startswith("https://"):
+            contents = _fetch_image_from_url(ref)
+        elif ref.startswith("http://"):
+            raise ValueError("Only https:// URLs are allowed (http:// is rejected)")
+        else:
+            # Reject everything else (file paths, relative refs, etc.)
+            raise ValueError(
+                "Invalid image reference. Accepted: raw bytes, data:image/...;base64,... URLs, "
+                "or https:// URLs on allowlisted hosts."
+            )
+
+    if not contents:
+        raise ValueError("No image data provided")
+
+    if len(contents) > _MAX_IMAGE_BYTES:
+        raise ValueError(f"Image exceeds {_MAX_IMAGE_BYTES // (1024 * 1024)} MB size limit")
+
+    # Verify with Pillow that the data is actually an image
+    try:
+        img = Image.open(io.BytesIO(contents))
+        img.verify()
+    except Exception as exc:
+        raise ValueError(f"Data is not a valid image: {exc}") from exc
+
+    return contents
 
 DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
 
@@ -290,24 +420,14 @@ def search_by_image(
 ) -> list[dict[str, Any]]:
     """Visual Search (CLIP ViT-B/32 + pgvector HNSW cosine distance).
 
-    Accepts raw image bytes, HTTP URL, or base64 data URL.
+    Accepts raw image bytes, base64 data URLs (data:image/...;base64,...),
+    or HTTPS URLs on allowlisted hosts only. File paths and arbitrary HTTP
+    URLs are rejected (SSRF protection).
     """
     url = db_url or DATABASE_URL
-    contents = image_bytes
-
-    if contents is None and image_url_or_ref:
-        if image_url_or_ref.startswith("data:image/"):
-            _, b64data = image_url_or_ref.split(",", 1)
-            contents = base64.b64decode(b64data)
-        elif image_url_or_ref.startswith("http://") or image_url_or_ref.startswith("https://"):
-            req = urllib.request.Request(image_url_or_ref, headers={"User-Agent": "TokoMarcell/1.0"})
-            with urllib.request.urlopen(req, timeout=5) as resp:
-                contents = resp.read()
-        elif os.path.isfile(image_url_or_ref):
-            with open(image_url_or_ref, "rb") as f:
-                contents = f.read()
-
-    if not contents:
+    try:
+        contents = validate_image_input(image_bytes, image_url_or_ref)
+    except ValueError:
         return []
 
     vec = embed_image_bytes(contents)

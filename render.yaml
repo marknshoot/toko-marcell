@@ -30,3 +30,8 @@ services:
       # Cross-encoder off on 512 MB: keeps the copilot image turn under the memory limit.
       - key: ENABLE_RERANKER
         value: "false"
+      # Admin token for /search/reindex — set a strong secret in the dashboard.
+      - key: ADMIN_TOKEN
+        sync: false
+      - key: TRUST_PROXY
+        value: "true"

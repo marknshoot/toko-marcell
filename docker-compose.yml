@@ -23,7 +23,7 @@ services:
   api:
     build:
       context: ./api
-      dockerfile: dockerfile
+      dockerfile: Dockerfile
     container_name: toko-api
     restart: unless-stopped
     ports:
@@ -38,12 +38,14 @@ services:
       OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-}
       LLM_MODEL: ${LLM_MODEL:-openrouter/free}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
+      ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
+      TRUST_PROXY: "false"
     env_file:
       - path: .env
         required: false
     volumes:
       - ./models:/models:ro
-      - cache_hf:/root/.cache/huggingface
+      - cache_hf:/home/appuser/.cache/huggingface
       - cache_fastembed:/tmp/fastembed_cache
     depends_on:
       db:
