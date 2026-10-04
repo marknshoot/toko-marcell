@@ -65,19 +65,8 @@ class ConfirmIn(BaseModel):
 
 # ── Copilot ──────────────────────────────────────────────────────────────────
 
-class CopilotMessage(BaseModel):
-    role: Literal["user", "assistant", "system"]
-    content: str = Field(min_length=1, max_length=2000)
-    imageUrl: str | None = Field(default=None, max_length=8_000_000)
-
-
-class CopilotChatIn(BaseModel):
-    session_id: str | None = Field(default=None, max_length=64)
-    messages: list[CopilotMessage] = Field(min_length=1, max_length=20)
-    image_url: str | None = Field(default=None, max_length=8_000_000)
-
-
-# ── Copilot v2 (design §API contract v2) ─────────────────────────────────────
+# v2 (design §API contract v2) — the old multi-message / image-upload request
+# schema (CopilotChatIn/CopilotMessage) was removed with the agent rewrite.
 
 class CopilotContextV2(BaseModel):
     """Where the shopper is: the product page they're on and any products they
