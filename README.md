@@ -48,6 +48,24 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 | 3 | **Grounded agentic copilot** — LangChain + OpenRouter (free tier), 4 bound tools, policy RAG | answers only from tool evidence; refuses off-topic and injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
 | 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe | [recommendation engine](./README.md#-recommendation-engine) |
 
+**Measured results** (committed artifacts in [`pipelines/results/`](./pipelines/results/)):
+
+| Benchmark | Metric | BM25 | Hybrid | Hybrid+Rerank | Trimodal |
+|---|---|:---:|:---:|:---:|:---:|
+| IR (32 queries) | nDCG@10 | 0.794 | **0.879** | 0.893 | 0.908 |
+| IR (32 queries) | MRR@10 | 0.792 | **0.906** | 0.885 | 0.932 |
+| IR — Indonesian (8q) | nDCG@10 | 0.334 | 0.622 | 0.739 | **0.821** |
+
+| Recs (5 K users) | HR@10 | nDCG@10 |
+|---|:---:|:---:|
+| Random | 0.22% | 0.0011 |
+| Popularity | 0.18% | 0.0008 |
+| **Item-to-Item CF** | **7.96%** | **0.0501** |
+
+The cross-encoder reranker improves nDCG@10 overall (+1.4 pts vs hybrid) and substantially on
+Indonesian queries (+0.117), but slightly lowers MRR@10 overall (0.906 → 0.885). On Category/Attr
+it drops nDCG (0.990 → 0.940). Net: a modest positive, strongest on the hardest group.
+
 **Stack:** Next.js 16 · React 19 · FastAPI · PostgreSQL 16 + pgvector · PyTorch/CLIP · LangChain +
 OpenRouter (free tier, Gemini fallback) · Docker · Vercel + Render + Neon.
 

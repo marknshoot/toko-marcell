@@ -1,0 +1,1823 @@
+{
+  "timestamp": "2026-10-04T05:02:29.142388+00:00",
+  "git_commit": "c7a830c",
+  "api_url": "http://localhost:8001",
+  "query_count": 32,
+  "modes": {
+    "bm25": {
+      "summary": {
+        "by_group": {
+          "Brand/SKU": {
+            "n": 8,
+            "p10": 1.0,
+            "hr10": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0
+          },
+          "Category/Attr": {
+            "n": 8,
+            "p10": 0.9125,
+            "hr10": 1.0,
+            "mrr": 0.9167,
+            "ndcg": 0.9566
+          },
+          "Indonesian/M6": {
+            "n": 8,
+            "p10": 0.35,
+            "hr10": 0.375,
+            "mrr": 0.375,
+            "ndcg": 0.3336
+          },
+          "Semantic/Intent": {
+            "n": 8,
+            "p10": 0.7125,
+            "hr10": 1.0,
+            "mrr": 0.875,
+            "ndcg": 0.8874
+          }
+        },
+        "overall": {
+          "n": 32,
+          "p10": 0.7438,
+          "hr10": 0.8438,
+          "mrr": 0.7917,
+          "ndcg": 0.7944
+        }
+      },
+      "per_query": [
+        {
+          "query": "levis 501",
+          "group": "Brand/SKU",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 36.26
+        },
+        {
+          "query": "calvin klein boxer briefs",
+          "group": "Brand/SKU",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 22.25
+        },
+        {
+          "query": "dickies 874",
+          "group": "Brand/SKU",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 18.37
+        },
+        {
+          "query": "carhartt jacket",
+          "group": "Brand/SKU",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 21.34
+        },
+        {
+          "query": "skechers memory foam",
+          "group": "Brand/SKU",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 20.79
+        },
+        {
+          "query": "under armour heatgear",
+          "group": "Brand/SKU",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 13.64
+        },
+        {
+          "query": "adidas superstar",
+          "group": "Brand/SKU",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 17.04
+        },
+        {
+          "query": "ray ban aviator",
+          "group": "Brand/SKU",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 22.9
+        },
+        {
+          "query": "white leather sneakers",
+          "group": "Category/Attr",
+          "mode": "bm25",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 0.3333,
+          "ndcg": 0.6657,
+          "time_ms": 19.23
+        },
+        {
+          "query": "black waterproof boots",
+          "group": "Category/Attr",
+          "mode": "bm25",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9896,
+          "time_ms": 16.76
+        },
+        {
+          "query": "slim fit stretch jeans",
+          "group": "Category/Attr",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 19.48
+        },
+        {
+          "query": "fleece lined hoodie",
+          "group": "Category/Attr",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 19.96
+        },
+        {
+          "query": "polarized sunglasses",
+          "group": "Category/Attr",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 18.98
+        },
+        {
+          "query": "genuine leather bifold wallet",
+          "group": "Category/Attr",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 21.44
+        },
+        {
+          "query": "yoga leggings high waist",
+          "group": "Category/Attr",
+          "mode": "bm25",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9972,
+          "time_ms": 21.81
+        },
+        {
+          "query": "down winter parka coat",
+          "group": "Category/Attr",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 15.75
+        },
+        {
+          "query": "raincoat for winter storm",
+          "group": "Semantic/Intent",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 14.69
+        },
+        {
+          "query": "comfy shoes for all day standing",
+          "group": "Semantic/Intent",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9677,
+          "time_ms": 22.04
+        },
+        {
+          "query": "formal wedding guest dress",
+          "group": "Semantic/Intent",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9224,
+          "time_ms": 18.03
+        },
+        {
+          "query": "breathable clothes for hot summer",
+          "group": "Semantic/Intent",
+          "mode": "bm25",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9815,
+          "time_ms": 16.36
+        },
+        {
+          "query": "sweat wicking gym workout clothes",
+          "group": "Semantic/Intent",
+          "mode": "bm25",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9466,
+          "time_ms": 16.08
+        },
+        {
+          "query": "cozy loungewear for working from home",
+          "group": "Semantic/Intent",
+          "mode": "bm25",
+          "p10": 0.6,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6697,
+          "time_ms": 14.42
+        },
+        {
+          "query": "heavy duty outdoor work trousers",
+          "group": "Semantic/Intent",
+          "mode": "bm25",
+          "p10": 0.3,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6113,
+          "time_ms": 16.83
+        },
+        {
+          "query": "minimalist casual everyday wristwatch",
+          "group": "Semantic/Intent",
+          "mode": "bm25",
+          "p10": 0.1,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 18.03
+        },
+        {
+          "query": "baju santai rumahan adem",
+          "group": "Indonesian/M6",
+          "mode": "bm25",
+          "p10": 0.0,
+          "hr10": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "time_ms": 2.36
+        },
+        {
+          "query": "sepatu lari empuk nyaman",
+          "group": "Indonesian/M6",
+          "mode": "bm25",
+          "p10": 0.0,
+          "hr10": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "time_ms": 2.24
+        },
+        {
+          "query": "celana kantor formal hitam",
+          "group": "Indonesian/M6",
+          "mode": "bm25",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9938,
+          "time_ms": 19.24
+        },
+        {
+          "query": "jaket musim hujan anti air",
+          "group": "Indonesian/M6",
+          "mode": "bm25",
+          "p10": 0.0,
+          "hr10": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "time_ms": 14.52
+        },
+        {
+          "query": "tas ransel laptop kerja",
+          "group": "Indonesian/M6",
+          "mode": "bm25",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.7257,
+          "time_ms": 16.3
+        },
+        {
+          "query": "kaos polo polos pria",
+          "group": "Indonesian/M6",
+          "mode": "bm25",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9493,
+          "time_ms": 13.59
+        },
+        {
+          "query": "kacamata hitam anti silau",
+          "group": "Indonesian/M6",
+          "mode": "bm25",
+          "p10": 0.0,
+          "hr10": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "time_ms": 14.12
+        },
+        {
+          "query": "dompet kulit asli pria",
+          "group": "Indonesian/M6",
+          "mode": "bm25",
+          "p10": 0.0,
+          "hr10": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "time_ms": 2.41
+        }
+      ]
+    },
+    "vector": {
+      "summary": {
+        "by_group": {
+          "Brand/SKU": {
+            "n": 8,
+            "p10": 0.9625,
+            "hr10": 1.0,
+            "mrr": 1.0,
+            "ndcg": 0.9693
+          },
+          "Category/Attr": {
+            "n": 8,
+            "p10": 0.875,
+            "hr10": 1.0,
+            "mrr": 1.0,
+            "ndcg": 0.9867
+          },
+          "Indonesian/M6": {
+            "n": 8,
+            "p10": 0.3625,
+            "hr10": 0.875,
+            "mrr": 0.5451,
+            "ndcg": 0.5441
+          },
+          "Semantic/Intent": {
+            "n": 8,
+            "p10": 0.8375,
+            "hr10": 1.0,
+            "mrr": 0.9062,
+            "ndcg": 0.8652
+          }
+        },
+        "overall": {
+          "n": 32,
+          "p10": 0.7594,
+          "hr10": 0.9688,
+          "mrr": 0.8628,
+          "ndcg": 0.8413
+        }
+      },
+      "per_query": [
+        {
+          "query": "levis 501",
+          "group": "Brand/SKU",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9693,
+          "time_ms": 35.89
+        },
+        {
+          "query": "calvin klein boxer briefs",
+          "group": "Brand/SKU",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 37.36
+        },
+        {
+          "query": "dickies 874",
+          "group": "Brand/SKU",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8126,
+          "time_ms": 37.25
+        },
+        {
+          "query": "carhartt jacket",
+          "group": "Brand/SKU",
+          "mode": "vector",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9896,
+          "time_ms": 33.59
+        },
+        {
+          "query": "skechers memory foam",
+          "group": "Brand/SKU",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 36.96
+        },
+        {
+          "query": "under armour heatgear",
+          "group": "Brand/SKU",
+          "mode": "vector",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9987,
+          "time_ms": 42.51
+        },
+        {
+          "query": "adidas superstar",
+          "group": "Brand/SKU",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9843,
+          "time_ms": 45.32
+        },
+        {
+          "query": "ray ban aviator",
+          "group": "Brand/SKU",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 36.93
+        },
+        {
+          "query": "white leather sneakers",
+          "group": "Category/Attr",
+          "mode": "vector",
+          "p10": 0.7,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9499,
+          "time_ms": 38.54
+        },
+        {
+          "query": "black waterproof boots",
+          "group": "Category/Attr",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 52.07
+        },
+        {
+          "query": "slim fit stretch jeans",
+          "group": "Category/Attr",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 36.82
+        },
+        {
+          "query": "fleece lined hoodie",
+          "group": "Category/Attr",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 35.69
+        },
+        {
+          "query": "polarized sunglasses",
+          "group": "Category/Attr",
+          "mode": "vector",
+          "p10": 0.7,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9878,
+          "time_ms": 33.25
+        },
+        {
+          "query": "genuine leather bifold wallet",
+          "group": "Category/Attr",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 37.85
+        },
+        {
+          "query": "yoga leggings high waist",
+          "group": "Category/Attr",
+          "mode": "vector",
+          "p10": 0.7,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9731,
+          "time_ms": 33.39
+        },
+        {
+          "query": "down winter parka coat",
+          "group": "Category/Attr",
+          "mode": "vector",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9829,
+          "time_ms": 38.92
+        },
+        {
+          "query": "raincoat for winter storm",
+          "group": "Semantic/Intent",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9661,
+          "time_ms": 38.41
+        },
+        {
+          "query": "comfy shoes for all day standing",
+          "group": "Semantic/Intent",
+          "mode": "vector",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9502,
+          "time_ms": 48.26
+        },
+        {
+          "query": "formal wedding guest dress",
+          "group": "Semantic/Intent",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.7488,
+          "time_ms": 35.96
+        },
+        {
+          "query": "breathable clothes for hot summer",
+          "group": "Semantic/Intent",
+          "mode": "vector",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9673,
+          "time_ms": 46.48
+        },
+        {
+          "query": "sweat wicking gym workout clothes",
+          "group": "Semantic/Intent",
+          "mode": "vector",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.7401,
+          "time_ms": 38.58
+        },
+        {
+          "query": "cozy loungewear for working from home",
+          "group": "Semantic/Intent",
+          "mode": "vector",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9918,
+          "time_ms": 43.56
+        },
+        {
+          "query": "heavy duty outdoor work trousers",
+          "group": "Semantic/Intent",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9863,
+          "time_ms": 38.13
+        },
+        {
+          "query": "minimalist casual everyday wristwatch",
+          "group": "Semantic/Intent",
+          "mode": "vector",
+          "p10": 0.4,
+          "hr10": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.571,
+          "time_ms": 37.39
+        },
+        {
+          "query": "baju santai rumahan adem",
+          "group": "Indonesian/M6",
+          "mode": "vector",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.6066,
+          "time_ms": 46.71
+        },
+        {
+          "query": "sepatu lari empuk nyaman",
+          "group": "Indonesian/M6",
+          "mode": "vector",
+          "p10": 0.2,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6053,
+          "time_ms": 41.71
+        },
+        {
+          "query": "celana kantor formal hitam",
+          "group": "Indonesian/M6",
+          "mode": "vector",
+          "p10": 0.4,
+          "hr10": 1.0,
+          "mrr": 0.25,
+          "ndcg": 0.5668,
+          "time_ms": 42.67
+        },
+        {
+          "query": "jaket musim hujan anti air",
+          "group": "Indonesian/M6",
+          "mode": "vector",
+          "p10": 0.0,
+          "hr10": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "time_ms": 35.04
+        },
+        {
+          "query": "tas ransel laptop kerja",
+          "group": "Indonesian/M6",
+          "mode": "vector",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.7427,
+          "time_ms": 40.6
+        },
+        {
+          "query": "kaos polo polos pria",
+          "group": "Indonesian/M6",
+          "mode": "vector",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9498,
+          "time_ms": 48.18
+        },
+        {
+          "query": "kacamata hitam anti silau",
+          "group": "Indonesian/M6",
+          "mode": "vector",
+          "p10": 0.1,
+          "hr10": 1.0,
+          "mrr": 0.1111,
+          "ndcg": 0.301,
+          "time_ms": 32.84
+        },
+        {
+          "query": "dompet kulit asli pria",
+          "group": "Indonesian/M6",
+          "mode": "vector",
+          "p10": 0.2,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.5803,
+          "time_ms": 38.02
+        }
+      ]
+    },
+    "hybrid": {
+      "summary": {
+        "by_group": {
+          "Brand/SKU": {
+            "n": 8,
+            "p10": 0.975,
+            "hr10": 1.0,
+            "mrr": 1.0,
+            "ndcg": 0.9888
+          },
+          "Category/Attr": {
+            "n": 8,
+            "p10": 0.9,
+            "hr10": 1.0,
+            "mrr": 1.0,
+            "ndcg": 0.9899
+          },
+          "Indonesian/M6": {
+            "n": 8,
+            "p10": 0.4125,
+            "hr10": 0.875,
+            "mrr": 0.6875,
+            "ndcg": 0.6221
+          },
+          "Semantic/Intent": {
+            "n": 8,
+            "p10": 0.8125,
+            "hr10": 1.0,
+            "mrr": 0.9375,
+            "ndcg": 0.9147
+          }
+        },
+        "overall": {
+          "n": 32,
+          "p10": 0.775,
+          "hr10": 0.9688,
+          "mrr": 0.9062,
+          "ndcg": 0.8789
+        }
+      },
+      "per_query": [
+        {
+          "query": "levis 501",
+          "group": "Brand/SKU",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 37.15
+        },
+        {
+          "query": "calvin klein boxer briefs",
+          "group": "Brand/SKU",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 41.85
+        },
+        {
+          "query": "dickies 874",
+          "group": "Brand/SKU",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9288,
+          "time_ms": 32.92
+        },
+        {
+          "query": "carhartt jacket",
+          "group": "Brand/SKU",
+          "mode": "hybrid",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9972,
+          "time_ms": 35.43
+        },
+        {
+          "query": "skechers memory foam",
+          "group": "Brand/SKU",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 32.06
+        },
+        {
+          "query": "under armour heatgear",
+          "group": "Brand/SKU",
+          "mode": "hybrid",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 37.25
+        },
+        {
+          "query": "adidas superstar",
+          "group": "Brand/SKU",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9846,
+          "time_ms": 38.76
+        },
+        {
+          "query": "ray ban aviator",
+          "group": "Brand/SKU",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 31.55
+        },
+        {
+          "query": "white leather sneakers",
+          "group": "Category/Attr",
+          "mode": "hybrid",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9318,
+          "time_ms": 44.68
+        },
+        {
+          "query": "black waterproof boots",
+          "group": "Category/Attr",
+          "mode": "hybrid",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9938,
+          "time_ms": 39.28
+        },
+        {
+          "query": "slim fit stretch jeans",
+          "group": "Category/Attr",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 35.95
+        },
+        {
+          "query": "fleece lined hoodie",
+          "group": "Category/Attr",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 41.1
+        },
+        {
+          "query": "polarized sunglasses",
+          "group": "Category/Attr",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 34.1
+        },
+        {
+          "query": "genuine leather bifold wallet",
+          "group": "Category/Attr",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 41.62
+        },
+        {
+          "query": "yoga leggings high waist",
+          "group": "Category/Attr",
+          "mode": "hybrid",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9933,
+          "time_ms": 41.17
+        },
+        {
+          "query": "down winter parka coat",
+          "group": "Category/Attr",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 34.29
+        },
+        {
+          "query": "raincoat for winter storm",
+          "group": "Semantic/Intent",
+          "mode": "hybrid",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9671,
+          "time_ms": 37.67
+        },
+        {
+          "query": "comfy shoes for all day standing",
+          "group": "Semantic/Intent",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9661,
+          "time_ms": 40.24
+        },
+        {
+          "query": "formal wedding guest dress",
+          "group": "Semantic/Intent",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8323,
+          "time_ms": 38.16
+        },
+        {
+          "query": "breathable clothes for hot summer",
+          "group": "Semantic/Intent",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.996,
+          "time_ms": 42.69
+        },
+        {
+          "query": "sweat wicking gym workout clothes",
+          "group": "Semantic/Intent",
+          "mode": "hybrid",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.815,
+          "time_ms": 39.06
+        },
+        {
+          "query": "cozy loungewear for working from home",
+          "group": "Semantic/Intent",
+          "mode": "hybrid",
+          "p10": 0.6,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9079,
+          "time_ms": 39.33
+        },
+        {
+          "query": "heavy duty outdoor work trousers",
+          "group": "Semantic/Intent",
+          "mode": "hybrid",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.927,
+          "time_ms": 39.56
+        },
+        {
+          "query": "minimalist casual everyday wristwatch",
+          "group": "Semantic/Intent",
+          "mode": "hybrid",
+          "p10": 0.3,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9066,
+          "time_ms": 42.85
+        },
+        {
+          "query": "baju santai rumahan adem",
+          "group": "Indonesian/M6",
+          "mode": "hybrid",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.6066,
+          "time_ms": 44.98
+        },
+        {
+          "query": "sepatu lari empuk nyaman",
+          "group": "Indonesian/M6",
+          "mode": "hybrid",
+          "p10": 0.2,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6053,
+          "time_ms": 42.65
+        },
+        {
+          "query": "celana kantor formal hitam",
+          "group": "Indonesian/M6",
+          "mode": "hybrid",
+          "p10": 0.6,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9275,
+          "time_ms": 41.23
+        },
+        {
+          "query": "jaket musim hujan anti air",
+          "group": "Indonesian/M6",
+          "mode": "hybrid",
+          "p10": 0.0,
+          "hr10": 0.0,
+          "mrr": 0.0,
+          "ndcg": 0.0,
+          "time_ms": 49.43
+        },
+        {
+          "query": "tas ransel laptop kerja",
+          "group": "Indonesian/M6",
+          "mode": "hybrid",
+          "p10": 0.7,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.6968,
+          "time_ms": 37.98
+        },
+        {
+          "query": "kaos polo polos pria",
+          "group": "Indonesian/M6",
+          "mode": "hybrid",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9296,
+          "time_ms": 37.45
+        },
+        {
+          "query": "kacamata hitam anti silau",
+          "group": "Indonesian/M6",
+          "mode": "hybrid",
+          "p10": 0.1,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309,
+          "time_ms": 33.87
+        },
+        {
+          "query": "dompet kulit asli pria",
+          "group": "Indonesian/M6",
+          "mode": "hybrid",
+          "p10": 0.2,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.5803,
+          "time_ms": 32.48
+        }
+      ]
+    },
+    "hybrid+rerank": {
+      "summary": {
+        "by_group": {
+          "Brand/SKU": {
+            "n": 8,
+            "p10": 1.0,
+            "hr10": 1.0,
+            "mrr": 1.0,
+            "ndcg": 1.0
+          },
+          "Category/Attr": {
+            "n": 8,
+            "p10": 0.85,
+            "hr10": 1.0,
+            "mrr": 1.0,
+            "ndcg": 0.9403
+          },
+          "Indonesian/M6": {
+            "n": 8,
+            "p10": 0.5375,
+            "hr10": 1.0,
+            "mrr": 0.75,
+            "ndcg": 0.7388
+          },
+          "Semantic/Intent": {
+            "n": 8,
+            "p10": 0.7875,
+            "hr10": 1.0,
+            "mrr": 0.7917,
+            "ndcg": 0.8925
+          }
+        },
+        "overall": {
+          "n": 32,
+          "p10": 0.7937,
+          "hr10": 1.0,
+          "mrr": 0.8854,
+          "ndcg": 0.8929
+        }
+      },
+      "per_query": [
+        {
+          "query": "levis 501",
+          "group": "Brand/SKU",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 1968.25
+        },
+        {
+          "query": "calvin klein boxer briefs",
+          "group": "Brand/SKU",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 1762.91
+        },
+        {
+          "query": "dickies 874",
+          "group": "Brand/SKU",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 2421.48
+        },
+        {
+          "query": "carhartt jacket",
+          "group": "Brand/SKU",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 1489.39
+        },
+        {
+          "query": "skechers memory foam",
+          "group": "Brand/SKU",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 1210.3
+        },
+        {
+          "query": "under armour heatgear",
+          "group": "Brand/SKU",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 3044.75
+        },
+        {
+          "query": "adidas superstar",
+          "group": "Brand/SKU",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 1654.51
+        },
+        {
+          "query": "ray ban aviator",
+          "group": "Brand/SKU",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 2575.48
+        },
+        {
+          "query": "white leather sneakers",
+          "group": "Category/Attr",
+          "mode": "hybrid+rerank",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.7593,
+          "time_ms": 1761.67
+        },
+        {
+          "query": "black waterproof boots",
+          "group": "Category/Attr",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 2954.21
+        },
+        {
+          "query": "slim fit stretch jeans",
+          "group": "Category/Attr",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 2696.56
+        },
+        {
+          "query": "fleece lined hoodie",
+          "group": "Category/Attr",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 2538.72
+        },
+        {
+          "query": "polarized sunglasses",
+          "group": "Category/Attr",
+          "mode": "hybrid+rerank",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9852,
+          "time_ms": 2898.07
+        },
+        {
+          "query": "genuine leather bifold wallet",
+          "group": "Category/Attr",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 2959.61
+        },
+        {
+          "query": "yoga leggings high waist",
+          "group": "Category/Attr",
+          "mode": "hybrid+rerank",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.7781,
+          "time_ms": 2918.75
+        },
+        {
+          "query": "down winter parka coat",
+          "group": "Category/Attr",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 2480.05
+        },
+        {
+          "query": "raincoat for winter storm",
+          "group": "Semantic/Intent",
+          "mode": "hybrid+rerank",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 2232.3
+        },
+        {
+          "query": "comfy shoes for all day standing",
+          "group": "Semantic/Intent",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 2986.53
+        },
+        {
+          "query": "formal wedding guest dress",
+          "group": "Semantic/Intent",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9843,
+          "time_ms": 2419.37
+        },
+        {
+          "query": "breathable clothes for hot summer",
+          "group": "Semantic/Intent",
+          "mode": "hybrid+rerank",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9834,
+          "time_ms": 3248.3
+        },
+        {
+          "query": "sweat wicking gym workout clothes",
+          "group": "Semantic/Intent",
+          "mode": "hybrid+rerank",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.8232,
+          "time_ms": 2961.61
+        },
+        {
+          "query": "cozy loungewear for working from home",
+          "group": "Semantic/Intent",
+          "mode": "hybrid+rerank",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.7754,
+          "time_ms": 2543.12
+        },
+        {
+          "query": "heavy duty outdoor work trousers",
+          "group": "Semantic/Intent",
+          "mode": "hybrid+rerank",
+          "p10": 0.4,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9225,
+          "time_ms": 2626.81
+        },
+        {
+          "query": "minimalist casual everyday wristwatch",
+          "group": "Semantic/Intent",
+          "mode": "hybrid+rerank",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 0.3333,
+          "ndcg": 0.6516,
+          "time_ms": 2977.31
+        },
+        {
+          "query": "baju santai rumahan adem",
+          "group": "Indonesian/M6",
+          "mode": "hybrid+rerank",
+          "p10": 0.4,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8159,
+          "time_ms": 1218.95
+        },
+        {
+          "query": "sepatu lari empuk nyaman",
+          "group": "Indonesian/M6",
+          "mode": "hybrid+rerank",
+          "p10": 0.6,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9477,
+          "time_ms": 1788.63
+        },
+        {
+          "query": "celana kantor formal hitam",
+          "group": "Indonesian/M6",
+          "mode": "hybrid+rerank",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9327,
+          "time_ms": 3011.52
+        },
+        {
+          "query": "jaket musim hujan anti air",
+          "group": "Indonesian/M6",
+          "mode": "hybrid+rerank",
+          "p10": 0.1,
+          "hr10": 1.0,
+          "mrr": 0.3333,
+          "ndcg": 0.5,
+          "time_ms": 2775.24
+        },
+        {
+          "query": "tas ransel laptop kerja",
+          "group": "Indonesian/M6",
+          "mode": "hybrid+rerank",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6994,
+          "time_ms": 3120.73
+        },
+        {
+          "query": "kaos polo polos pria",
+          "group": "Indonesian/M6",
+          "mode": "hybrid+rerank",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8472,
+          "time_ms": 2316.2
+        },
+        {
+          "query": "kacamata hitam anti silau",
+          "group": "Indonesian/M6",
+          "mode": "hybrid+rerank",
+          "p10": 0.1,
+          "hr10": 1.0,
+          "mrr": 0.1667,
+          "ndcg": 0.3562,
+          "time_ms": 2583.38
+        },
+        {
+          "query": "dompet kulit asli pria",
+          "group": "Indonesian/M6",
+          "mode": "hybrid+rerank",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8111,
+          "time_ms": 2142.35
+        }
+      ]
+    },
+    "trimodal": {
+      "summary": {
+        "by_group": {
+          "Brand/SKU": {
+            "n": 8,
+            "p10": 0.9875,
+            "hr10": 1.0,
+            "mrr": 1.0,
+            "ndcg": 0.947
+          },
+          "Category/Attr": {
+            "n": 8,
+            "p10": 0.8875,
+            "hr10": 1.0,
+            "mrr": 1.0,
+            "ndcg": 0.9724
+          },
+          "Indonesian/M6": {
+            "n": 8,
+            "p10": 0.6,
+            "hr10": 1.0,
+            "mrr": 0.7917,
+            "ndcg": 0.8208
+          },
+          "Semantic/Intent": {
+            "n": 8,
+            "p10": 0.9,
+            "hr10": 1.0,
+            "mrr": 0.9375,
+            "ndcg": 0.8931
+          }
+        },
+        "overall": {
+          "n": 32,
+          "p10": 0.8438,
+          "hr10": 1.0,
+          "mrr": 0.9323,
+          "ndcg": 0.9083
+        }
+      },
+      "per_query": [
+        {
+          "query": "levis 501",
+          "group": "Brand/SKU",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9124,
+          "time_ms": 3557.99
+        },
+        {
+          "query": "calvin klein boxer briefs",
+          "group": "Brand/SKU",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 140.18
+        },
+        {
+          "query": "dickies 874",
+          "group": "Brand/SKU",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.793,
+          "time_ms": 133.72
+        },
+        {
+          "query": "carhartt jacket",
+          "group": "Brand/SKU",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 119.5
+        },
+        {
+          "query": "skechers memory foam",
+          "group": "Brand/SKU",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 149.06
+        },
+        {
+          "query": "under armour heatgear",
+          "group": "Brand/SKU",
+          "mode": "trimodal",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9972,
+          "time_ms": 125.81
+        },
+        {
+          "query": "adidas superstar",
+          "group": "Brand/SKU",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8731,
+          "time_ms": 117.97
+        },
+        {
+          "query": "ray ban aviator",
+          "group": "Brand/SKU",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 117.51
+        },
+        {
+          "query": "white leather sneakers",
+          "group": "Category/Attr",
+          "mode": "trimodal",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8503,
+          "time_ms": 115.29
+        },
+        {
+          "query": "black waterproof boots",
+          "group": "Category/Attr",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 121.33
+        },
+        {
+          "query": "slim fit stretch jeans",
+          "group": "Category/Attr",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 114.1
+        },
+        {
+          "query": "fleece lined hoodie",
+          "group": "Category/Attr",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 132.66
+        },
+        {
+          "query": "polarized sunglasses",
+          "group": "Category/Attr",
+          "mode": "trimodal",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9783,
+          "time_ms": 113.17
+        },
+        {
+          "query": "genuine leather bifold wallet",
+          "group": "Category/Attr",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 129.36
+        },
+        {
+          "query": "yoga leggings high waist",
+          "group": "Category/Attr",
+          "mode": "trimodal",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9502,
+          "time_ms": 113.9
+        },
+        {
+          "query": "down winter parka coat",
+          "group": "Category/Attr",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 1.0,
+          "time_ms": 111.88
+        },
+        {
+          "query": "raincoat for winter storm",
+          "group": "Semantic/Intent",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8911,
+          "time_ms": 114.68
+        },
+        {
+          "query": "comfy shoes for all day standing",
+          "group": "Semantic/Intent",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9977,
+          "time_ms": 135.45
+        },
+        {
+          "query": "formal wedding guest dress",
+          "group": "Semantic/Intent",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.7594,
+          "time_ms": 121.03
+        },
+        {
+          "query": "breathable clothes for hot summer",
+          "group": "Semantic/Intent",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9602,
+          "time_ms": 124.73
+        },
+        {
+          "query": "sweat wicking gym workout clothes",
+          "group": "Semantic/Intent",
+          "mode": "trimodal",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.8246,
+          "time_ms": 112.89
+        },
+        {
+          "query": "cozy loungewear for working from home",
+          "group": "Semantic/Intent",
+          "mode": "trimodal",
+          "p10": 0.8,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9605,
+          "time_ms": 112.46
+        },
+        {
+          "query": "heavy duty outdoor work trousers",
+          "group": "Semantic/Intent",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9453,
+          "time_ms": 112.84
+        },
+        {
+          "query": "minimalist casual everyday wristwatch",
+          "group": "Semantic/Intent",
+          "mode": "trimodal",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8063,
+          "time_ms": 127.28
+        },
+        {
+          "query": "baju santai rumahan adem",
+          "group": "Indonesian/M6",
+          "mode": "trimodal",
+          "p10": 0.7,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9888,
+          "time_ms": 110.15
+        },
+        {
+          "query": "sepatu lari empuk nyaman",
+          "group": "Indonesian/M6",
+          "mode": "trimodal",
+          "p10": 0.6,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9335,
+          "time_ms": 107.59
+        },
+        {
+          "query": "celana kantor formal hitam",
+          "group": "Indonesian/M6",
+          "mode": "trimodal",
+          "p10": 0.7,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9799,
+          "time_ms": 116.53
+        },
+        {
+          "query": "jaket musim hujan anti air",
+          "group": "Indonesian/M6",
+          "mode": "trimodal",
+          "p10": 0.3,
+          "hr10": 1.0,
+          "mrr": 0.3333,
+          "ndcg": 0.4497,
+          "time_ms": 109.42
+        },
+        {
+          "query": "tas ransel laptop kerja",
+          "group": "Indonesian/M6",
+          "mode": "trimodal",
+          "p10": 0.9,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.8632,
+          "time_ms": 116.63
+        },
+        {
+          "query": "kaos polo polos pria",
+          "group": "Indonesian/M6",
+          "mode": "trimodal",
+          "p10": 1.0,
+          "hr10": 1.0,
+          "mrr": 1.0,
+          "ndcg": 0.9755,
+          "time_ms": 115.28
+        },
+        {
+          "query": "kacamata hitam anti silau",
+          "group": "Indonesian/M6",
+          "mode": "trimodal",
+          "p10": 0.1,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.6309,
+          "time_ms": 120.55
+        },
+        {
+          "query": "dompet kulit asli pria",
+          "group": "Indonesian/M6",
+          "mode": "trimodal",
+          "p10": 0.5,
+          "hr10": 1.0,
+          "mrr": 0.5,
+          "ndcg": 0.7448,
+          "time_ms": 115.92
+        }
+      ]
+    }
+  }
+}

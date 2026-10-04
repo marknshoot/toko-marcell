@@ -133,30 +133,66 @@ python3 pipelines/export_text_onnx.py     # needs onnx + onnxconverter-common + 
 
 ---
 
-## Information retrieval — BM25 vs hybrid
+## Information retrieval — BM25 vs hybrid (5-mode comparison)
 
-**Artifact:** none committed yet (Tier B). `pipelines/eval_search.py` evaluates **32 queries** in four
-groups (brand/SKU, category + features, semantic, Indonesian/casual) and prints HitRate@10,
-Precision@10, MRR@10 and nDCG@10 for BM25 vs hybrid.
+**Artifact:** [`pipelines/results/search_eval.json`](./results/search_eval.json) (Tier A).
+`pipelines/eval_search.py` evaluates **32 queries** in four groups (Brand/SKU, Category/Attr,
+Semantic/Intent, Indonesian/casual) across **5 search modes** and reports HitRate@10, Precision@10,
+MRR@10 and nDCG@10.
+
+| Mode | P@10 | nDCG@10 | MRR@10 | HR@10 |
+|---|:---:|:---:|:---:|:---:|
+| BM25 (baseline) | 0.744 | 0.794 | 0.792 | 84.4% |
+| Vector (MiniLM) | 0.759 | 0.841 | 0.863 | 96.9% |
+| Hybrid (BM25 + MiniLM + RRF) | 0.775 | 0.879 | 0.906 | 96.9% |
+| Hybrid + rerank (cross-encoder) | 0.794 | 0.893 | 0.885 | 100.0% |
+| Trimodal (BM25 + MiniLM + CLIP + RRF) | 0.844 | 0.908 | 0.932 | 100.0% |
+
+**Indonesian / cross-lingual group (8 queries):**
+
+| Mode | P@10 | nDCG@10 | MRR@10 |
+|---|:---:|:---:|:---:|
+| BM25 | 0.350 | 0.334 | 0.375 |
+| Hybrid | 0.412 | 0.622 | 0.688 |
+| Hybrid + rerank | 0.537 | 0.739 | 0.750 |
+| Trimodal | 0.600 | 0.821 | 0.792 |
+
+Hybrid beats BM25 on all groups overall. The reranker improves P@10 and nDCG@10 overall (+1.6% nDCG
+absolute vs hybrid) but slightly lowers MRR@10 (0.906 → 0.885); its strongest effect is on the
+Indonesian group (+0.117 nDCG). On Brand/SKU, hybrid+rerank matches BM25 (both 1.000 nDCG).
+Category/Attr nDCG drops slightly with the reranker (0.990 → 0.940). The reranker is a net positive
+overall, with its largest gains on the hardest queries.
 
 ```bash
-python3 pipelines/eval_search.py --api-url http://localhost:8001
+# Reproduce (needs the running Docker stack):
+python3 pipelines/eval_search.py --api-url http://localhost:8001 \
+  --modes bm25,vector,hybrid,hybrid+rerank,trimodal \
+  --out pipelines/results/search_eval.json
 ```
 
-Qualitative BM25 behaviour quoted in the READMEs (exact-token hits, plural folding, zero-result
-handling) is observed behaviour, not a scored benchmark.
+> `hybrid+rerank` requires `ENABLE_RERANKER=true` on the API (set by default in docker-compose.yml).
+> The `?rerank=true` query parameter is opt-in; the default `/search` behaviour is unchanged.
 
 ---
 
 ## Recommendations
 
-**Artifact:** none committed (Tier B). `pipelines/eval_recs.py` runs sequential leave-one-out
-(target = final interaction, context = penultimate) and prints HR@10 / HR@5 / MRR@10 / nDCG@10 against
-random and popularity baselines.
+**Artifact:** [`pipelines/results/recs_eval.json`](./results/recs_eval.json) (Tier A).
+`pipelines/eval_recs.py` runs **sequential leave-one-out** (target = final interaction,
+context = penultimate) on 5,000 sampled active users (≥5 interactions, seed 42) and reports
+HR@10 / HR@5 / MRR@10 / nDCG@10 against random and popularity baselines.
+
+| Model | HR@10 | HR@5 | MRR@10 | nDCG@10 |
+|---|:---:|:---:|:---:|:---:|
+| Random | 0.0022 | 0.0014 | 0.0007 | 0.0011 |
+| Popularity (M8) | 0.0018 | 0.0006 | 0.0006 | 0.0008 |
+| **Item-to-Item CF (M9)** | **0.0796** | **0.0616** | **0.0412** | **0.0501** |
+
+Item-to-Item CF vs Popularity: **+4,322% HR@10 relative** (0.18% → 7.96%).
 
 ```bash
-python3 pipelines/build_recs.py            # → data/processed/{item,popular}_recs.json + DB table
-python3 pipelines/eval_recs.py
+# Reproduce (needs data/processed/interactions.csv.gz, products.jsonl, item_recs.json, popular_recs.json):
+python3 pipelines/eval_recs.py --out pipelines/results/recs_eval.json
 ```
 
 Model constants (Bayesian `m=100`, `C=4.31`; boosts `+0.50`/`+0.30`; 5,000-user cap; 12 recs; `<6` fill)

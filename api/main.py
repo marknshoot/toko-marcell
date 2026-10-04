@@ -746,6 +746,7 @@ def search_products(
     department: str | None = None,
     category: str | None = None,
     mode: Literal["hybrid", "bm25", "vector", "trimodal"] = "hybrid",
+    rerank: bool = Query(False, description="When true AND ENABLE_RERANKER is set, apply cross-encoder reranking on fused candidates before pagination."),
 ):
     """Hybrid (BM25 + pgvector cosine similarity), BM25-only, vector-only, or trimodal search.
 
@@ -886,6 +887,38 @@ def search_products(
             ranked = index.dedupe(bm25_ranked)
 
     total = len(ranked)
+    reranked = False
+
+    # ── Optional cross-encoder reranking (Stage 2) ───────────────────────────
+    # Only when explicitly requested via ?rerank=true AND ENABLE_RERANKER is set.
+    # Fetches the top candidates as full product dicts so the cross-encoder sees
+    # features and descriptions, then re-sorts them before pagination.
+    if rerank and os.environ.get("ENABLE_RERANKER", "false").strip().lower() in ("1", "true", "yes") and ranked:
+        from reranker import rerank as do_rerank
+        # Take a generous window for the cross-encoder (top ~50 to rerank, regardless of limit)
+        rerank_window = min(len(ranked), max(limit + offset, 50))
+        rerank_hits = ranked[:rerank_window]
+        rerank_ids = [pid for pid, _ in rerank_hits]
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {PRODUCT_COLUMNS} FROM products WHERE id = ANY(%s)",
+                    (rerank_ids,),
+                )
+                rerank_rows = cur.fetchall()
+        rerank_by_id = {row[0]: row_to_product(row) for row in rerank_rows}
+        rerank_candidates = []
+        for pid, score in rerank_hits:
+            p = rerank_by_id.get(pid)
+            if p:
+                rerank_candidates.append({**p, "score": score})
+        if rerank_candidates:
+            reranked_items = do_rerank(q, rerank_candidates, text_key="title", limit=rerank_window)
+            # Rebuild ranked order from reranked items
+            ranked = [(item["id"], item.get("cross_encoder_score", item["score"])) for item in reranked_items] + ranked[rerank_window:]
+            total = len(ranked)
+            reranked = True
+
     hits = ranked[offset : offset + limit]
 
     items = []
@@ -912,6 +945,7 @@ def search_products(
         "offset": offset,
         "query": q,
         "mode": mode,
+        "reranked": reranked,
         "deduped": True,
         "took_ms": round((time.perf_counter() - started) * 1000, 2),
     }
