@@ -11,8 +11,9 @@ Covers:
 
 import json
 import time
-import urllib.request
 import urllib.error
+import urllib.request
+
 import pytest
 
 BASE_URL = "http://localhost:8001"
@@ -53,12 +54,16 @@ def test_copilot_tools_schema():
 
 # ── 2. Node 0: Guardrail & Greeting Fast-Path ────────────────────────────────
 
+@pytest.mark.llm
 def test_copilot_greeting_fast_path():
     payload = {
         "session_id": "test_sess_01",
         "messages": [{"role": "user", "content": "Halo min"}],
     }
     status, body = api_request("POST", "/copilot/chat", payload)
+    # Accept 200 (LLM available) or 429/502/503 (rate limited / no key)
+    if status in (429, 502, 503):
+        pytest.skip(f"Copilot not available (status {status})")
     assert status == 200
     assert "reply" in body
     assert "Halo kak!" in body["reply"] or "Toko Marcell" in body["reply"]
@@ -66,6 +71,7 @@ def test_copilot_greeting_fast_path():
     assert len(body.get("tool_calls", [])) == 0
 
 
+@pytest.mark.llm
 def test_copilot_off_topic_guardrail():
     payload = {
         "session_id": "test_sess_02",
@@ -81,6 +87,7 @@ def test_copilot_off_topic_guardrail():
     assert len(body.get("tool_calls", [])) == 0
 
 
+@pytest.mark.llm
 def test_copilot_sql_guardrail():
     payload = {
         "session_id": "test_sess_sql",
@@ -100,6 +107,7 @@ def test_copilot_sql_guardrail():
 
 # ── 3. UC-1: Visual / Style Matching ─────────────────────────────────────────
 
+@pytest.mark.llm
 def test_copilot_uc1_style_search():
     payload = {
         "session_id": "test_sess_uc1",
@@ -117,6 +125,7 @@ def test_copilot_uc1_style_search():
 
 # ── 4. UC-2: Sizing Consultation (TB/BB & Brand Overrides) ────────────────────
 
+@pytest.mark.llm
 def test_copilot_uc2_sizing_advisor():
     payload = {
         "session_id": "test_sess_uc2",
@@ -137,6 +146,7 @@ def test_copilot_uc2_sizing_advisor():
 
 # ── 5. UC-3: Occasion Outfit Builder under Budget ─────────────────────────────
 
+@pytest.mark.llm
 def test_copilot_uc3_outfit_builder_budget():
     payload = {
         "session_id": "test_sess_uc3",
@@ -157,6 +167,7 @@ def test_copilot_uc3_outfit_builder_budget():
 
 # ── 6. UC-4: Fabric & Construction Specs Q&A ──────────────────────────────────
 
+@pytest.mark.llm
 def test_copilot_uc4_fabric_specs():
     payload = {
         "session_id": "test_sess_uc4",
@@ -176,6 +187,7 @@ def test_copilot_uc4_fabric_specs():
 
 # ── 7. UC-5: Head-to-Head Compare (Levi's 501 vs 505) ─────────────────────────
 
+@pytest.mark.llm
 def test_copilot_uc5_compare_levis():
     payload = {
         "session_id": "test_sess_uc5",
@@ -195,6 +207,7 @@ def test_copilot_uc5_compare_levis():
 
 # ── 8. UC-6: Social Proof & Review Highlights ─────────────────────────────────
 
+@pytest.mark.llm
 def test_copilot_uc6_social_proof():
     payload = {
         "session_id": "test_sess_uc6",
@@ -213,6 +226,7 @@ def test_copilot_uc6_social_proof():
 
 # ── 9. UC-7: Store Policies & QRIS Demo ───────────────────────────────────────
 
+@pytest.mark.llm
 def test_copilot_uc7_store_policy_qris():
     payload = {
         "session_id": "test_sess_uc7",

@@ -1,6 +1,7 @@
 import json
-import urllib.request
 import urllib.error
+import urllib.request
+
 import pytest
 
 BASE_URL = "http://localhost:8001"
@@ -38,6 +39,7 @@ def test_copilot_tools_registry_contains_all_tools():
     assert names == expected
 
 
+@pytest.mark.llm
 def test_copilot_greeting_conversational_response():
     """Verify greeting responds with warm LLM reply without invoking any tool calls."""
     payload = {
@@ -45,6 +47,9 @@ def test_copilot_greeting_conversational_response():
         "messages": [{"role": "user", "content": "Halo, selamat siang min!"}],
     }
     status, body = api_request("POST", "/copilot/chat", payload)
+    # Accept rate limit or no-key gracefully
+    if status in (429, 502, 503):
+        pytest.skip(f"Copilot not available (status {status})")
     assert status == 200
     assert "reply" in body
     assert len(body["reply"]) > 10
