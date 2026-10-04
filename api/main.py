@@ -1304,7 +1304,7 @@ def get_asin_reviews(asin: str, limit: int = Query(10, ge=1, le=50)):
             return _fetch_reviews_for_asin(cur, asin, limit=limit)
 
 
-# ── AI Copilot (Tri-Modal Multi-Agent Orchestrator) ──────────────────────────
+# ── AI Copilot (single-agent planner → tools → grounded synthesis) ──────────────────────────
 
 class CopilotMessage(BaseModel):
     role: Literal["user", "assistant", "system"]

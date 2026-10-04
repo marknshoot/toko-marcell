@@ -193,9 +193,10 @@ The response includes a `timings: { embed_ms, db_ms }` breakdown so encoding cos
 with database cost. To regenerate the ONNX encoder:
 `python3 pipelines/export_vision_onnx.py` — see [`../pipelines/README.md`](../pipelines/README.md).
 
-### Stage-2 cross-encoder reranking
+### Stage-2 cross-encoder reranking (optional, copilot only)
 
-`reranker.py` re-scores the retrieved candidates with `Xenova/ms-marco-MiniLM-L-6-v2` through ONNX
+Used only by the copilot's `search_catalog` and only when `ENABLE_RERANKER=true`; `/search` returns
+the RRF order. `reranker.py` re-scores the retrieved candidates with `Xenova/ms-marco-MiniLM-L-6-v2` through ONNX
 Runtime (~15–25 ms for ~20 candidates). A cross-encoder sees query and document together, capturing
 interactions a bi-encoder cannot. If the model cannot be loaded, it logs and returns the Stage-1
 order — graceful degradation, never a hard failure.
@@ -283,7 +284,7 @@ Node 3  Grounded synthesis    second LLM call that may only use tool evidence
 
 | Tool | Backed by | Purpose |
 |---|---|---|
-| `search_catalog` | BM25 + pgvector + reranker, with department/category/budget filters | product discovery, styling, budgets |
+| `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, with department/category/budget filters | product discovery, styling, budgets |
 | `get_product_details` | `products` by ASIN or id | fabric, specs, exact IDR price |
 | `search_by_image` | CLIP 512-d vs `image_embedding` | "find something like this photo" |
 | `lookup_store_policy` | `store_knowledge` (384-d RAG) | sizing (TB/BB), shipping, returns, QRIS demo |

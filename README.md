@@ -43,8 +43,8 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 
 | # | What | Result | Where |
 |---|---|---|---|
-| 1 | **VLM fine-tuning study** — 5 ablations, 5,378 image–text pairs, 539 held-out test | champion lifts text→image **Recall@1 26.53% → 39.15%** (+47.57% rel) | [leaderboard](./pipelines/multimodal_benchmark_results.json) |
-| 2 | **Hybrid retrieval** — BM25 + MiniLM (384-d) + CLIP (512-d) → RRF (k=60) → ONNX cross-encoder | exact SKUs *and* semantic/visual queries; `?mode=` switchable | [API internals](./api/README.md#search--how-it-ranks) |
+| 1 | **VLM fine-tuning study** — 4 fine-tuning strategies vs a zero-shot baseline, 5,378 image–text pairs, 539 held-out test | champion lifts text→image **Recall@1 26.53% → 39.15%** (+47.57% rel) | [leaderboard](./pipelines/multimodal_benchmark_results.json) |
+| 2 | **Hybrid retrieval** — BM25 + MiniLM (384-d) + CLIP (512-d) → RRF (k=60); optional ONNX cross-encoder on the copilot path | exact SKUs *and* semantic/visual queries; `?mode=` switchable | [API internals](./api/README.md#search--how-it-ranks) |
 | 3 | **Grounded agentic copilot** — LangChain + OpenRouter (free tier), 4 bound tools, policy RAG | answers only from tool evidence; refuses off-topic and injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
 | 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe | [recommendation engine](./README.md#-recommendation-engine) |
 
@@ -59,7 +59,7 @@ the host, and the database seeds itself on first boot.
 ```bash
 # 1. get the code
 git clone https://github.com/marknshoot/toko-marcell.git
-cd toko-marcell/manual
+cd toko-marcell
 
 # 2. (optional) enable the AI copilot with a free OpenRouter key
 #    https://openrouter.ai/keys  — skip this and everything else still works
@@ -94,7 +94,7 @@ It exists to demonstrate four things a hiring manager can verify rather than tak
 1. **A real ML research loop** — hypothesis → controlled ablation → measured leaderboard → failure
    analysis → production export. Not a notebook that trains once and is never evaluated.
 2. **Information retrieval engineering** — three independent rankers (BM25, dense sentence vectors,
-   cross-modal CLIP) fused with Reciprocal Rank Fusion, plus a cross-encoder reranker.
+   cross-modal CLIP) fused with Reciprocal Rank Fusion, plus an optional cross-encoder reranker on the copilot path.
 3. **Grounded LLM application engineering** — an agent that can only speak from tool results, with a
    tool whitelist, prompt-injection/off-topic guardrails, token-budget safeguards, and tests.
 4. **Systems that survive free-tier reality** — cold starts, edge caching, in-memory TTL caches,
@@ -163,7 +163,7 @@ flowchart TD
         MiniLM["Dense text: all-MiniLM-L6-v2 (384-d)"]
         CLIP["Visual / cross-modal: fine-tuned CLIP ViT-B/32 (512-d)"]
         RRF["Reciprocal Rank Fusion (k=60)"]
-        CE["Cross-encoder reranker<br/>(ms-marco-MiniLM-L-6-v2, ONNX)"]
+        CE["Cross-encoder reranker (optional, copilot only)<br/>(ms-marco-MiniLM-L-6-v2, ONNX)"]
     end
 
     subgraph Storage["Tier 4 — PostgreSQL 16 + pgvector"]
@@ -179,7 +179,8 @@ flowchart TD
     ClientState --> UI
     API --> Planner --> Fanout
     Fanout --> BM25 & MiniLM & CLIP
-    BM25 & MiniLM & CLIP --> RRF --> CE --> Storage
+    BM25 & MiniLM & CLIP --> RRF --> Storage
+    RRF -. "copilot, ENABLE_RERANKER" .-> CE
     Fanout --> RAG
     Fanout --> Synth --> Chat
     Cache --> PG
@@ -295,8 +296,9 @@ flowchart LR
     BM25 --> RRF["Reciprocal Rank Fusion<br/>score = Σ 1/(60 + rank)"]
     Dense --> RRF
     Visual --> RRF
-    RRF --> CE["Cross-encoder rerank<br/>ms-marco-MiniLM-L-6-v2 (ONNX)"]
-    CE --> Out["Ranked products"]
+    RRF --> Out["Ranked products"]
+    RRF -. "copilot only, ENABLE_RERANKER" .-> CE["Cross-encoder rerank<br/>ms-marco-MiniLM-L-6-v2 (ONNX)"]
+    CE -.-> Out
     Vision --> Out
 ```
 
@@ -358,9 +360,11 @@ similarities are bounded in [-1, 1]; RRF needs only *ranks*, so the heterogeneou
 combined with no calibration and no per-query tuning. `k=60` is the constant from
 Cormack, Clarke & Buettcher (2009).
 
-### 5. Stage-2 cross-encoder reranking
+### 5. Stage-2 cross-encoder reranking (optional, copilot path)
 
-Top candidates are re-scored by `Xenova/ms-marco-MiniLM-L-6-v2` run through **ONNX Runtime**
+The HTTP `/search` endpoint returns the RRF order. The copilot's `search_catalog` tool can add a
+second stage behind the `ENABLE_RERANKER` flag (off on the 512 MB deployment, on in local Compose):
+top candidates are re-scored by `Xenova/ms-marco-MiniLM-L-6-v2` run through **ONNX Runtime**
 (~15–25 ms for ~20 candidates). A cross-encoder sees the query and document *together*, so it
 captures relevance a bi-encoder cannot — the standard two-stage retrieve-then-rerank pattern.
 If the model cannot be downloaded, the code logs a warning and returns the Stage-1 order, so the
@@ -489,7 +493,7 @@ The bound schema is intentionally small — four tools:
 
 | Tool | Reads from | Answers |
 |---|---|---|
-| `search_catalog` | BM25 + pgvector + reranker, with department / category / budget filters | "do you have…", style, outfit, budget |
+| `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, with department / category / budget filters | "do you have…", style, outfit, budget |
 | `get_product_details` | `products` by ASIN or numeric id | fabric, specs, exact IDR price |
 | `search_by_image` | CLIP 512-d against `image_embedding` | "find something like this photo" |
 | `lookup_store_policy` | `store_knowledge` (384-d RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
@@ -716,7 +720,7 @@ cp .env.example .env
 
 ```bash
 git clone https://github.com/marknshoot/toko-marcell.git
-cd toko-marcell/manual
+cd toko-marcell
 ./run-local.sh              # builds + starts everything, waits for health, prints the URLs
 # or: docker compose up -d --build
 ```
@@ -862,7 +866,7 @@ These are the choices that shaped the project. Each is stated with the alternati
    score-calibration problem that would otherwise dominate the work.
 4. **A hand-written baseline, measured first.** If BM25 had been skipped, "hybrid search is better"
    would be a claim with no denominator. It is now a number produced by `eval_search.py`.
-5. **Five ablations instead of one fine-tune.** The goal was a finding, not a checkpoint. The
+5. **Four ablations against a zero-shot baseline instead of one fine-tune.** The goal was a finding, not a checkpoint. The
    counter-intuitive result (decoupled LR beats LoRA) is the interesting part.
 6. **Dedupe before pagination.** Paginating first and deduping the page would make `total` a lie.
 7. **Server-authoritative checkout, client-sent `{asin, qty}`.** The alternative — trusting a client
@@ -945,7 +949,7 @@ Ordered by value to the product, not by ease:
 4. Add `Idempotency-Key` support to checkout.
 5. Introduce Alembic migrations and a scheduled reindex.
 6. Add the qualitative failure analysis' logo/patch fix (multi-crop or RoI-Align training) and
-   re-run the 5-experiment leaderboard.
+   re-run the leaderboard.
 7. Publish a reproducible eval report artifact per CI run so leaderboard numbers can be re-generated
    with one command.
 
@@ -972,5 +976,6 @@ Ordered by value to the product, not by ease:
   reviews and fine-grained aspects*, EMNLP 2019.
 - **Kaggle VLM study:** run on Kaggle's free GPU tier (Tesla T4 16 GB) — see
   [`pipelines/kaggle/README.md`](./pipelines/kaggle/README.md).
+- **Code licence:** [MIT](./LICENSE). The licence covers the source code only, not the dataset content.
 - **This repository** is an engineering portfolio project. The storefront, checkout, couriers and QRIS
   payment are **simulations** and charge no real money.
