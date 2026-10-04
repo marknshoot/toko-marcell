@@ -12,22 +12,20 @@ A single agent, one pass per turn:
 import asyncio
 import json
 import os
-import re
 import time
 from typing import Any
 
-import httpx
 import psycopg
-from fastapi import HTTPException
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
-
 from agent_tools import (
     get_product_details,
     lookup_store_policy,
     search_by_image,
     search_catalog,
 )
+from fastapi import HTTPException
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_google_genai import ChatGoogleGenerativeAI
+
 
 def _load_env():
     for candidate in [
@@ -36,7 +34,7 @@ def _load_env():
     ]:
         if os.path.isfile(candidate):
             try:
-                with open(candidate, "r", encoding="utf-8") as f:
+                with open(candidate, encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
                         if line and not line.startswith("#") and "=" in line:
@@ -119,7 +117,7 @@ def _get_llm(temperature: float):
             raise HTTPException(
                 status_code=503,
                 detail="Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti.",
-            )
+            ) from None
         return ChatOpenAI(
             model=_get_llm_model(),
             api_key=or_key,
@@ -520,7 +518,7 @@ async def chat_copilot(
         raise HTTPException(
             status_code=502,
             detail="Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!",
-        )
+        ) from None
 
     if tool_calls:
         tasks = []
@@ -566,12 +564,11 @@ async def chat_copilot(
             raise HTTPException(
                 status_code=502,
                 detail="Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!",
-            )
+            ) from None
     else:
         final_reply = _extract_text(ai_msg.content)
 
     structured_products = []
-    structured_citations = []
     seen_asins = set()
 
     for item in executed_tools_results:
