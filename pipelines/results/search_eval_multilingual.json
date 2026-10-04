@@ -1,0 +1,277 @@
+{
+  "timestamp": "2026-10-04T07:25:30.197032+00:00",
+  "description": "MiniLM (embedding) vs multilingual paraphrase-multilingual-MiniLM-L12-v2 (embedding_ml) A/B on 32-query IR benchmark",
+  "query_count": 32,
+  "modes_evaluated": [
+    "bm25",
+    "vector",
+    "hybrid"
+  ],
+  "methodology_note": "Both variants hit the FastAPI /search endpoint. The MiniLM baseline is the live container on port 8001 (TEXT_EMBED_COLUMN=embedding, TEXT_EMBED_MODEL=all-MiniLM-L6-v2). The multilingual variant is a temporary uvicorn started inside the same container on port 8010 with TEXT_EMBED_COLUMN=embedding_ml and TEXT_EMBED_MODEL=paraphrase-multilingual-MiniLM-L12-v2. The container's /app/search.py was refreshed from repo source before the multilingual run because the shipped image hardcoded the MiniLM model name and ignored TEXT_EMBED_MODEL; without that fix both runs returned identical rankings.",
+  "models": {
+    "minilm": {
+      "model": "sentence-transformers/all-MiniLM-L6-v2",
+      "column": "embedding",
+      "api_url": "http://localhost:8001",
+      "git_commit": "8db9c18",
+      "run_timestamp": "2026-10-04T07:19:29.809004+00:00",
+      "modes": {
+        "bm25": {
+          "summary": {
+            "by_group": {
+              "Brand/SKU": {
+                "n": 8,
+                "p10": 1.0,
+                "hr10": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0
+              },
+              "Category/Attr": {
+                "n": 8,
+                "p10": 0.9125,
+                "hr10": 1.0,
+                "mrr": 0.9167,
+                "ndcg": 0.9566
+              },
+              "Indonesian/M6": {
+                "n": 8,
+                "p10": 0.35,
+                "hr10": 0.375,
+                "mrr": 0.375,
+                "ndcg": 0.3336
+              },
+              "Semantic/Intent": {
+                "n": 8,
+                "p10": 0.7125,
+                "hr10": 1.0,
+                "mrr": 0.875,
+                "ndcg": 0.8874
+              }
+            },
+            "overall": {
+              "n": 32,
+              "p10": 0.7438,
+              "hr10": 0.8438,
+              "mrr": 0.7917,
+              "ndcg": 0.7944
+            }
+          }
+        },
+        "vector": {
+          "summary": {
+            "by_group": {
+              "Brand/SKU": {
+                "n": 8,
+                "p10": 0.9625,
+                "hr10": 1.0,
+                "mrr": 1.0,
+                "ndcg": 0.9693
+              },
+              "Category/Attr": {
+                "n": 8,
+                "p10": 0.875,
+                "hr10": 1.0,
+                "mrr": 1.0,
+                "ndcg": 0.9867
+              },
+              "Indonesian/M6": {
+                "n": 8,
+                "p10": 0.3625,
+                "hr10": 0.875,
+                "mrr": 0.5451,
+                "ndcg": 0.5441
+              },
+              "Semantic/Intent": {
+                "n": 8,
+                "p10": 0.8375,
+                "hr10": 1.0,
+                "mrr": 0.9062,
+                "ndcg": 0.8652
+              }
+            },
+            "overall": {
+              "n": 32,
+              "p10": 0.7594,
+              "hr10": 0.9688,
+              "mrr": 0.8628,
+              "ndcg": 0.8413
+            }
+          }
+        },
+        "hybrid": {
+          "summary": {
+            "by_group": {
+              "Brand/SKU": {
+                "n": 8,
+                "p10": 0.975,
+                "hr10": 1.0,
+                "mrr": 1.0,
+                "ndcg": 0.9888
+              },
+              "Category/Attr": {
+                "n": 8,
+                "p10": 0.9,
+                "hr10": 1.0,
+                "mrr": 1.0,
+                "ndcg": 0.9899
+              },
+              "Indonesian/M6": {
+                "n": 8,
+                "p10": 0.4125,
+                "hr10": 0.875,
+                "mrr": 0.6875,
+                "ndcg": 0.6221
+              },
+              "Semantic/Intent": {
+                "n": 8,
+                "p10": 0.8125,
+                "hr10": 1.0,
+                "mrr": 0.9375,
+                "ndcg": 0.9147
+              }
+            },
+            "overall": {
+              "n": 32,
+              "p10": 0.775,
+              "hr10": 0.9688,
+              "mrr": 0.9062,
+              "ndcg": 0.8789
+            }
+          }
+        }
+      }
+    },
+    "multilingual": {
+      "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+      "column": "embedding_ml",
+      "api_url": "http://localhost:8010",
+      "git_commit": "unknown",
+      "run_timestamp": "2026-10-04T07:25:11.031363+00:00",
+      "modes": {
+        "bm25": {
+          "summary": {
+            "by_group": {
+              "Brand/SKU": {
+                "n": 8,
+                "p10": 1.0,
+                "hr10": 1.0,
+                "mrr": 1.0,
+                "ndcg": 1.0
+              },
+              "Category/Attr": {
+                "n": 8,
+                "p10": 0.9125,
+                "hr10": 1.0,
+                "mrr": 0.9167,
+                "ndcg": 0.9566
+              },
+              "Indonesian/M6": {
+                "n": 8,
+                "p10": 0.35,
+                "hr10": 0.375,
+                "mrr": 0.375,
+                "ndcg": 0.3336
+              },
+              "Semantic/Intent": {
+                "n": 8,
+                "p10": 0.7125,
+                "hr10": 1.0,
+                "mrr": 0.875,
+                "ndcg": 0.8874
+              }
+            },
+            "overall": {
+              "n": 32,
+              "p10": 0.7438,
+              "hr10": 0.8438,
+              "mrr": 0.7917,
+              "ndcg": 0.7944
+            }
+          }
+        },
+        "vector": {
+          "summary": {
+            "by_group": {
+              "Brand/SKU": {
+                "n": 8,
+                "p10": 0.6125,
+                "hr10": 0.75,
+                "mrr": 0.75,
+                "ndcg": 0.7151
+              },
+              "Category/Attr": {
+                "n": 8,
+                "p10": 0.775,
+                "hr10": 1.0,
+                "mrr": 0.8125,
+                "ndcg": 0.8824
+              },
+              "Indonesian/M6": {
+                "n": 8,
+                "p10": 0.6875,
+                "hr10": 1.0,
+                "mrr": 0.8542,
+                "ndcg": 0.7737
+              },
+              "Semantic/Intent": {
+                "n": 8,
+                "p10": 0.8,
+                "hr10": 1.0,
+                "mrr": 0.875,
+                "ndcg": 0.8333
+              }
+            },
+            "overall": {
+              "n": 32,
+              "p10": 0.7188,
+              "hr10": 0.9375,
+              "mrr": 0.8229,
+              "ndcg": 0.8011
+            }
+          }
+        },
+        "hybrid": {
+          "summary": {
+            "by_group": {
+              "Brand/SKU": {
+                "n": 8,
+                "p10": 0.875,
+                "hr10": 1.0,
+                "mrr": 1.0,
+                "ndcg": 0.9353
+              },
+              "Category/Attr": {
+                "n": 8,
+                "p10": 0.9,
+                "hr10": 1.0,
+                "mrr": 0.9167,
+                "ndcg": 0.9559
+              },
+              "Indonesian/M6": {
+                "n": 8,
+                "p10": 0.7,
+                "hr10": 1.0,
+                "mrr": 0.8438,
+                "ndcg": 0.7651
+              },
+              "Semantic/Intent": {
+                "n": 8,
+                "p10": 0.775,
+                "hr10": 1.0,
+                "mrr": 0.9167,
+                "ndcg": 0.9187
+              }
+            },
+            "overall": {
+              "n": 32,
+              "p10": 0.8125,
+              "hr10": 1.0,
+              "mrr": 0.9193,
+              "ndcg": 0.8938
+            }
+          }
+        }
+      }
+    }
+  }
+}

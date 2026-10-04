@@ -30,6 +30,8 @@ Three tiers of provenance:
 | Knowledge chunks | 22 | A | `data/seed/init.sql.gz` → `store_knowledge` COPY block |
 | Demo funnel rows | 357 events · 106 orders | A | `data/seed/init.sql.gz` |
 | VLM pairs / splits | 5,378 total · 4,302 train / 537 val / 539 test | A | `data/processed/clip_dataset_summary.json` |
+| Fit signals — ASIN coverage | 99.8% any · 98.1% ≥5 · 90.9% ≥20 mentions | B | `python3 pipelines/build_fit_signals.py`; `product_fit` table (6,000 rows), `brand_fit` (1,495 brands) |
+| Fit signals — mentions mined | 622,530 of 3,363,680 catalog reviews (18.5%) | B | `pipelines/build_fit_signals.py` → `data/processed/fit_signals.json` |
 
 Reproduce the full catalog (needs ~2.8 GB raw download):
 
@@ -172,6 +174,88 @@ python3 pipelines/eval_search.py --api-url http://localhost:8001 \
 
 > `hybrid+rerank` requires `ENABLE_RERANKER=true` on the API (set by default in docker-compose.yml).
 > The `?rerank=true` query parameter is opt-in; the default `/search` behaviour is unchanged.
+
+---
+
+## Multilingual embedding A/B — MiniLM vs paraphrase-multilingual-MiniLM-L12-v2
+
+**Artifact:** [`pipelines/results/search_eval_multilingual.json`](./results/search_eval_multilingual.json)
+(Tier A). Both variants are the same 384-d dimension and the same 32-query harness; the only change
+is the dense text embedding model + the column it queries:
+
+- **MiniLM (default):** `sentence-transformers/all-MiniLM-L6-v2` → `products.embedding`
+- **Multilingual (opt-in):** `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+  (quantized ONNX `qdrant/…-onnx-Q`, 0.22 GB) → `products.embedding_ml`
+
+Overall (32 queries):
+
+| Mode | Model | P@10 | nDCG@10 | MRR@10 | HR@10 |
+|---|---|:---:|:---:|:---:|:---:|
+| vector | MiniLM | 0.759 | 0.841 | 0.863 | 96.9% |
+| vector | Multilingual | 0.719 | 0.801 | 0.823 | 93.8% |
+| **hybrid** | **MiniLM** | 0.775 | 0.879 | 0.906 | 96.9% |
+| **hybrid** | **Multilingual** | 0.813 | **0.894** | **0.919** | 100.0% |
+
+Indonesian / cross-lingual group (8 queries):
+
+| Mode | Model | P@10 | nDCG@10 | MRR@10 |
+|---|---|:---:|:---:|:---:|
+| vector | MiniLM | 0.363 | 0.544 | 0.545 |
+| vector | Multilingual | 0.688 | **0.774** | **0.854** |
+| hybrid | MiniLM | 0.413 | 0.622 | 0.688 |
+| hybrid | Multilingual | 0.700 | **0.765** | **0.844** |
+
+The multilingual model wins hybrid nDCG@10 **overall** (0.879 → 0.894) **and** on the Indonesian
+group (0.622 → 0.765, +0.143). The tradeoff is exact lexical precision: on dense-only Brand/SKU it
+drops nDCG 0.969 → 0.715, because a multilingual model spreads capacity across ~50 languages and is
+weaker at pinning English model numbers / SKUs. BM25 is identical in both runs (lexical, no
+embeddings) and the hybrid fusion recovers most of the Brand/SKU loss (0.989 → 0.935).
+
+### Memory (peak RSS of the API process, both CLIP ONNX encoders resident)
+
+Measured on a fresh python process inside the `toko-api` container via `/proc/self/status` `VmHWM`,
+after loading the text embedding model **and** the CLIP text + vision ONNX encoders as deployed
+(`ENABLE_TRIMODAL=false`):
+
+| Config | Peak RSS | Embedding layer alone |
+|---|:---:|:---:|
+| MiniLM, no reranker | ~646 MB | 226 MB |
+| MiniLM, with reranker | ~611 MB | 226 MB |
+| Multilingual, no reranker | ~1024 MB | ~664 MB |
+| Multilingual, with reranker | ~1025 MB | ~664 MB |
+
+The entire regression is the embedding model: paraphrase-multilingual-MiniLM-**L12** is a 12-layer
+model (~470 MB resident) vs MiniLM-**L6** (~90 MB). The cross-encoder reranker adds only ~10 MB and
+is **not** the constraint. (Run-to-run allocator variance explains the 611 vs 646 MiniLM figures;
+treat MiniLM peak as ~610–650 MB.)
+
+### Decision
+
+> **Keep MiniLM (`all-MiniLM-L6-v2`) as the default. Ship the multilingual model as an opt-in flag,
+> not the deploy default.**
+
+The switch criterion was: adopt as default only if the model **wins nDCG@10 overall AND on the
+Indonesian group AND fits a ~450 MB peak-RSS budget**. The multilingual model wins both quality
+criteria but **fails the memory gate** — ~1024 MB peak with the CLIP encoders loaded, more than 2×
+the 512 MB Render free tier and ~2.3× the ~450 MB target. (MiniLM itself already peaks at
+~610–650 MB with both CLIP encoders resident; the free tier only survives because the encoders are
+lazy-loaded and rarely all co-resident on a browse-only workload.)
+
+The path is wired but gated behind config: set `TEXT_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+and `TEXT_EMBED_COLUMN=embedding_ml` to serve it. This is only advisable on a **≥1 GB (ideally 2 GB)**
+instance. The `embedding_ml` column + HNSW index ship in the seed so the opt-in works with no
+re-embedding.
+
+```bash
+# Reproduce (needs the running Docker stack with both embedding columns populated):
+# MiniLM (default container):
+python3 pipelines/eval_search.py --api-url http://localhost:8001 --modes bm25,vector,hybrid --out /tmp/ab_minilm.json
+# Multilingual: start a uvicorn with TEXT_EMBED_MODEL + TEXT_EMBED_COLUMN=embedding_ml and point the harness at it.
+```
+
+> **Deploy note:** the shipped `toko-api` image bakes `search.py` at build time, so a running image
+> built before this change ignores `TEXT_EMBED_MODEL`. Rebuild the image to pick up the switch. The
+> API test suite runs a fresh `uvicorn main:app`, so tests always exercise the current code.
 
 ---
 
