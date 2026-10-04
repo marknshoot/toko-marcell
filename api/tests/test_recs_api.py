@@ -1,8 +1,7 @@
 import json
+import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.error
-import pytest
 
 BASE_URL = "http://localhost:8001"
 
