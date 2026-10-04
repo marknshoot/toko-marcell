@@ -142,6 +142,8 @@ def products(
 def get_product(product_id: int, response: Response):
     response.headers["Cache-Control"] = "public, max-age=300, s-maxage=600, stale-while-revalidate=60"
 
+    from fit import get_product_fit
+
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
@@ -151,8 +153,35 @@ def get_product(product_id: int, response: Response):
                 (product_id,),
             )
             row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Product not found")
+            product = row_to_product(row)
+            product["fit"] = get_product_fit(cur, product["asin"], product["brand"])
 
-    if row is None:
-        raise HTTPException(status_code=404, detail="Product not found")
+    return product
 
-    return row_to_product(row)
+
+@router.get("/products/{product_id}/fit")
+def get_product_fit_endpoint(product_id: int, response: Response):
+    """Return just the review-derived fit signal for a product (or null).
+
+    Separate from the product detail so the storefront can lazy-load the fit
+    badge without re-fetching the whole product, and so copilot product cards
+    can be enriched on demand.
+    """
+    response.headers["Cache-Control"] = "public, max-age=300, s-maxage=600, stale-while-revalidate=60"
+
+    from fit import get_product_fit
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT asin, brand FROM products WHERE id = %s",
+                (product_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail="Product not found")
+            fit = get_product_fit(cur, row[0], row[1])
+
+    return {"id": product_id, "asin": row[0], "fit": fit}
