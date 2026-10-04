@@ -4,10 +4,14 @@ Parses `api/knowledge/*.md` (size charts, brand deviations, store policies, FAQ)
 and seeds the `store_knowledge` table in PostgreSQL with 384-dim fastembed vectors.
 """
 
+import logging
 import os
 import re
+
 import psycopg
 from search import embed_query
+
+logger = logging.getLogger(__name__)
 
 KNOWLEDGE_SCHEMA = [
     ("id", "SERIAL PRIMARY KEY"),
@@ -28,7 +32,7 @@ def _chunk_markdown(filepath: str, default_category: str) -> list[dict]:
     if not os.path.exists(filepath):
         return []
 
-    with open(filepath, "r", encoding="utf-8") as f:
+    with open(filepath, encoding="utf-8") as f:
         text = f.read()
 
     raw_sections = re.split(r"\n(?=#{2,3}\s+)", text)
@@ -84,7 +88,7 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
     chunks.extend(_chunk_markdown(policy_file, default_category="policy"))
 
     if not chunks:
-        print("[knowledge] No knowledge chunks found to seed.")
+        logger.info("No knowledge chunks found to seed.")
         return 0
 
     with psycopg.connect(database_url) as conn:
@@ -102,7 +106,7 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
             if force_reload:
                 cur.execute("TRUNCATE TABLE store_knowledge")
 
-            print(f"[knowledge] Embedding and inserting {len(chunks)} knowledge chunks...")
+            logger.info("Embedding and inserting %d knowledge chunks...", len(chunks))
             inserted = 0
             for chunk in chunks:
                 vec = embed_query(f"{chunk['title']}\n{chunk['content'][:500]}")
@@ -118,7 +122,7 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
                 inserted += 1
 
             conn.commit()
-            print(f"[knowledge] Successfully seeded {inserted} knowledge chunks into PostgreSQL.")
+            logger.info("Successfully seeded %d knowledge chunks into PostgreSQL.", inserted)
             return inserted
 
 

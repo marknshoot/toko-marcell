@@ -792,14 +792,27 @@ To **regenerate the catalog from raw data** (≈8 min, streaming, no pandas), se
 ```text
 manual/
 ├── api/                          # FastAPI backend (owns all data + logic)
-│   ├── main.py                   #   REST API, schema creation, caching, checkout
-│   ├── search.py                 #   BM25 + embeddings + RRF + CLIP encoders
+│   ├── main.py                   #   thin app factory: lifespan, CORS, schema migration, routers
+│   ├── config.py                 #   pydantic-settings Settings, cached get_settings()
+│   ├── db.py                     #   psycopg_pool ConnectionPool, get_conn() / Depends
+│   ├── schemas.py                #   shared Pydantic request/response models
+│   ├── routers/                  #   one module per domain
+│   │   ├── health.py             #     GET /health
+│   │   ├── catalog.py            #     categories, products, product detail + row_to_product
+│   │   ├── search.py             #     text search, image search, reindex
+│   │   ├── recs.py               #     popular, item-to-item, session recommendations
+│   │   ├── reviews.py            #     product & ASIN reviews
+│   │   ├── events.py             #     funnel events + summary
+│   │   ├── checkout.py           #     confirm checkout, order lookup
+│   │   └── copilot.py            #     AI copilot chat + tool listing
+│   ├── search.py                 #   BM25 + embeddings + RRF + CLIP encoders (ONNX)
 │   ├── reranker.py               #   Stage-2 ONNX cross-encoder
 │   ├── agent.py                  #   LangChain orchestrator (OpenRouter/Gemini) + tools
 │   ├── agent_tools.py            #   deterministic grounding tools
+│   ├── rate_limiter.py           #   sliding-window per-IP rate limiter
 │   ├── knowledge_seed.py         #   markdown → embedded store_knowledge chunks
 │   ├── knowledge/                #   authored size charts + store policies (RAG source)
-│   └── tests/                    #   76 pytest cases (unit + live API)
+│   └── tests/                    #   85+ pytest cases (unit + live API)
 ├── shop/                         # Next.js 16 storefront
 │   └── src/{app,components,lib}  #   routes, UI, API client, session & cart state
 ├── pipelines/                    # offline ML + data engineering

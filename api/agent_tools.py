@@ -3,11 +3,15 @@ Deterministic Grounding Tools for Toko Marcell AI Copilot.
 
 All tools access authoritative database tables (products, reviews, store_knowledge)
 with zero hallucination, strict price handling (IDR), and robust error handling.
+
+Tools accept an optional ``db_url`` parameter for standalone use (pipeline tests);
+when called from within the server process, ``db.get_conn()`` uses the pool.
 """
 
 import base64
 import io
 import ipaddress
+import logging
 import os
 import re
 import socket
@@ -24,6 +28,8 @@ from search import (
     reciprocal_rank_fusion,
     tokenize,
 )
+
+logger = logging.getLogger(__name__)
 
 # ---------------------------------------------------------------------------
 # Image input validation helpers (SSRF-safe)
@@ -58,7 +64,7 @@ def _is_private_ip(ip_str: str) -> bool:
             or addr.is_multicast
         )
     except ValueError:
-        return True  # unparseable → reject
+        return True
 
 
 def _fetch_image_from_url(url: str) -> bytes:
@@ -76,7 +82,6 @@ def _fetch_image_from_url(url: str) -> bytes:
             f"Host '{host}' is not in the image fetch allowlist: {sorted(allowed)}"
         )
 
-    # DNS resolution check: reject private/loopback/link-local IPs
     try:
         resolved = socket.getaddrinfo(host, parsed.port or 443, proto=socket.IPPROTO_TCP)
     except socket.gaierror as exc:
@@ -89,9 +94,8 @@ def _fetch_image_from_url(url: str) -> bytes:
                 f"Host '{host}' resolves to a private/reserved IP ({ip_str}); request blocked"
             )
 
-    # Fetch with no redirects, 5 s timeout, size cap
     req = urllib.request.Request(url, headers={"User-Agent": "TokoMarcell/1.0"})
-    # Use a custom opener that disallows redirects
+
     class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ARG002
             raise ValueError(f"Redirect to {newurl} is not allowed")
@@ -108,20 +112,12 @@ def validate_image_input(
     image_bytes: bytes | None = None,
     image_url_or_ref: str | None = None,
 ) -> bytes:
-    """Resolve image input to validated bytes. Accepts:
-    - Raw bytes (passed directly)
-    - data:image/(png|jpeg|webp|gif);base64,... data URLs
-    - https:// URLs on the allowlisted hosts only
-
-    Rejects file paths, http:// URLs, and non-allowlisted hosts.
-    All inputs are verified as valid images with Pillow and capped at 10 MB decoded.
-    """
+    """Resolve image input to validated bytes."""
     contents: bytes | None = image_bytes
 
     if contents is None and image_url_or_ref:
         ref = image_url_or_ref.strip()
 
-        # Data URL
         m = _IMAGE_DATA_URL_RE.match(ref)
         if m:
             b64data = ref[m.end():]
@@ -131,7 +127,6 @@ def validate_image_input(
         elif ref.startswith("http://"):
             raise ValueError("Only https:// URLs are allowed (http:// is rejected)")
         else:
-            # Reject everything else (file paths, relative refs, etc.)
             raise ValueError(
                 "Invalid image reference. Accepted: raw bytes, data:image/...;base64,... URLs, "
                 "or https:// URLs on allowlisted hosts."
@@ -143,7 +138,6 @@ def validate_image_input(
     if len(contents) > _MAX_IMAGE_BYTES:
         raise ValueError(f"Image exceeds {_MAX_IMAGE_BYTES // (1024 * 1024)} MB size limit")
 
-    # Verify with Pillow that the data is actually an image
     try:
         img = Image.open(io.BytesIO(contents))
         img.verify()
@@ -152,7 +146,14 @@ def validate_image_input(
 
     return contents
 
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
+
+def _default_db_url() -> str:
+    try:
+        from config import get_settings
+        return get_settings().DATABASE_URL
+    except Exception:
+        return os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
+
 
 PRODUCT_COLS = (
     "id, asin, title, brand, price_usd, price_idr, department, category, "
@@ -182,6 +183,21 @@ def _row_to_dict(row: tuple) -> dict[str, Any]:
     }
 
 
+def _connect(db_url: str | None):
+    """Get a connection: use pool when available, direct connect otherwise."""
+    try:
+        import contextlib
+
+        from db import get_conn
+        # If db_url is custom (not the default), don't use pool
+        if db_url and db_url != _default_db_url():
+            return contextlib.contextmanager(lambda: (yield psycopg.connect(db_url)))()
+        return get_conn()
+    except Exception:
+        url = db_url or _default_db_url()
+        return psycopg.connect(url)
+
+
 def search_catalog(
     query: str,
     category: str | None = None,
@@ -190,11 +206,7 @@ def search_catalog(
     limit: int = 4,
     db_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Hybrid BM25 + pgvector search, optionally reranked by the Stage-2 cross-encoder (ENABLE_RERANKER).
-
-    Supports department ('Men', 'Women'), category, and budget ('price_max') constraints.
-    """
-    url = db_url or DATABASE_URL
+    """Hybrid BM25 + pgvector search, optionally reranked."""
     clean_tokens = tokenize(query)
     if not clean_tokens:
         return []
@@ -211,7 +223,7 @@ def search_catalog(
         params.append(price_max)
 
     allowed_ids = None
-    with psycopg.connect(url) as conn:
+    with _connect(db_url) as conn:
         with conn.cursor() as cur:
             if filters:
                 cur.execute(
@@ -259,7 +271,7 @@ def search_catalog(
         return []
 
     candidates = []
-    with psycopg.connect(url) as conn:
+    with _connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 f"SELECT {PRODUCT_COLS} FROM products WHERE id = ANY(%s)",
@@ -276,9 +288,8 @@ def search_catalog(
 
 
 def get_product_details(asin_or_id: str | int, db_url: str | None = None) -> dict[str, Any]:
-    """Retrieve full catalog specifications, features, and price by ASIN or product ID."""
-    url = db_url or DATABASE_URL
-    with psycopg.connect(url) as conn:
+    """Retrieve full catalog specifications by ASIN or product ID."""
+    with _connect(db_url) as conn:
         with conn.cursor() as cur:
             if isinstance(asin_or_id, int) or (isinstance(asin_or_id, str) and asin_or_id.isdigit()):
                 cur.execute(f"SELECT {PRODUCT_COLS} FROM products WHERE id = %s", (int(asin_or_id),))
@@ -296,12 +307,8 @@ def get_product_reviews(
     limit: int = 5,
     db_url: str | None = None,
 ) -> dict[str, Any]:
-    """Fetch authentic customer reviews for sizing reality, durability, and fabric quality.
-
-    Computes star breakdown and filters/highlights reviews matching target topic.
-    """
-    url = db_url or DATABASE_URL
-    with psycopg.connect(url) as conn:
+    """Fetch authentic customer reviews for sizing reality, durability, and fabric quality."""
+    with _connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -418,13 +425,7 @@ def search_by_image(
     limit: int = 4,
     db_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Visual Search (CLIP ViT-B/32 + pgvector HNSW cosine distance).
-
-    Accepts raw image bytes, base64 data URLs (data:image/...;base64,...),
-    or HTTPS URLs on allowlisted hosts only. File paths and arbitrary HTTP
-    URLs are rejected (SSRF protection).
-    """
-    url = db_url or DATABASE_URL
+    """Visual Search (CLIP ViT-B/32 + pgvector HNSW cosine distance)."""
     try:
         contents = validate_image_input(image_bytes, image_url_or_ref)
     except ValueError:
@@ -448,7 +449,7 @@ def search_by_image(
     params.extend([vec_literal, limit])
     where_sql = " AND ".join(where_clauses)
 
-    with psycopg.connect(url) as conn:
+    with _connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 f"""
@@ -473,13 +474,12 @@ def search_by_image(
 
 def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -> list[dict[str, Any]]:
     """Retrieve store operations, QRIS demo rules, shipping, returns, and master size charts."""
-    url = db_url or DATABASE_URL
     q_vec = embed_query(query)
     if q_vec is None:
         return []
 
     vec_str = "[" + ",".join(f"{x:.6f}" for x in q_vec) + "]"
-    with psycopg.connect(url) as conn:
+    with _connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """

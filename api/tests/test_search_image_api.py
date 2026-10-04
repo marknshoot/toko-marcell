@@ -56,6 +56,8 @@ def sample_image_bytes():
 
 def test_search_by_image_valid(sample_image_bytes):
     status, body = api_post_image("/search/image?limit=6", sample_image_bytes)
+    if status == 503:
+        pytest.skip("Vision encoder not available on this deployment (503)")
     assert status == 200
     assert "items" in body
     assert "total" in body
@@ -75,6 +77,8 @@ def test_search_by_image_valid(sample_image_bytes):
 
 def test_search_by_image_department_filter(sample_image_bytes):
     status, body = api_post_image("/search/image?department=Men&limit=5", sample_image_bytes)
+    if status == 503:
+        pytest.skip("Vision encoder not available on this deployment (503)")
     assert status == 200
     for item in body["items"]:
         assert item["department"] == "Men"
