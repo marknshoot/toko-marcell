@@ -1,21 +1,22 @@
 #!/usr/bin/env python3
 """
-Generate 384-dimensional dense sentence embeddings for all products in the catalog
-and write them to the Postgres `products.embedding` column with an HNSW cosine index.
+Generate dense sentence embeddings for all products in the catalog
+and write them to a Postgres column with an HNSW cosine index.
 
-Model: sentence-transformers/all-MiniLM-L6-v2 (via fastembed ONNX runtime)
-Dimension: 384
-Text representation: title + brand + category + features + description
+Default: sentence-transformers/all-MiniLM-L6-v2 (384-d) → ``products.embedding``
+
+With ``--model`` and ``--column`` flags, can embed using any fastembed-supported
+model into any vector(384) column (e.g. the multilingual A/B variant).
 
 Run:
   python3 pipelines/embed_catalog.py
+  python3 pipelines/embed_catalog.py --model sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 --column embedding_ml
 """
 
 import argparse
 import os
 import sys
 import time
-from pathlib import Path
 
 import psycopg
 from fastembed import TextEmbedding
@@ -24,7 +25,8 @@ DEFAULT_DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko"
 )
 BATCH_SIZE = 128
-MODEL_NAME = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
+DEFAULT_COLUMN = "embedding"
 
 
 def log(msg):
@@ -57,11 +59,18 @@ def main():
     ap.add_argument("--database-url", default=DEFAULT_DATABASE_URL)
     ap.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     ap.add_argument("--limit", type=int, default=0, help="Optional limit for dry runs")
+    ap.add_argument("--model", default=DEFAULT_MODEL,
+                    help="fastembed model name (must produce same dimension as column)")
+    ap.add_argument("--column", default=DEFAULT_COLUMN,
+                    help="Target column in products table (e.g. 'embedding' or 'embedding_ml')")
     args = ap.parse_args()
 
+    model_name = args.model
+    column = args.column
+
     started = time.perf_counter()
-    log(f"loading embedding model: {MODEL_NAME}...")
-    model = TextEmbedding(model_name=MODEL_NAME)
+    log(f"loading embedding model: {model_name}...")
+    model = TextEmbedding(model_name=model_name)
     log("model ready.")
 
     with psycopg.connect(args.database_url) as conn:
@@ -100,29 +109,30 @@ def main():
                     for doc_id, vec in zip(doc_ids, embeddings)
                 ]
                 cur.executemany(
-                    "UPDATE products SET embedding = %s WHERE id = %s",
+                    f"UPDATE products SET {column} = %s WHERE id = %s",
                     update_params,
                 )
                 conn.commit()
                 updated += len(chunk)
                 log(f"  progress: {updated:,} / {total:,} products embedded ({round(updated/total*100)}%)")
 
-            log("building HNSW cosine index (products_embedding_idx)...")
+            idx_name = f"products_{column}_idx"
+            log(f"building HNSW cosine index ({idx_name})...")
             idx_start = time.perf_counter()
             cur.execute(
-                """
-                CREATE INDEX IF NOT EXISTS products_embedding_idx ON products
-                  USING hnsw (embedding vector_cosine_ops)
+                f"""
+                CREATE INDEX IF NOT EXISTS {idx_name} ON products
+                  USING hnsw ({column} vector_cosine_ops)
                 """
             )
             conn.commit()
             log(f"HNSW index built in {round(time.perf_counter() - idx_start, 2)}s")
 
-            cur.execute("SELECT count(*), count(embedding) FROM products")
+            cur.execute(f"SELECT count(*), count({column}) FROM products")
             total_db, embedded_db = cur.fetchone()
 
     total_time = round(time.perf_counter() - started, 2)
-    log(f"Done! {embedded_db:,} of {total_db:,} products have 384-dim embeddings in {total_time}s.")
+    log(f"Done! {embedded_db:,} of {total_db:,} products have embeddings in '{column}' ({model_name}) in {total_time}s.")
     return 0
 
 

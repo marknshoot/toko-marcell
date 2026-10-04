@@ -55,6 +55,10 @@ class Settings(BaseSettings):
     ENABLE_TRIMODAL: bool = False
     ENABLE_RERANKER: bool = False
 
+    # ── Text embedding model switch (multilingual A/B) ──────────────────────
+    TEXT_EMBED_MODEL: str = "sentence-transformers/all-MiniLM-L6-v2"
+    TEXT_EMBED_COLUMN: str = "embedding"
+
     # ── Model paths / caches ────────────────────────────────────────────────
     FASTEMBED_CACHE_DIR: str = "/tmp/fastembed_cache"
     HF_HUB_CACHE: str = "/tmp/hf_cache"

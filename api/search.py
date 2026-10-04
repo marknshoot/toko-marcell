@@ -277,17 +277,26 @@ _EMBED_LOCK = threading.Lock()
 
 
 def get_embed_model():
-    """Load the fastembed sentence transformer lazily."""
+    """Load the fastembed sentence transformer lazily.
+
+    The model is selected by the ``TEXT_EMBED_MODEL`` env var / config setting.
+    Defaults to ``sentence-transformers/all-MiniLM-L6-v2``.
+    """
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
         with _EMBED_LOCK:
             if _EMBED_MODEL is None:
                 from fastembed import TextEmbedding
+                model_name = os.environ.get(
+                    "TEXT_EMBED_MODEL",
+                    "sentence-transformers/all-MiniLM-L6-v2",
+                )
                 cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", "/tmp/fastembed_cache")
                 _EMBED_MODEL = TextEmbedding(
-                    model_name="sentence-transformers/all-MiniLM-L6-v2",
+                    model_name=model_name,
                     cache_dir=cache_dir,
                 )
+                logger.info("Loaded text embedding model: %s", model_name)
     return _EMBED_MODEL
 
 
