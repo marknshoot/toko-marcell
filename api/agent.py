@@ -11,7 +11,7 @@ A single agent, one pass per turn:
 
 import asyncio
 import json
-import os
+import logging
 import time
 from typing import Any
 
@@ -22,50 +22,19 @@ from agent_tools import (
     search_by_image,
     search_catalog,
 )
+from config import get_settings
 from fastapi import HTTPException
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 from langchain_google_genai import ChatGoogleGenerativeAI
 
+logger = logging.getLogger(__name__)
 
-def _load_env():
-    for candidate in [
-        os.path.join(os.path.dirname(__file__), ".env"),
-        os.path.join(os.path.dirname(__file__), "..", ".env"),
-    ]:
-        if os.path.isfile(candidate):
-            try:
-                with open(candidate, encoding="utf-8") as f:
-                    for line in f:
-                        line = line.strip()
-                        if line and not line.startswith("#") and "=" in line:
-                            k, v = line.split("=", 1)
-                            k, v = k.strip(), v.strip().strip("'\"")
-                            if k and k not in os.environ:
-                                os.environ[k] = v
-            except Exception:
-                pass
-
-_load_env()
-
-DATABASE_URL = os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite")
-
-# OpenRouter is preferred when a key is present: its free text-model tier is far
-# more generous than the Gemini free tier, and the API is OpenAI-compatible.
-DEFAULT_OPENROUTER_MODEL = "openrouter/free"
-# `openrouter/free` already auto-routes across OpenRouter's free pool, so no
-# extra fallbacks are needed. Set LLM_FALLBACK_MODELS to a comma-separated list
-# to pin specific fallbacks instead.
-DEFAULT_OPENROUTER_FALLBACKS = ""
-OPENROUTER_BASE_URL = os.environ.get("LLM_BASE_URL") or "https://openrouter.ai/api/v1"
 _LLM_LOGGED = False
 
+
 def _get_gemini_key() -> str:
-    key = (
-        os.environ.get("GEMINI_API_KEY")
-        or os.environ.get("GEMINI_API-key")
-        or os.environ.get("GOOGLE_API_KEY")
-    )
+    settings = get_settings()
+    key = settings.GEMINI_API_KEY or settings.GOOGLE_API_KEY
     if not key:
         raise HTTPException(
             status_code=503,
@@ -73,43 +42,45 @@ def _get_gemini_key() -> str:
         )
     return key
 
+
 def _get_gemini_model() -> str:
-    return os.environ.get("GEMINI_MODEL") or GEMINI_MODEL
+    return get_settings().GEMINI_MODEL
+
 
 def _get_openrouter_key() -> str | None:
-    return os.environ.get("OPENROUTER_API_KEY") or None
+    return get_settings().OPENROUTER_API_KEY or None
+
 
 def _get_llm_model() -> str:
-    return os.environ.get("LLM_MODEL") or DEFAULT_OPENROUTER_MODEL
+    return get_settings().LLM_MODEL
+
 
 def _get_llm_models() -> list[str]:
-    """Ordered OpenRouter routing list: primary first, then free fallbacks.
-
-    Free models periodically return 429/503 (upstream overload); OpenRouter
-    walks this list until one accepts the request.
-    """
+    """Ordered OpenRouter routing list: primary first, then free fallbacks."""
     primary = _get_llm_model()
-    raw = os.environ.get("LLM_FALLBACK_MODELS", DEFAULT_OPENROUTER_FALLBACKS)
+    raw = get_settings().LLM_FALLBACK_MODELS
     fallbacks = [m.strip() for m in raw.split(",") if m.strip()]
     return [primary, *[m for m in fallbacks if m != primary]]
+
 
 def _get_llm(temperature: float):
     """Build the chat model for one turn.
 
     Prefers OpenRouter (OpenAI-compatible) when OPENROUTER_API_KEY is set,
-    otherwise falls back to Google Gemini. Both are used through LangChain so
-    ``.bind_tools()`` and message handling stay identical.
+    otherwise falls back to Google Gemini.
     """
+    settings = get_settings()
     or_key = _get_openrouter_key()
     global _LLM_LOGGED
     if not _LLM_LOGGED:
         _LLM_LOGGED = True
-        # Printed once per process: env vars exported in the shell override .env,
-        # so this line is the only reliable way to see the model actually in use.
         if or_key:
-            print(f"[LLM] provider=openrouter models={_get_llm_models()} base_url={OPENROUTER_BASE_URL}", flush=True)
+            logger.info(
+                "[LLM] provider=openrouter models=%s base_url=%s",
+                _get_llm_models(), settings.LLM_BASE_URL,
+            )
         else:
-            print(f"[LLM] provider=gemini model={_get_gemini_model()}", flush=True)
+            logger.info("[LLM] provider=gemini model=%s", _get_gemini_model())
     if or_key:
         try:
             from langchain_openai import ChatOpenAI
@@ -121,13 +92,11 @@ def _get_llm(temperature: float):
         return ChatOpenAI(
             model=_get_llm_model(),
             api_key=or_key,
-            base_url=OPENROUTER_BASE_URL,
+            base_url=settings.LLM_BASE_URL,
             temperature=temperature,
             extra_body={"models": _get_llm_models()},
             default_headers={
-                "HTTP-Referer": os.environ.get(
-                    "LLM_SITE_URL", "https://toko-marcell.vercel.app"
-                ),
+                "HTTP-Referer": settings.LLM_SITE_URL,
                 "X-Title": "Toko Marcell AI Copilot",
             },
         )
@@ -136,6 +105,7 @@ def _get_llm(temperature: float):
         api_key=_get_gemini_key(),
         temperature=temperature,
     )
+
 
 def _extract_text(content: Any) -> str:
     if isinstance(content, str):
@@ -149,6 +119,7 @@ def _extract_text(content: Any) -> str:
                 texts.append(part["text"])
         return "".join(texts)
     return str(content)
+
 
 # Tool definitions (OpenAI-style schema; bound by both OpenRouter and Gemini via LangChain)
 TOOLS_SCHEMA = [
@@ -349,10 +320,8 @@ def _get_session_browsing_context(session_id: str | None, db_url: str) -> str:
         return ""
 
 
-
-
 def _compact_tool_result(name: str, res: Any) -> Any:
-    """Keep tool result representation compact to minimize prompt tokens and avoid credit limits."""
+    """Keep tool result representation compact to minimize prompt tokens."""
     if not res:
         return res
     if name in ("search_catalog", "search_by_image") and isinstance(res, list):
@@ -444,16 +413,10 @@ async def chat_copilot(
     image_url: str | None = None,
     db_url: str | None = None,
 ) -> dict[str, Any]:
-    """Run one full Toko Marcell AI Copilot turn.
-
-    LLM provider: OpenRouter (OpenAI-compatible via LangChain) when
-    OPENROUTER_API_KEY is set, otherwise Google Gemini.
-
-    Steps: planner (tool decision + guardrails) -> concurrent tool execution
-    -> grounded synthesis from the tool evidence.
-    """
+    """Run one full Toko Marcell AI Copilot turn."""
     started = time.perf_counter()
-    url = db_url or DATABASE_URL
+    settings = get_settings()
+    url = db_url or settings.DATABASE_URL
 
     if not messages:
         return {
@@ -481,9 +444,6 @@ async def chat_copilot(
     tool_calls_executed = []
     executed_tools_results = []
 
-    # The copilot is text-only: free vision-capable models have very small usage quotas,
-    # so an attached image is never sent to the LLM. It is used as a retrieval key instead —
-    # the visual search runs deterministically and its products become tool evidence.
     if image_url:
         convo_history[-1].content += (
             "\n[The shopper attached an image. You cannot see or describe it. Visual-search "
@@ -494,7 +454,7 @@ async def chat_copilot(
                 search_by_image, image_url_or_ref=image_url, limit=4, db_url=url
             )
         except Exception as e:
-            print(f"[copilot] user-image visual search failed: {e}", flush=True)
+            logger.warning("[copilot] user-image visual search failed: %s", e)
             image_hits = []
         if image_hits:
             tool_calls_executed.append(
@@ -502,19 +462,16 @@ async def chat_copilot(
             )
             executed_tools_results.append({"name": "search_by_image", "result": image_hits})
 
-    # When an image was attached we already ran the visual search deterministically, so don't
-    # offer that tool to the planner — it cannot reproduce the image ref and would duplicate it.
     planner_tools = TOOLS_SCHEMA
     if image_url:
         planner_tools = [t for t in TOOLS_SCHEMA if t["function"]["name"] != "search_by_image"]
 
     try:
         planner_llm = _get_llm(0.1).bind_tools(planner_tools)
-
-        ai_msg = await asyncio.to_thread(planner_llm.invoke, convo_history)
+        ai_msg = await planner_llm.ainvoke(convo_history)
         tool_calls = ai_msg.tool_calls or []
     except Exception as e:
-        print(f"[ERROR] Planner LLM: {e}", flush=True)
+        logger.error("Planner LLM error: %s", e)
         raise HTTPException(
             status_code=502,
             detail="Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!",
@@ -557,10 +514,10 @@ async def chat_copilot(
 
         try:
             syn_llm = _get_llm(0.3)
-            syn_res = await asyncio.to_thread(syn_llm.invoke, syn_prompt)
+            syn_res = await syn_llm.ainvoke(syn_prompt)
             final_reply = _extract_text(syn_res.content)
         except Exception as e:
-            print(f"[ERROR] Synthesis LLM: {e}", flush=True)
+            logger.error("Synthesis LLM error: %s", e)
             raise HTTPException(
                 status_code=502,
                 detail="Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!",

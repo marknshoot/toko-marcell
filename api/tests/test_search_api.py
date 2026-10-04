@@ -4,6 +4,8 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
+import pytest
+
 BASE_URL = "http://localhost:8001"
 
 
@@ -40,21 +42,31 @@ def test_search_basic_query():
     assert body["items"][0]["score"] > 0
 
 
-def test_search_modes():
-    # Explicit bm25 mode
+def test_search_modes_bm25():
+    """BM25 mode works independently of CLIP models."""
     status_bm25, body_bm25 = api_request("GET", "/search?q=jeans&limit=5&mode=bm25")
     assert status_bm25 == 200
     assert body_bm25["mode"] == "bm25"
     assert body_bm25["total"] > 0
 
-    # Explicit vector mode
+
+def test_search_modes_vector():
+    """Vector mode works independently of CLIP models."""
     status_vec, body_vec = api_request("GET", "/search?q=jeans&limit=5&mode=vector")
     assert status_vec == 200
     assert body_vec["mode"] == "vector"
     assert body_vec["total"] > 0
 
-    # Explicit trimodal mode (BM25 + MiniLM + CLIP text-to-image RRF)
+
+def test_search_modes_trimodal():
+    """Trimodal mode requires ENABLE_TRIMODAL and the CLIP text encoder.
+
+    Skips automatically when the API reports trimodal as disabled (400) or
+    the encoder is unavailable (503).
+    """
     status_tri, body_tri = api_request("GET", "/search?q=jeans&limit=5&mode=trimodal")
+    if status_tri in (400, 503):
+        pytest.skip(f"trimodal unavailable on this deployment (HTTP {status_tri})")
     assert status_tri == 200
     assert body_tri["mode"] == "trimodal"
     assert body_tri["total"] > 0

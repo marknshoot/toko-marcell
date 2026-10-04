@@ -137,6 +137,35 @@ A product is the shape the storefront renders (camelCase, numbers as numbers):
 
 ---
 
+## Module map
+
+```text
+api/
+├── main.py                   # thin app factory: lifespan, CORS, schema migration, include routers
+├── config.py                 # pydantic-settings Settings, one cached get_settings()
+├── db.py                     # psycopg_pool ConnectionPool, get_conn() context manager / Depends
+├── schemas.py                # shared Pydantic request/response models
+├── routers/
+│   ├── health.py             # GET /health
+│   ├── catalog.py            # GET /categories, /products, /products/{id}  + row_to_product helper
+│   ├── search.py             # GET /search, POST /search/image, POST /search/reindex
+│   ├── recs.py               # GET /recs/popular, /recs/item/{asin}, /recs/session
+│   ├── reviews.py            # GET /products/{id}/reviews, /reviews/{asin}
+│   ├── events.py             # POST /events, GET /events/summary
+│   ├── checkout.py           # POST /checkout/confirm, GET /orders/{token}
+│   └── copilot.py            # POST /copilot/chat, GET /copilot/tools
+├── search.py                 # BM25 index, embeddings, RRF, CLIP encoders (ONNX)
+├── reranker.py               # Stage-2 ONNX cross-encoder (ms-marco-MiniLM-L-6-v2)
+├── agent.py                  # LangChain orchestrator (OpenRouter/Gemini) + tools
+├── agent_tools.py            # deterministic grounding tools (search, details, image, policy)
+├── rate_limiter.py           # sliding-window per-IP rate limiter for /copilot/chat
+├── knowledge_seed.py         # markdown → embedded store_knowledge chunks
+├── knowledge/                # authored RAG source (size charts, store policies)
+└── tests/                    # pytest suite (unit + live API integration)
+```
+
+---
+
 ## Search — how it ranks
 
 Search is the heart of the backend, so the reasoning is documented where the code lives

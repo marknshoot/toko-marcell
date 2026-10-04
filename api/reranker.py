@@ -6,9 +6,12 @@ Takes Stage 1 retrieval candidates (from BM25 + pgvector RRF) and scores (query,
 with deep cross-attention to elevate the most contextually relevant products.
 """
 
+import logging
 import os
 import threading
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 _RERANKER_SESSION = None
 _RERANKER_TOKENIZER = None
@@ -60,7 +63,7 @@ def _get_reranker():
             _RERANKER_TOKENIZER = tokenizer
             return _RERANKER_SESSION, _RERANKER_TOKENIZER
         except Exception as e:
-            print(f"[reranker] Warning: Failed to load ONNX cross-encoder: {e}. Falling back to baseline rank.")
+            logger.warning("Failed to load ONNX cross-encoder: %s. Falling back to baseline rank.", e)
             _INIT_FAILED = True
             return None, None
 
@@ -150,5 +153,5 @@ def rerank(
         scored_candidates.sort(key=lambda x: x["cross_encoder_score"], reverse=True)
         return scored_candidates[:limit]
     except Exception as e:
-        print(f"[reranker] Error during cross-encoder inference: {e}")
+        logger.warning("Error during cross-encoder inference: %s", e)
         return candidates[:limit]
