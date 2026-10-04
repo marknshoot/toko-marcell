@@ -1,0 +1,35 @@
+{
+  "timestamp": "2026-10-04T05:02:43.404530+00:00",
+  "git_commit": "c7a830c",
+  "eval_protocol": "sequential leave-one-out, active users >= 5 interactions",
+  "n_users_sampled": 5000,
+  "n_active_users": 210579,
+  "n_catalog": 6000,
+  "n_item_recs": 6000,
+  "seed": 42,
+  "eval_duration_s": 0.87,
+  "models": {
+    "Random": {
+      "hr10": 0.0022,
+      "hr5": 0.0014,
+      "mrr10": 0.000727,
+      "ndcg10": 0.001072
+    },
+    "Popularity (M8)": {
+      "hr10": 0.0018,
+      "hr5": 0.0006,
+      "mrr10": 0.000564,
+      "ndcg10": 0.000845
+    },
+    "Item-to-Item CF (M9)": {
+      "hr10": 0.0796,
+      "hr5": 0.0616,
+      "mrr10": 0.041153,
+      "ndcg10": 0.050147
+    }
+  },
+  "relative_gains": {
+    "cf_vs_popularity_hr10": 4322.2,
+    "cf_vs_popularity_ndcg10": 5837.9
+  }
+}
