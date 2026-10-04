@@ -21,7 +21,7 @@ services:
     restart: unless-stopped
     build:
       context: .
-      dockerfile: dockerfile
+      dockerfile: Dockerfile
     ports:
       - "8001:8000"
     environment:
@@ -42,7 +42,7 @@ services:
       - .:/app
       - ../models:/models:ro
       - cache_fastembed:/tmp/fastembed_cache
-      - cache_hf:/root/.cache/huggingface
+      - cache_hf:/home/appuser/.cache/huggingface
     depends_on:
       db:
         condition: service_healthy
@@ -55,7 +55,7 @@ services:
   seed:
     build:
       context: .
-      dockerfile: dockerfile
+      dockerfile: Dockerfile
     profiles: ["tools"]
     # entrypoint + `docker compose run seed --reset` appends the extra flag
     entrypoint:
