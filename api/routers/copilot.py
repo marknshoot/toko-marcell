@@ -62,3 +62,21 @@ def copilot_tools():
     """Returns the deterministic tool definitions used by the AI Copilot."""
     from agent import TOOLS_SCHEMA
     return {"tools": TOOLS_SCHEMA}
+
+
+# ── Thread memory (v2, design §2) ────────────────────────────────────────────
+
+@router.get("/copilot/threads/{thread_id}")
+def get_thread(thread_id: str):
+    """Return the display messages for a conversation thread (may be empty)."""
+    from copilot_memory import get_thread_messages
+    messages = get_thread_messages(thread_id)
+    return {"thread_id": thread_id, "messages": messages}
+
+
+@router.delete("/copilot/threads/{thread_id}", status_code=204)
+def delete_thread_endpoint(thread_id: str):
+    """Reset a conversation: delete all persisted checkpointer state for it."""
+    from copilot_memory import delete_thread
+    delete_thread(thread_id)
+    return None

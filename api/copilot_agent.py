@@ -151,6 +151,47 @@ class ContextInjectionMiddleware(AgentMiddleware):
         return await handler(request)
 
 
+# Token budget for the rolling history kept in the prompt (design §2: trim by
+# token budget, not a fixed turn count).
+HISTORY_TOKEN_BUDGET = 2000
+
+
+class TrimHistoryMiddleware(AgentMiddleware):
+    """Trim the message history to a token budget before each model call.
+
+    Only meaningful when a checkpointer restores long histories; harmless
+    otherwise. Uses a cheap char/4 token estimate so no tokenizer is required.
+    """
+
+    def _trim(self, request):
+        try:
+            from langchain_core.messages import trim_messages
+
+            def _len(msgs):
+                return sum(len(str(getattr(m, "content", ""))) for m in msgs) // 4
+
+            trimmed = trim_messages(
+                request.messages,
+                max_tokens=HISTORY_TOKEN_BUDGET,
+                token_counter=_len,
+                strategy="last",
+                include_system=False,
+                allow_partial=False,
+                start_on="human",
+            )
+            if trimmed and len(trimmed) < len(request.messages):
+                return request.override(messages=trimmed)
+        except Exception:
+            pass
+        return request
+
+    def wrap_model_call(self, request, handler):  # type: ignore[override]
+        return handler(self._trim(request))
+
+    async def awrap_model_call(self, request, handler):  # type: ignore[override]
+        return await handler(self._trim(request))
+
+
 def _catalog_categories(db_url: str) -> list[str]:
     try:
         with psycopg.connect(db_url) as conn:
@@ -169,6 +210,7 @@ def build_agent(ctx: ToolContext, session_id: str | None, *, fake: bool | None =
     tools = build_tools(ctx, _catalog_categories(ctx.db_url))
     middleware = [
         ContextInjectionMiddleware(ctx, session_id),
+        TrimHistoryMiddleware(),
         ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
     ]
     return create_agent(
@@ -250,7 +292,15 @@ async def run_turn(
     invoke_cfg = {"configurable": {"thread_id": thread_id}} if (checkpointer and thread_id) else {}
 
     try:
-        result = await agent.ainvoke({"messages": input_messages}, config=invoke_cfg)
+        if checkpointer is not None:
+            # The sync PostgresSaver doesn't implement async methods, so run the
+            # synchronous graph in a worker thread to keep the route async.
+            import asyncio
+            result = await asyncio.to_thread(
+                agent.invoke, {"messages": input_messages}, invoke_cfg
+            )
+        else:
+            result = await agent.ainvoke({"messages": input_messages}, config=invoke_cfg)
     except Exception as e:
         logger.error("copilot agent error: %s", e)
         from fastapi import HTTPException
@@ -260,6 +310,14 @@ async def run_turn(
         ) from None
 
     reply = _extract_reply(result) or "Maaf kak, mimin belum nemu jawabannya. Boleh ulangi ya?"
+
+    # Record activity for TTL cleanup (design §2).
+    if checkpointer is not None and thread_id:
+        try:
+            from copilot_memory import touch_thread
+            touch_thread(thread_id, db_url=db_url)
+        except Exception:
+            pass
 
     # Collect tool_calls from the message trace.
     tool_calls = []
