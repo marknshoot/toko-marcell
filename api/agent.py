@@ -1,11 +1,12 @@
 """
-Toko Marcell AI Copilot Orchestrator.
+Toko Marcell AI Copilot orchestrator.
 
-Implements the Tri-Modal Multi-Agent Fan-Out / Fan-In architecture:
-- Node 0: Relevance, Guardrail & Greeting Fast-Path Classifier
-- Node 1: Planner & Tool Decision Node
-- Node 2: Tri-Modal Concurrent Tool Execution (asyncio.gather)
-- Node 3: Grounded Synthesizer with Admin Toko Marcell Persona
+A single agent, one pass per turn:
+1. Planner: one LLM call with the tool schema bound. Guardrails live in the system
+   prompt, so greetings and off-topic requests produce zero tool calls.
+2. Tool execution: the requested deterministic tools run concurrently (asyncio.gather).
+3. Grounded synthesis: a second LLM call writes the reply from the tool evidence only,
+   in the Admin Toko Marcell persona.
 """
 
 import asyncio
@@ -158,7 +159,7 @@ TOOLS_SCHEMA = [
         "function": {
             "name": "search_catalog",
             "description": (
-                "Searches Toko Marcell catalog for products using hybrid BM25 + vector search and Cross-Encoder reranking. "
+                "Searches Toko Marcell catalog for products using hybrid BM25 + dense vector search (optionally cross-encoder reranked). "
                 "Use for finding apparel, pants, shirts, jackets, shoes, or outfits."
             ),
             "parameters": {
@@ -315,7 +316,7 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store mall sty
 8. GREETINGS & CHITCHAT:
    - When the shopper greets you ("Halo", "Hai", "Selamat pagi/siang/sore/malam", "Hi min"), expresses gratitude ("Terima kasih"), or asks what you can do ("Kamu siapa", "Bisa apa"):
      1. Do NOT invoke any tools (no search_catalog, no review tools).
-     2. Reply warmly as Admin Toko Marcell, introduce our fashion collections and services (styling, size chart TB/BB, tracking), and invite them to browse.
+     2. Reply warmly as Admin Toko Marcell, introduce our fashion collections and services (styling, size chart TB/BB, store policies), and invite them to browse.
 """
 
 
@@ -450,9 +451,8 @@ async def chat_copilot(
     LLM provider: OpenRouter (OpenAI-compatible via LangChain) when
     OPENROUTER_API_KEY is set, otherwise Google Gemini.
 
-    Node 1: Planner, Guardrail & Tool Decision Node
-    Node 2: Tri-Modal Concurrent Tool Execution (asyncio.gather)
-    Node 3: Grounded Synthesis with Admin Toko Marcell Persona
+    Steps: planner (tool decision + guardrails) -> concurrent tool execution
+    -> grounded synthesis from the tool evidence.
     """
     started = time.perf_counter()
     url = db_url or DATABASE_URL

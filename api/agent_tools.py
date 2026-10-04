@@ -60,7 +60,7 @@ def search_catalog(
     limit: int = 4,
     db_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Hybrid BM25 + pgvector search with Stage 2 Cross-Encoder reranking.
+    """Hybrid BM25 + pgvector search, optionally reranked by the Stage-2 cross-encoder (ENABLE_RERANKER).
 
     Supports department ('Men', 'Women'), category, and budget ('price_max') constraints.
     """

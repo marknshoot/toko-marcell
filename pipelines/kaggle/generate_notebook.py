@@ -811,12 +811,12 @@ print(" - /kaggle/working/best_champion_model/ (Safetensors Checkpoint)")
 
 nb["cells"] = cells
 
-output_file = Path("/home/marcell/Projects/marcell-portfolio/toko-marcell/manual/pipelines/kaggle/toko_marcell_vlm_experiments.ipynb")
+output_file = Path(__file__).resolve().parent / "toko_marcell_vlm_experiments.ipynb"
 with open(output_file, "w", encoding="utf-8") as f:
     nbf.write(nb, f)
 
 # Also save a local mirror for direct notebook inspection
-local_mirror = Path("/home/marcell/Projects/marcell-portfolio/toko-marcell/manual/pipelines/toko_marcell_vlm_research.ipynb")
+local_mirror = Path(__file__).resolve().parent.parent / "toko_marcell_vlm_research.ipynb"
 with open(local_mirror, "w", encoding="utf-8") as f:
     nbf.write(nb, f)
 

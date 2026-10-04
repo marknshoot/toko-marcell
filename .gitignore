@@ -19,6 +19,9 @@ __pycache__/
 # defence in depth: the plan pack is local-only, never commit it
 plan/
 
+# private portfolio review notes (local-only)
+PORTFOLIO_REVIEW.md
+
 # fine-tuned model checkpoints and weights
 #
 # Large binaries stay local (and the production ONNX text encoder lives on Hugging Face Hub).
