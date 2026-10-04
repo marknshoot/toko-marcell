@@ -21,6 +21,9 @@ class EventIn(BaseModel):
         "add_to_cart",
         "checkout_start",
         "purchase_mock",
+        "copilot_message",
+        "copilot_product_click",
+        "copilot_add_to_cart",
     ]
     session_id: str = Field(min_length=8, max_length=64)
     asin: str | None = Field(default=None, max_length=32)
