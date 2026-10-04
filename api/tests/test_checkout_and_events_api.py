@@ -32,6 +32,9 @@ def test_events_all_valid_types():
         ("add_to_cart", {"asin": "B000YXC2LI", "qty": 1, "price_idr": 494700}),
         ("checkout_start", {"qty": 1, "price_idr": 494700}),
         ("purchase_mock", {"qty": 1, "price_idr": 494700}),
+        ("copilot_message", {"query": "ada celana chino?"}),
+        ("copilot_product_click", {"asin": "B000YXC2LI"}),
+        ("copilot_add_to_cart", {"asin": "B000YXC2LI", "qty": 1, "price_idr": 494700}),
     ]
 
     for event_type, extra in event_types:

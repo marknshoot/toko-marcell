@@ -473,7 +473,12 @@ def search_by_image(
 
 
 def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -> list[dict[str, Any]]:
-    """Retrieve store operations, QRIS demo rules, shipping, returns, and master size charts."""
+    """Retrieve store operations, QRIS demo rules, shipping, returns, and master size charts.
+
+    Hypothetical-question RAG (design §6): match the query against the per-chunk
+    hypothetical questions when that table exists, then return the parent chunks
+    (deduped). Falls back to direct chunk-embedding search otherwise.
+    """
     q_vec = embed_query(query)
     if q_vec is None:
         return []
@@ -481,18 +486,55 @@ def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -
     vec_str = "[" + ",".join(f"{x:.6f}" for x in q_vec) + "]"
     with _connect(db_url) as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT category, title, content,
-                       ROUND((1 - (embedding <=> %s::vector))::numeric, 4) AS score
-                FROM store_knowledge
-                WHERE embedding IS NOT NULL
-                ORDER BY embedding <=> %s::vector ASC
-                LIMIT %s
-                """,
-                (vec_str, vec_str, limit),
-            )
-            rows = cur.fetchall()
+            # Prefer the question index when it exists and is populated.
+            use_questions = False
+            try:
+                cur.execute("SELECT to_regclass('store_knowledge_questions')")
+                if cur.fetchone()[0] is not None:
+                    cur.execute("SELECT 1 FROM store_knowledge_questions LIMIT 1")
+                    use_questions = cur.fetchone() is not None
+            except Exception:
+                use_questions = False
+
+            rows = []
+            if use_questions:
+                # Pull extra question matches, then dedupe to parent chunks.
+                cur.execute(
+                    """
+                    SELECT k.category, k.title, k.content,
+                           ROUND((1 - (q.embedding <=> %s::vector))::numeric, 4) AS score,
+                           k.id
+                    FROM store_knowledge_questions q
+                    JOIN store_knowledge k ON k.id = q.chunk_id
+                    WHERE q.embedding IS NOT NULL
+                    ORDER BY q.embedding <=> %s::vector ASC
+                    LIMIT %s
+                    """,
+                    (vec_str, vec_str, limit * 4),
+                )
+                seen = set()
+                for r in cur.fetchall():
+                    cid = r[4]
+                    if cid in seen:
+                        continue
+                    seen.add(cid)
+                    rows.append(r[:4])
+                    if len(rows) >= limit:
+                        break
+
+            if not rows:
+                cur.execute(
+                    """
+                    SELECT category, title, content,
+                           ROUND((1 - (embedding <=> %s::vector))::numeric, 4) AS score
+                    FROM store_knowledge
+                    WHERE embedding IS NOT NULL
+                    ORDER BY embedding <=> %s::vector ASC
+                    LIMIT %s
+                    """,
+                    (vec_str, vec_str, limit),
+                )
+                rows = cur.fetchall()
 
     return [
         {
