@@ -503,3 +503,76 @@ def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -
         }
         for r in rows
     ]
+
+
+# ---------------------------------------------------------------------------
+# Sizing recommender (design §3 — 3 layers, never a certainty)
+# ---------------------------------------------------------------------------
+
+def _infer_garment_kind(department: str | None, category: str | None) -> str:
+    """Guess tops vs bottoms from department/category text. Defaults to tops."""
+    blob = f"{department or ''} {category or ''}".lower()
+    bottoms_kw = ("pant", "trouser", "jean", "short", "legging", "chino", "cargo", "skirt", "celana")
+    if any(k in blob for k in bottoms_kw):
+        return "bottoms"
+    return "tops"
+
+
+def recommend_size(
+    height_cm: float,
+    weight_kg: float,
+    asin: str | None = None,
+    category: str | None = None,
+    brand: str | None = None,
+    db_url: str | None = None,
+) -> dict[str, Any]:
+    """Suggest a size from TB (height) + BB (weight), layering store baseline,
+    brand cut rules, and the product's review fit signal.
+
+    Resolution:
+      - If ``asin`` is given, look up the product's brand + department/category
+        and its product-level fit signal (``product_fit``, brand fallback).
+      - Else use the provided ``brand`` / ``category`` directly.
+
+    The result is advisory ("coba ukuran X dulu"), always with a disclaimer —
+    never "you must buy size X".
+    """
+    from fit import get_product_fit
+    from sizing import recommend_size_core
+
+    if height_cm <= 0 or weight_kg <= 0:
+        return {"error": "Butuh tinggi badan (cm) dan berat badan (kg) yang valid untuk saran ukuran."}
+
+    resolved_brand = brand
+    resolved_category = category
+    resolved_department = None
+    product_fit = None
+    matched_title = None
+
+    if asin:
+        with _connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT asin, title, brand, department, category FROM products WHERE asin = %s",
+                    (str(asin),),
+                )
+                row = cur.fetchone()
+                if row:
+                    matched_title = row[1]
+                    resolved_brand = resolved_brand or row[2]
+                    resolved_department = row[3]
+                    resolved_category = resolved_category or row[4]
+                    product_fit = get_product_fit(cur, row[0], resolved_brand)
+
+    garment_kind = _infer_garment_kind(resolved_department, resolved_category)
+
+    result = recommend_size_core(
+        height_cm=float(height_cm),
+        weight_kg=float(weight_kg),
+        garment_kind=garment_kind,
+        brand=resolved_brand,
+        product_fit=product_fit,
+    )
+    if matched_title:
+        result["matched_product"] = {"asin": asin, "title": matched_title}
+    return result
