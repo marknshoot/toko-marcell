@@ -1,7 +1,8 @@
 import json
-from pathlib import Path
 import urllib.error
 import urllib.request
+from pathlib import Path
+
 import pytest
 
 BASE_URL = "http://localhost:8001"
@@ -10,12 +11,12 @@ BASE_URL = "http://localhost:8001"
 def make_multipart_body(file_bytes: bytes, filename: str, content_type: str):
     boundary = "----WebKitFormBoundary7MA4YWxkTrZu0gW"
     lines = [
-        f"--{boundary}".encode("utf-8"),
-        f'Content-Disposition: form-data; name="file"; filename="{filename}"'.encode("utf-8"),
-        f"Content-Type: {content_type}".encode("utf-8"),
+        f"--{boundary}".encode(),
+        f'Content-Disposition: form-data; name="file"; filename="{filename}"'.encode(),
+        f"Content-Type: {content_type}".encode(),
         b"",
         file_bytes,
-        f"--{boundary}--".encode("utf-8"),
+        f"--{boundary}--".encode(),
         b"",
     ]
     body = b"\r\n".join(lines)

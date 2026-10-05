@@ -1,4 +1,3 @@
-import pytest
 import sys
 from pathlib import Path
 
@@ -6,8 +5,7 @@ from pathlib import Path
 API_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API_DIR))
 
-from search import tokenize, stem, BM25Index, STOPWORDS, FIELD_WEIGHTS
-
+from search import BM25Index, stem, tokenize
 
 # ── Tokenizer & Stemmer Edge Cases ──────────────────────────────────────────
 

@@ -1,17 +1,19 @@
 import json
+import os
+import urllib.error
 import urllib.parse
 import urllib.request
-import urllib.error
-import pytest
 
 BASE_URL = "http://localhost:8001"
 
 
-def api_request(method, path, data=None):
+def api_request(method, path, data=None, headers=None):
     url = f"{BASE_URL}{path}"
-    headers = {"Content-Type": "application/json"} if data else {}
+    hdrs = {"Content-Type": "application/json"} if data else {}
+    if headers:
+        hdrs.update(headers)
     body = json.dumps(data).encode("utf-8") if data else None
-    req = urllib.request.Request(url, data=body, headers=headers, method=method)
+    req = urllib.request.Request(url, data=body, headers=hdrs, method=method)
     try:
         with urllib.request.urlopen(req) as resp:
             return resp.status, json.loads(resp.read().decode("utf-8"))
@@ -142,7 +144,46 @@ def test_search_department_filtering():
 
 
 def test_search_reindex():
-    status, body = api_request("POST", "/search/reindex")
+    status, body = api_request("POST", "/search/reindex", headers={"X-Admin-Token": os.environ.get("ADMIN_TOKEN", "dev-admin-token")})
     assert status == 202
     assert body["documents"] == 4670
     assert body["mode"] == "hybrid"
+
+
+def test_search_rerank_default_off():
+    """rerank defaults to false; result set size and mode stay the same."""
+    status_plain, body_plain = api_request("GET", "/search?q=jeans&limit=10")
+    assert status_plain == 200
+    assert body_plain.get("reranked") is False
+
+    # Explicit rerank=false must behave identically
+    status_off, body_off = api_request("GET", "/search?q=jeans&limit=10&rerank=false")
+    assert status_off == 200
+    assert body_off.get("reranked") is False
+    assert body_off["total"] == body_plain["total"]
+
+
+def test_search_rerank_on():
+    """rerank=true returns same total and the reranked flag is true (when ENABLE_RERANKER is set)."""
+    status_off, body_off = api_request("GET", "/search?q=jeans&limit=10&rerank=false")
+    status_on, body_on = api_request("GET", "/search?q=jeans&limit=10&rerank=true")
+    assert status_on == 200
+    # reranked flag should be True if ENABLE_RERANKER is set, otherwise False
+    assert isinstance(body_on.get("reranked"), bool)
+    # Total (number of matching products) should be equal regardless of reranking
+    assert body_on["total"] == body_off["total"]
+    # Result set size should be equal
+    assert len(body_on["items"]) == len(body_off["items"])
+
+
+def test_search_reindex_no_token_rejected():
+    """Reindex without X-Admin-Token header is rejected."""
+    status, body = api_request("POST", "/search/reindex")
+    # 403 (bad token) or 503 (unset) depending on deployment
+    assert status in (403, 503)
+
+
+def test_search_reindex_wrong_token_rejected():
+    """Reindex with an incorrect token is rejected with 403."""
+    status, body = api_request("POST", "/search/reindex", headers={"X-Admin-Token": "wrong-token-value"})
+    assert status == 403

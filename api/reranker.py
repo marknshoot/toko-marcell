@@ -31,8 +31,8 @@ def _get_reranker():
             return None, None
 
         try:
-            from huggingface_hub import hf_hub_download
             import onnxruntime as ort
+            from huggingface_hub import hf_hub_download
             from tokenizers import Tokenizer
 
             cache_dir = os.environ.get("HF_HUB_CACHE", "/tmp/hf_cache")
@@ -108,7 +108,16 @@ def rerank(
                 brand = c.get("brand") or ""
                 dept = c.get("department") or ""
                 cat = c.get("category") or ""
-                doc_texts.append(f"{brand} {base_text} - {dept} {cat}".strip())
+                # Include first 3 features and a truncated description when available,
+                # so the cross-encoder sees product attributes beyond just the title.
+                parts = [brand, base_text, "-", dept, cat]
+                features = c.get("features")
+                if features and isinstance(features, list):
+                    parts.extend(features[:3])
+                desc = c.get("description") or ""
+                if desc:
+                    parts.append(desc[:300])
+                doc_texts.append(" ".join(p for p in parts if p).strip())
             else:
                 doc_texts.append(str(c.get(text_key, "")))
 
@@ -133,7 +142,7 @@ def rerank(
         scores = outputs[0].flatten().tolist()
 
         scored_candidates = []
-        for cand, score in zip(candidates, scores):
+        for cand, score in zip(candidates, scores, strict=True):
             cand_copy = dict(cand)
             cand_copy["cross_encoder_score"] = float(score)
             scored_candidates.append(cand_copy)

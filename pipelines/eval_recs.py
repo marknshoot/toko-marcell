@@ -49,6 +49,7 @@ def main():
     parser.add_argument("--popular-recs-file", default=str(POPULAR_RECS_FILE))
     parser.add_argument("--n-users", type=int, default=5000, help="Number of test users")
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--out", default=None, help="Write machine-readable JSON results to this path")
     args = parser.parse_args()
 
     random.seed(args.seed)
@@ -169,6 +170,56 @@ def main():
     print(f"  HR@10 Relative Gain:  {hr10_gain:+.1f}% ({pop_hr10:.2%} -> {cf_hr10:.2%})")
     print(f"  nDCG@10 Relative Gain: {ndcg_gain:+.1f}% ({pop_ndcg:.4f} -> {cf_ndcg:.4f})")
     print("=" * 80)
+
+    if args.out:
+        import datetime
+        import subprocess
+        from pathlib import Path
+
+        try:
+            result = subprocess.run(
+                ["git", "rev-parse", "--short", "HEAD"],
+                capture_output=True, text=True, timeout=5,
+            )
+            git_commit = result.stdout.strip() or "unknown"
+        except Exception:
+            git_commit = "unknown"
+
+        out_path = Path(args.out)
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+
+        model_metrics = {}
+        for m in models:
+            hr10 = metrics[m]["hr10"] / sample_size
+            hr5 = metrics[m]["hr5"] / sample_size
+            mrr = metrics[m]["mrr"] / sample_size
+            ndcg = metrics[m]["ndcg10"] / sample_size
+            model_metrics[m] = {
+                "hr10": round(hr10, 6),
+                "hr5": round(hr5, 6),
+                "mrr10": round(mrr, 6),
+                "ndcg10": round(ndcg, 6),
+            }
+
+        output = {
+            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "git_commit": git_commit,
+            "eval_protocol": "sequential leave-one-out, active users >= 5 interactions",
+            "n_users_sampled": sample_size,
+            "n_active_users": len(active_users),
+            "n_catalog": len(catalog_asins),
+            "n_item_recs": len(item_recs),
+            "seed": args.seed,
+            "eval_duration_s": round(eval_duration, 2),
+            "models": model_metrics,
+            "relative_gains": {
+                "cf_vs_popularity_hr10": round(hr10_gain, 1),
+                "cf_vs_popularity_ndcg10": round(ndcg_gain, 1),
+            },
+        }
+        with open(out_path, "w") as f:
+            json.dump(output, f, indent=2)
+        print(f"\nResults written to {out_path}")
 
     return 0
 

@@ -1,21 +1,22 @@
+import hmac
 import os
 import secrets
 import time
 from typing import Literal
 
 import psycopg
-from fastapi import FastAPI, HTTPException, Query, UploadFile, File, Response
+from fastapi import FastAPI, File, HTTPException, Query, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, ConfigDict, Field
-
+from rate_limiter import check_copilot_rate_limit
 from search import (
     BM25Index,
-    get_index,
-    reset_index,
-    reciprocal_rank_fusion,
-    embed_query,
     embed_image_bytes,
+    embed_query,
     embed_query_clip_text,
+    get_index,
+    reciprocal_rank_fusion,
+    reset_index,
     tokenize,
     vision_encoder_ready,
 )
@@ -724,14 +725,21 @@ def build_search_index() -> BM25Index:
 
 
 @app.post("/search/reindex", status_code=202)
-def reindex_search():
+def reindex_search(request: Request):
     """Rebuild the in-memory index.
 
-    The index is cached for the life of the process, so a newly seeded catalog is
-    invisible until this is called (or the container restarts). Kept as an
-    endpoint because "why are my new products not searchable" is a confusing hour
-    otherwise.
+    Protected by X-Admin-Token header compared against ADMIN_TOKEN env var.
+    If ADMIN_TOKEN is unset, the endpoint is disabled (503).
     """
+    admin_token = os.environ.get("ADMIN_TOKEN", "")
+    if not admin_token:
+        raise HTTPException(
+            status_code=503,
+            detail="Reindex endpoint is disabled (ADMIN_TOKEN not configured).",
+        )
+    provided = request.headers.get("X-Admin-Token", "")
+    if not hmac.compare_digest(provided, admin_token):
+        raise HTTPException(status_code=403, detail="Invalid admin token.")
     _CATEGORIES_CACHE["data"] = None
     reset_index()
     index = get_index(build_search_index)
@@ -746,6 +754,7 @@ def search_products(
     department: str | None = None,
     category: str | None = None,
     mode: Literal["hybrid", "bm25", "vector", "trimodal"] = "hybrid",
+    rerank: bool = Query(False, description="When true AND ENABLE_RERANKER is set, apply cross-encoder reranking on fused candidates before pagination."),
 ):
     """Hybrid (BM25 + pgvector cosine similarity), BM25-only, vector-only, or trimodal search.
 
@@ -886,6 +895,38 @@ def search_products(
             ranked = index.dedupe(bm25_ranked)
 
     total = len(ranked)
+    reranked = False
+
+    # ── Optional cross-encoder reranking (Stage 2) ───────────────────────────
+    # Only when explicitly requested via ?rerank=true AND ENABLE_RERANKER is set.
+    # Fetches the top candidates as full product dicts so the cross-encoder sees
+    # features and descriptions, then re-sorts them before pagination.
+    if rerank and os.environ.get("ENABLE_RERANKER", "false").strip().lower() in ("1", "true", "yes") and ranked:
+        from reranker import rerank as do_rerank
+        # Take a generous window for the cross-encoder (top ~50 to rerank, regardless of limit)
+        rerank_window = min(len(ranked), max(limit + offset, 50))
+        rerank_hits = ranked[:rerank_window]
+        rerank_ids = [pid for pid, _ in rerank_hits]
+        with psycopg.connect(DATABASE_URL) as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"SELECT {PRODUCT_COLUMNS} FROM products WHERE id = ANY(%s)",
+                    (rerank_ids,),
+                )
+                rerank_rows = cur.fetchall()
+        rerank_by_id = {row[0]: row_to_product(row) for row in rerank_rows}
+        rerank_candidates = []
+        for pid, score in rerank_hits:
+            p = rerank_by_id.get(pid)
+            if p:
+                rerank_candidates.append({**p, "score": score})
+        if rerank_candidates:
+            reranked_items = do_rerank(q, rerank_candidates, text_key="title", limit=rerank_window)
+            # Rebuild ranked order from reranked items
+            ranked = [(item["id"], item.get("cross_encoder_score", item["score"])) for item in reranked_items] + ranked[rerank_window:]
+            total = len(ranked)
+            reranked = True
+
     hits = ranked[offset : offset + limit]
 
     items = []
@@ -912,6 +953,7 @@ def search_products(
         "offset": offset,
         "query": q,
         "mode": mode,
+        "reranked": reranked,
         "deduped": True,
         "took_ms": round((time.perf_counter() - started) * 1000, 2),
     }
@@ -919,7 +961,7 @@ def search_products(
 
 @app.post("/search/image")
 async def search_by_image(
-    file: UploadFile = File(...),
+    file: UploadFile = File(...),  # noqa: B008  # FastAPI dependency injection pattern
     department: str | None = Query(None),
     limit: int = Query(24, ge=1, le=50),
 ):
@@ -1187,31 +1229,46 @@ def recs_session(
                     if target not in seen_set and target not in cand_seen:
                         candidate_asins.append(target)
                         cand_seen.add(target)
-                        if len(candidate_asins) >= limit:
+                        if len(candidate_asins) >= limit * 3:  # over-collect to survive missing products
                             break
-                if len(candidate_asins) >= limit:
+                if len(candidate_asins) >= limit * 3:
                     break
 
-            if len(candidate_asins) < limit:
+            cur.execute(
+                f"SELECT {PRODUCT_COLUMNS} FROM products WHERE asin = ANY(%s)",
+                (candidate_asins,) if candidate_asins else ([],),
+            )
+            rows = cur.fetchall()
+            by_asin = {r[1]: row_to_product(r) for r in rows}
+            items = [by_asin[a] for a in candidate_asins if a in by_asin][:limit]
+
+            if len(items) < limit:
+                exclude = list(seen_set.union(cand_seen).union(it["asin"] for it in items))
                 cur.execute(
-                    f"""
+                    """
                     SELECT asin FROM products
                     WHERE asin != ALL(%s)
                     ORDER BY rating_count DESC
                     LIMIT %s
                     """,
-                    (list(seen_set.union(cand_seen)), limit - len(candidate_asins)),
+                    (exclude, limit - len(items)),
                 )
                 for r in cur.fetchall():
                     candidate_asins.append(r[0])
 
-            cur.execute(
-                f"SELECT {PRODUCT_COLUMNS} FROM products WHERE asin = ANY(%s)",
-                (candidate_asins,),
-            )
-            rows = cur.fetchall()
-            by_asin = {r[1]: row_to_product(r) for r in rows}
-            items = [by_asin[a] for a in candidate_asins if a in by_asin]
+                # Re-fetch the backfill products
+                backfill_asins = [a for a in candidate_asins if a not in by_asin]
+                if backfill_asins:
+                    cur.execute(
+                        f"SELECT {PRODUCT_COLUMNS} FROM products WHERE asin = ANY(%s)",
+                        (backfill_asins,),
+                    )
+                    for row in cur.fetchall():
+                        p = row_to_product(row)
+                        if p["asin"] not in {it["asin"] for it in items}:
+                            items.append(p)
+                            if len(items) >= limit:
+                                break
 
     return {
         "session_id": session_id,
@@ -1318,8 +1375,19 @@ class CopilotChatIn(BaseModel):
     image_url: str | None = Field(default=None, max_length=8_000_000)
 
 
+def _get_client_ip(request: Request) -> str:
+    """Extract the client IP, respecting X-Forwarded-For only when TRUST_PROXY=true."""
+    trust_proxy = os.environ.get("TRUST_PROXY", "false").strip().lower() in ("1", "true", "yes")
+    if trust_proxy:
+        xff = request.headers.get("X-Forwarded-For", "")
+        if xff:
+            # First hop (leftmost) is the real client
+            return xff.split(",")[0].strip()
+    return request.client.host if request.client else "unknown"
+
+
 @app.post("/copilot/chat")
-async def copilot_chat(payload: CopilotChatIn):
+async def copilot_chat(payload: CopilotChatIn, request: Request):
     """End-to-End Multimodal AI Shopping Copilot (Admin Toko Marcell).
 
     Covers the 7 core e-commerce use cases:
@@ -1334,6 +1402,23 @@ async def copilot_chat(payload: CopilotChatIn):
     Checkout is a portfolio demo simulation: there is no fulfillment, courier or
     order tracking, so deliberately no order-status tool is exposed to the model.
     """
+    # ── Rate limiting ────────────────────────────────────────────────────────
+    client_ip = _get_client_ip(request)
+    allowed, retry_after, which = check_copilot_rate_limit(client_ip)
+    if not allowed:
+        from fastapi.responses import JSONResponse
+
+        msg = (
+            "Kak, mimin butuh istirahat sebentar ya 😊 "
+            "Terlalu banyak permintaan dalam waktu singkat. "
+            "Silakan coba lagi nanti!"
+        )
+        return JSONResponse(
+            status_code=429,
+            content={"detail": msg, "limit": which},
+            headers={"Retry-After": str(retry_after)},
+        )
+    # ─────────────────────────────────────────────────────────────────────────
     from agent import chat_copilot
 
     image_ref = payload.image_url
