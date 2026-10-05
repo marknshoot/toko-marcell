@@ -104,6 +104,7 @@ jobs:
           FASTEMBED_CACHE_DIR: /tmp/fastembed_cache
           ENABLE_TRIMODAL: "true"
           ENABLE_RERANKER: "false"
+          COPILOT_FAKE_LLM: "1"
         run: |
           # Start the API server in the background
           cd api

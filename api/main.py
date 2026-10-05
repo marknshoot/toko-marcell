@@ -269,7 +269,33 @@ async def lifespan(app: FastAPI):
     )
     init_db()
     open_pool()
+
+    # Copilot thread TTL cleanup: once on startup, then daily in the background.
+    cleanup_task = None
+    try:
+        import asyncio
+
+        from copilot_memory import cleanup_expired_threads, ensure_activity_table
+
+        ensure_activity_table()
+        await asyncio.to_thread(cleanup_expired_threads)
+
+        async def _periodic_cleanup():
+            while True:
+                await asyncio.sleep(24 * 60 * 60)
+                try:
+                    await asyncio.to_thread(cleanup_expired_threads)
+                except Exception as e:
+                    logger.warning("[copilot] periodic TTL cleanup error: %s", e)
+
+        cleanup_task = asyncio.create_task(_periodic_cleanup())
+    except Exception as e:
+        logger.warning("[copilot] TTL cleanup not started: %s", e)
+
     yield
+
+    if cleanup_task is not None:
+        cleanup_task.cancel()
     close_pool()
 
 
