@@ -1,0 +1,104 @@
+{
+  "_meta": {
+    "version": "2.0",
+    "label": "panduan umum toko",
+    "disclaimer": "Panduan ukuran ini adalah estimasi umum Toko Marcell berdasarkan standar Asia/Indonesia dan data ulasan pelanggan. Bukan chart resmi dari brand. Selalu cek detail produk dan ulasan untuk akurasi terbaik.",
+    "generated_from": "api/knowledge/size_charts.md + data-driven corrections from pipelines/build_fit_signals.py"
+  },
+  "tops": {
+    "description": "Tops & Outerwear — Height (TB) & Weight (BB) Guidelines",
+    "unit_height": "cm",
+    "unit_weight": "kg",
+    "unit_chest": "cm",
+    "sizes": [
+      {"size": "S",   "height_min": 160, "height_max": 168, "weight_min": 50, "weight_max": 58, "chest_min": 88,  "chest_max": 94,  "feel": "Fitted / Slim"},
+      {"size": "M",   "height_min": 168, "height_max": 174, "weight_min": 58, "weight_max": 68, "chest_min": 94,  "chest_max": 100, "feel": "Regular / Ideal daily fit"},
+      {"size": "L",   "height_min": 174, "height_max": 180, "weight_min": 68, "weight_max": 78, "chest_min": 100, "chest_max": 108, "feel": "Regular / Comfortable drape"},
+      {"size": "XL",  "height_min": 180, "height_max": 186, "weight_min": 78, "weight_max": 88, "chest_min": 108, "chest_max": 116, "feel": "Relaxed / Roomy"},
+      {"size": "XXL", "height_min": 185, "height_max": 192, "weight_min": 88, "weight_max": 100, "chest_min": 116, "chest_max": 124, "feel": "Oversized / Big & Tall"}
+    ],
+    "rule": "Jika TB dan BB menunjuk ke dua ukuran berbeda, prioritaskan lingkar dada/bahu."
+  },
+  "bottoms": {
+    "description": "Standard Bottoms — Waist Sizing (Inches to Centimeters)",
+    "unit_waist": "cm",
+    "unit_waist_size": "inches",
+    "sizes": [
+      {"waist_size": 28, "waist_min": 71, "waist_max": 73, "asian_size": "XS / S",  "weight_min": 48, "weight_max": 54},
+      {"waist_size": 30, "waist_min": 76, "waist_max": 78, "asian_size": "S / M",   "weight_min": 54, "weight_max": 62},
+      {"waist_size": 32, "waist_min": 81, "waist_max": 83, "asian_size": "M / L",   "weight_min": 62, "weight_max": 72},
+      {"waist_size": 34, "waist_min": 86, "waist_max": 88, "asian_size": "L / XL",  "weight_min": 72, "weight_max": 82},
+      {"waist_size": 36, "waist_min": 91, "waist_max": 93, "asian_size": "XL / XXL", "weight_min": 82, "weight_max": 92},
+      {"waist_size": 38, "waist_min": 96, "waist_max": 98, "asian_size": "XXL",     "weight_min": 92, "weight_max": 102}
+    ]
+  },
+  "footwear": {
+    "description": "Standard Footwear Conversion",
+    "sizes": [
+      {"us_men": 7.0,  "us_women": 8.5,  "eu": 40, "foot_length_cm": 25.0, "note": "Standard Men's Small"},
+      {"us_men": 8.0,  "us_women": 9.5,  "eu": 41, "foot_length_cm": 26.0, "note": "Indonesian Bestseller Size"},
+      {"us_men": 9.0,  "us_women": 10.5, "eu": 42, "foot_length_cm": 27.0, "note": "Indonesian Bestseller Size"},
+      {"us_men": 10.0, "us_women": 11.5, "eu": 43, "foot_length_cm": 28.0, "note": "Standard Large"},
+      {"us_men": 11.0, "us_women": 12.5, "eu": 44, "foot_length_cm": 29.0, "note": "Extra Large"}
+    ]
+  },
+  "brand_offsets": {
+    "_note": "Data-driven corrections from 3.36M reviews (pipelines/build_fit_signals.py). Values override generic baseline assumptions from the original size_charts.md.",
+    "brands": {
+      "Dickies": {
+        "fit_label": "runs_small",
+        "offset_note": "Runs 1–2 sizes smaller than standard denim. Non-stretch 8.5 oz twill, sits at natural waist.",
+        "action": "Size up 1–2 inches from standard jeans size. For oversized/baggy look, size up 2.",
+        "data_n": 32974,
+        "data_share_small": 0.357,
+        "data_share_tts": 0.482,
+        "data_share_large": 0.161
+      },
+      "Levi's": {
+        "fit_label": "true_to_size",
+        "offset_note": "True to American denim size. Cut varies by model: 501 = straight/button-fly, 505 = roomier seat/thigh/zip. Truckers are snug in shoulders — size up 1 for layering.",
+        "action": "Order standard size. For 501 vs 505, recommend 505 for athletic/muscular thighs.",
+        "data_n": 24536,
+        "data_share_small": 0.189,
+        "data_share_tts": 0.676,
+        "data_share_large": 0.135
+      },
+      "Carhartt": {
+        "fit_label": "true_to_size",
+        "offset_note": "Slightly roomier than standard but NOT a full size large. US workwear cut with moderate shoulder drop. Data shows near-balanced fit, leaning marginally large.",
+        "action": "Order standard size for a comfortable workwear fit. Only size down if you want a slim/fitted look.",
+        "data_n": 11491,
+        "data_share_small": 0.211,
+        "data_share_tts": 0.549,
+        "data_share_large": 0.240
+      },
+      "Champion": {
+        "fit_label": "true_to_size",
+        "offset_note": "NOT runs large as commonly assumed. Data shows Champion actually leans slightly small (25.4% small vs 19.5% large). Standard US athletic cut.",
+        "action": "Order standard size. If between sizes, consider sizing up rather than down.",
+        "data_n": 6086,
+        "data_share_small": 0.254,
+        "data_share_tts": 0.551,
+        "data_share_large": 0.195
+      },
+      "Birkenstock": {
+        "fit_label": "runs_large",
+        "offset_note": "European sizing with contoured cork-latex footbed. Toes and heels must sit within the rim. If between sizes, size down.",
+        "action": "Use foot length in cm or EU size. If between sizes (e.g., 41.5), take EU 41. Break-in period 7–10 days.",
+        "data_n": 3134,
+        "data_share_small": 0.099,
+        "data_share_tts": 0.562,
+        "data_share_large": 0.340
+      },
+      "TOMS": {
+        "fit_label": "true_to_size",
+        "offset_note": "True to US size. Canvas stretches slightly after 3–5 wears. Data shows near-balanced with slight small lean.",
+        "action": "Order standard size. For wide feet or wearing with socks, consider half size up.",
+        "data_n": 17823,
+        "data_share_small": 0.276,
+        "data_share_tts": 0.486,
+        "data_share_large": 0.238
+      }
+    }
+  }
+}

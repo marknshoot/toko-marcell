@@ -155,8 +155,9 @@ def search_products(
     if mode in ("vector", "hybrid", "trimodal"):
         query_vec = embed_query(q)
         if query_vec is not None:
+            embed_col = settings.TEXT_EMBED_COLUMN
             vec_str = "[" + ",".join(f"{x:.6f}" for x in query_vec) + "]"
-            vec_filters: list[sql.Composable] = [sql.SQL("embedding IS NOT NULL")]
+            vec_filters: list[sql.Composable] = [sql.SQL("{} IS NOT NULL").format(sql.Identifier(embed_col))]
             vec_params: list = [vec_str]
             if department:
                 vec_filters.append(sql.SQL("department = %s"))
@@ -170,11 +171,11 @@ def search_products(
                 with conn.cursor() as cur:
                     cur.execute(
                         sql.SQL(
-                            "SELECT id, 1 - (embedding <=> %s::vector) AS similarity"
+                            "SELECT id, 1 - ({col} <=> %s::vector) AS similarity"
                             " FROM products WHERE "
-                        )
+                        ).format(col=sql.Identifier(embed_col))
                         + sql.SQL(" AND ").join(vec_filters)
-                        + sql.SQL(" ORDER BY embedding <=> %s::vector LIMIT 100"),
+                        + sql.SQL(" ORDER BY {col} <=> %s::vector LIMIT 100").format(col=sql.Identifier(embed_col)),
                         vec_params,
                     )
                     vector_ranked = [(row[0], float(row[1])) for row in cur.fetchall()]

@@ -42,6 +42,7 @@ SCHEMA: list[tuple[str, str]] = [
 
 VECTOR_COLUMN: tuple[str, str] = ("embedding", "vector(384)")
 IMAGE_VECTOR_COLUMN: tuple[str, str] = ("image_embedding", "vector(512)")
+ML_VECTOR_COLUMN: tuple[str, str] = ("embedding_ml", "vector(384)")
 
 INDEXES: list[tuple[str, str]] = [
     ("products_department_idx", "products (department)"),
@@ -131,6 +132,30 @@ STORE_KNOWLEDGE_INDEXES: list[tuple[str, str]] = [
     ("store_knowledge_embedding_idx", "store_knowledge USING hnsw (embedding vector_cosine_ops)"),
 ]
 
+PRODUCT_FIT_SCHEMA: list[tuple[str, str]] = [
+    ("asin", "TEXT PRIMARY KEY"),
+    ("n_mentions", "INTEGER NOT NULL DEFAULT 0"),
+    ("share_small", "NUMERIC(5, 4) NOT NULL DEFAULT 0"),
+    ("share_tts", "NUMERIC(5, 4) NOT NULL DEFAULT 0"),
+    ("share_large", "NUMERIC(5, 4) NOT NULL DEFAULT 0"),
+    ("fit_score", "NUMERIC(5, 4) NOT NULL DEFAULT 0"),
+    ("label", "TEXT NOT NULL DEFAULT 'insufficient_data'"),
+]
+
+PRODUCT_FIT_INDEXES: list[tuple[str, str]] = []
+
+BRAND_FIT_SCHEMA: list[tuple[str, str]] = [
+    ("brand", "TEXT PRIMARY KEY"),
+    ("n_mentions", "INTEGER NOT NULL DEFAULT 0"),
+    ("share_small", "NUMERIC(5, 4) NOT NULL DEFAULT 0"),
+    ("share_tts", "NUMERIC(5, 4) NOT NULL DEFAULT 0"),
+    ("share_large", "NUMERIC(5, 4) NOT NULL DEFAULT 0"),
+    ("fit_score", "NUMERIC(5, 4) NOT NULL DEFAULT 0"),
+    ("label", "TEXT NOT NULL DEFAULT 'insufficient_data'"),
+]
+
+BRAND_FIT_INDEXES: list[tuple[str, str]] = []
+
 
 # ── Database migration ───────────────────────────────────────────────────────
 
@@ -186,6 +211,7 @@ def init_db():
             if _enable_pgvector(cur):
                 columns.append(VECTOR_COLUMN)
                 columns.append(IMAGE_VECTOR_COLUMN)
+                columns.append(ML_VECTOR_COLUMN)
             else:
                 logger.warning("[init_db] pgvector unavailable — no embedding column, search disabled")
 
@@ -219,6 +245,8 @@ def init_db():
             _ensure_table(cur, "item_recommendations", ITEM_RECS_SCHEMA, ITEM_RECS_INDEXES)
             _ensure_table(cur, "reviews", REVIEWS_SCHEMA, REVIEWS_INDEXES)
             _ensure_table(cur, "store_knowledge", STORE_KNOWLEDGE_SCHEMA, STORE_KNOWLEDGE_INDEXES)
+            _ensure_table(cur, "product_fit", PRODUCT_FIT_SCHEMA, PRODUCT_FIT_INDEXES)
+            _ensure_table(cur, "brand_fit", BRAND_FIT_SCHEMA, BRAND_FIT_INDEXES)
 
             conn.commit()
 
