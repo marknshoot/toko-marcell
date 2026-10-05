@@ -121,10 +121,8 @@ jobs:
             sleep 2
           done
 
-          # Run integration tests (excluding LLM-dependent ones via conftest auto-skip)
+          # Run integration tests (tests skip cleanly when models are unavailable)
           python -m pytest api/tests/ -v \
-            --ignore=api/tests/test_search_image_api.py \
-            -k "not test_search_modes" \
             || TEST_EXIT=$?
 
           # Stop the API server

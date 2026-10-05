@@ -29,12 +29,15 @@ Known simplifications (deliberate, and worth stating out loud)
       and semantics are exactly what the embedding half of hybrid search adds.
 """
 
+import logging
 import math
 import os
 import re
 import threading
 import unicodedata
 from collections import Counter, defaultdict
+
+logger = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 
@@ -225,7 +228,7 @@ def build_search_index(db_url: str | None = None) -> BM25Index:
             dedupe_key=(title or "").strip().lower(),
         )
     index.build()
-    print(f"[search] BM25 index built: {index.size} documents")
+    logger.info("BM25 index built: %d documents", index.size)
     return index
 
 
@@ -295,7 +298,7 @@ def embed_query(query: str) -> list[float] | None:
         vectors = list(model.embed([query]))
         return [float(x) for x in vectors[0]]
     except Exception as e:
-        print(f"[search] embed_query failed: {e}")
+        logger.warning("embed_query failed: %s", e)
         return None
 
 
@@ -330,10 +333,10 @@ def get_champion_clip():
                             processor = CLIPProcessor.from_pretrained(candidate)
                             _CHAMPION_CLIP_MODEL = model
                             _CHAMPION_CLIP_PROCESSOR = processor
-                            print(f"[search] Successfully loaded Champion CLIP Model from {candidate} on {device}")
+                            logger.info("Loaded Champion CLIP Model from %s on %s", candidate, device)
                             break
                         except Exception as e:
-                            print(f"[search] Could not load champion CLIP from {candidate}: {e}")
+                            logger.warning("Could not load champion CLIP from %s: %s", candidate, e)
                 if _CHAMPION_CLIP_MODEL is None:
                     _CHAMPION_CLIP_FAILED = True
     return _CHAMPION_CLIP_MODEL, _CHAMPION_CLIP_PROCESSOR
@@ -442,7 +445,7 @@ def get_onnx_champion_vision():
                         except Exception:
                             continue
                 except Exception as e:
-                    print(f"[search] HF vision encoder download note: {e}")
+                    logger.info("HF vision encoder download note: %s", e)
 
             if path and os.path.exists(path):
                 opts = ort.SessionOptions()
@@ -453,12 +456,12 @@ def get_onnx_champion_vision():
                     path, opts, providers=["CPUExecutionProvider"]
                 )
                 _ONNX_VISION_PATH = path
-                print(f"[search] Loaded champion ONNX vision encoder: {os.path.basename(path)}")
+                logger.info("Loaded champion ONNX vision encoder: %s", os.path.basename(path))
             else:
-                print("[search] No champion ONNX vision encoder found; trying torch/fastembed")
+                logger.info("No champion ONNX vision encoder found; trying torch/fastembed")
                 _ONNX_VISION_FAILED = True
         except Exception as e:
-            print(f"[search] Could not initialize ONNX vision encoder: {e}")
+            logger.warning("Could not initialize ONNX vision encoder: %s", e)
             _ONNX_VISION_FAILED = True
     return _ONNX_VISION_SESSION, _ONNX_VISION_PATH
 
@@ -473,6 +476,7 @@ def embed_image_bytes(image_bytes: bytes) -> list[float] | None:
     """
     try:
         import io
+
         from PIL import Image
 
         img = Image.open(io.BytesIO(image_bytes)).convert("RGB")
@@ -491,7 +495,7 @@ def embed_image_bytes(image_bytes: bytes) -> list[float] | None:
                     vec = vec / norm
                 return [float(x) for x in vec]
             except Exception as e:
-                print(f"[search] champion ONNX vision failed: {e}")
+                logger.warning("champion ONNX vision failed: %s", e)
 
         # 1. Champion PyTorch model (dev / self-hosted with torch)
         champ_model, champ_proc = get_champion_clip()
@@ -505,7 +509,7 @@ def embed_image_bytes(image_bytes: bytes) -> list[float] | None:
                 norm_feats = feats / feats.norm(dim=-1, keepdim=True)
                 return [float(x) for x in norm_feats[0].cpu().numpy()]
     except Exception as e:
-        print(f"[search] Champion image embedding failed: {e}")
+        logger.warning("Champion image embedding failed: %s", e)
 
     # No zero-shot fallback: a different vector space must never be mixed with the
     # fine-tuned champion embeddings stored in the database. Fail instead.
@@ -538,8 +542,8 @@ def get_onnx_champion_encoder():
             return None, None
         try:
             import onnxruntime as ort
-            from transformers import CLIPTokenizer
             from huggingface_hub import hf_hub_download
+            from transformers import CLIPTokenizer
 
             here = os.path.dirname(os.path.abspath(__file__))
             candidates = []
@@ -558,11 +562,11 @@ def get_onnx_champion_encoder():
             if not onnx_path:
                 for name in _TEXT_ONNX_NAMES:
                     try:
-                        print(f"[search] Downloading ONNX text encoder ({name}) from {repo_id}...")
+                        logger.info("Downloading ONNX text encoder (%s) from %s...", name, repo_id)
                         onnx_path = hf_hub_download(repo_id=repo_id, filename=name)
                         break
                     except Exception as e:
-                        print(f"[search] HF hub download note ({name}): {e}")
+                        logger.info("HF hub download note (%s): %s", name, e)
 
             if onnx_path and os.path.exists(onnx_path):
                 sess_opts = ort.SessionOptions()
@@ -578,11 +582,11 @@ def get_onnx_champion_encoder():
                     _ONNX_TOKENIZER = CLIPTokenizer.from_pretrained(repo_id)
                 except Exception:
                     _ONNX_TOKENIZER = CLIPTokenizer.from_pretrained("openai/clip-vit-base-patch32")
-                print(f"[search] Loaded champion ONNX text encoder from {os.path.basename(onnx_path)}")
+                logger.info("Loaded champion ONNX text encoder from %s", os.path.basename(onnx_path))
             else:
                 _ONNX_TEXT_FAILED = True
         except Exception as e:
-            print(f"[search] Could not initialize ONNX text encoder: {e}")
+            logger.warning("Could not initialize ONNX text encoder: %s", e)
             _ONNX_TEXT_FAILED = True
     return _ONNX_TEXT_SESSION, _ONNX_TOKENIZER
 
@@ -620,7 +624,7 @@ def embed_query_clip_text(query: str) -> list[float] | None:
             })
             return [float(x) for x in outputs[0][0]]
     except Exception as e:
-        print(f"[search] Champion ONNX embed_query_clip_text note: {e}")
+        logger.info("Champion ONNX embed_query_clip_text note: %s", e)
 
     # 2. Try Champion PyTorch model (if PyTorch environment available)
     try:
@@ -634,7 +638,7 @@ def embed_query_clip_text(query: str) -> list[float] | None:
                 feats = getattr(out, "pooler_output", out)
                 norm_feats = feats / feats.norm(dim=-1, keepdim=True)
                 return [float(x) for x in norm_feats[0].cpu().numpy()]
-    except Exception as e:
+    except Exception:
         pass
 
     # 3. Fallback to fastembed zero-shot CLIP
@@ -643,7 +647,7 @@ def embed_query_clip_text(query: str) -> list[float] | None:
         vectors = list(model.embed([query]))
         return [float(x) for x in vectors[0]]
     except Exception as e:
-        print(f"[search] embed_query_clip_text failed: {e}")
+        logger.warning("embed_query_clip_text failed: %s", e)
         return None
 
 
