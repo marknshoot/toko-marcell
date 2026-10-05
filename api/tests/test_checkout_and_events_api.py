@@ -88,6 +88,32 @@ def test_events_summary():
     assert "search" in body
     assert "caveats" in body
     assert isinstance(body["caveats"], list)
+    # Phase 5 copilot funnel block
+    assert "copilot" in body
+    cp = body["copilot"]
+    for k in ("messages", "product_clicks", "add_to_cart", "total_add_to_cart", "assisted_add_to_cart_rate"):
+        assert k in cp
+    # rate is null (no denominator) or a 0..1 float, never a fake 0
+    r = cp["assisted_add_to_cart_rate"]
+    assert r is None or (0.0 <= r <= 1.0)
+
+
+def test_events_summary_copilot_assisted_rate():
+    """After a copilot_add_to_cart + a plain add_to_cart, the assisted rate is a
+    sane fraction and the copilot counts increment."""
+    sid = "copilot-funnel-sess-01"
+    api_request("POST", "/events", {"event_type": "add_to_cart", "session_id": sid, "asin": "B000YXC2LI", "qty": 1, "price_idr": 494700})
+    api_request("POST", "/events", {"event_type": "copilot_add_to_cart", "session_id": sid, "asin": "B000YXC2LI", "qty": 1, "price_idr": 494700})
+    api_request("POST", "/events", {"event_type": "copilot_message", "session_id": sid, "query": "ada chino?"})
+
+    status, body = api_request("GET", "/events/summary?since_days=1")
+    assert status == 200
+    cp = body["copilot"]
+    assert cp["add_to_cart"] >= 1
+    assert cp["total_add_to_cart"] >= cp["add_to_cart"]
+    assert cp["messages"] >= 1
+    assert cp["assisted_add_to_cart_rate"] is not None
+    assert 0.0 < cp["assisted_add_to_cart_rate"] <= 1.0
 
 
 def test_events_summary_parameter_validation():

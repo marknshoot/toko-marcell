@@ -6,6 +6,7 @@ import AddToCartButton from "@/components/AddToCartButton";
 import ProductImage from "@/components/ProductImage";
 import ProductCard from "@/components/ProductCard";
 import ProductReviews from "@/components/ProductReviews";
+import ProductCopilotEntry from "@/components/ProductCopilotEntry";
 import TrackView from "@/components/TrackView";
 
 // Incremental Static Regeneration (ISR): Cache at Edge CDN and revalidate in background every 5 minutes.
@@ -84,6 +85,10 @@ export default async function ProductPage({ params }) {
                         </p>
 
                         <AddToCartButton product={product} />
+
+                        <div className="mt-4">
+                            <ProductCopilotEntry asin={product.asin} title={product.title} fit={product.fit} />
+                        </div>
                     </div>
                 </div>
 
