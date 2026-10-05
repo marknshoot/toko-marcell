@@ -207,21 +207,23 @@ export async function searchByImage({ file, department, limit = 24 }) {
 
   return response.json();
 }
-// ── AI Copilot (Admin Toko Marcell) ──────────────────────────────────────────
+// ── AI Copilot (Admin Toko Marcell) — v2 contract ────────────────────────────
 
-export async function sendCopilotMessage({ messages, imageUrl = null }) {
+export async function sendCopilotMessage({ message, threadId, context = null }) {
   const sessionId = getSessionId();
   const response = await fetch(`${API_URL}/copilot/chat`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       session_id: sessionId,
-      messages: messages.map((m) => ({
-        role: m.role,
-        content: m.content,
-        imageUrl: m.imageUrl || null,
-      })),
-      image_url: imageUrl,
+      thread_id: threadId,
+      message,
+      context: context
+        ? {
+            page_asin: context.pageAsin ?? null,
+            referenced_asins: context.referencedAsins ?? [],
+          }
+        : null,
     }),
   });
 
@@ -231,6 +233,29 @@ export async function sendCopilotMessage({ messages, imageUrl = null }) {
   }
 
   return response.json();
+}
+
+export async function getCopilotThread(threadId) {
+  try {
+    const response = await fetch(`${API_URL}/copilot/threads/${encodeURIComponent(threadId)}`);
+    if (!response.ok) {
+      return { thread_id: threadId, messages: [] };
+    }
+    return response.json();
+  } catch {
+    return { thread_id: threadId, messages: [] };
+  }
+}
+
+export async function deleteCopilotThread(threadId) {
+  try {
+    await fetch(`${API_URL}/copilot/threads/${encodeURIComponent(threadId)}`, {
+      method: "DELETE",
+      keepalive: true,
+    });
+  } catch {
+    // best-effort; local reset still happens client-side
+  }
 }
 
 export async function getCopilotTools() {
