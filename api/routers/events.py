@@ -97,6 +97,12 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
     purchased = sessions_by_step.get("purchase_mock", 0)
     searched = sessions_by_step.get("search", 0)
 
+    # ── Copilot funnel (Phase 5) ─────────────────────────────────────────────
+    copilot_messages = by_type.get("copilot_message", 0)
+    copilot_clicks = by_type.get("copilot_product_click", 0)
+    copilot_adds = by_type.get("copilot_add_to_cart", 0)
+    total_adds = by_type.get("add_to_cart", 0)
+
     return {
         "since_days": since_days,
         "events_total": events_total,
@@ -114,8 +120,19 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
             "zero_result": zero_result,
             "zero_result_rate": rate(zero_result, searches),
         },
+        "copilot": {
+            "messages": copilot_messages,
+            "product_clicks": copilot_clicks,
+            "add_to_cart": copilot_adds,
+            "total_add_to_cart": total_adds,
+            # Share of all add-to-cart events that were copilot-assisted.
+            "assisted_add_to_cart_rate": rate(copilot_adds, total_adds),
+        },
         "caveats": [
             "search_to_pdp is a session-level proxy (search + view_product in one session)",
             "purchase_mock is browser-asserted until checkout is confirmed server-side (B5)",
+            "copilot.assisted_add_to_cart_rate = copilot_add_to_cart / all add_to_cart; "
+            "a copilot-driven add fires BOTH add_to_cart (from the cart) and copilot_add_to_cart, "
+            "so the rate is the copilot-attributed share of total adds, not an independent funnel",
         ],
     }

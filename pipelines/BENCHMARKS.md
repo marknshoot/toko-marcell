@@ -259,6 +259,37 @@ python3 pipelines/eval_search.py --api-url http://localhost:8001 --modes bm25,ve
 
 ---
 
+## RAG retrieval — direct-chunk vs hypothetical-question (Phase 5)
+
+**Artifact:** [`pipelines/results/rag_eval.json`](./results/rag_eval.json) (Tier A).
+`pipelines/eval_rag.py` compares two store-policy retrieval strategies on a 12-query labelled set
+(mixed Indonesian + English, phrased like shoppers rather than like the chunk headers):
+
+- **direct-chunk** — embed the query, match against `store_knowledge.embedding`.
+- **hypothetical-question** — embed the query, match against the per-chunk hypothetical questions
+  (`store_knowledge_questions.embedding`, 82 rows / 23 chunks), then return the parent chunk (deduped).
+
+| Strategy | HR@1 | HR@3 | MRR@3 |
+|---|:---:|:---:|:---:|
+| direct-chunk | 0.250 | 0.333 | 0.292 |
+| **hypothetical-question** | **0.750** | **0.917** | **0.819** |
+
+The question index triples HR@1 (0.25 → 0.75) on conversational phrasing: a shopper's "ongkir ke
+Surabaya berapa lama" or "does Champion run large or small" matches a generated question far better
+than it matches a formal section header like "3. Shipping & Delivery Guidelines". This is the
+measurable justification for the Phase 4c §6 design decision.
+
+```bash
+# Reproduce (needs the DB with store_knowledge + store_knowledge_questions seeded):
+python3 pipelines/eval_rag.py --database-url postgresql://toko:toko@localhost:5432/toko \
+  --out pipelines/results/rag_eval.json
+```
+
+> Small labelled set (12 queries) — indicative, not a large benchmark. The expected-chunk labels are
+> title-substring matches, so the harness is deterministic and reproducible against the seeded DB.
+
+---
+
 ## Recommendations
 
 **Artifact:** [`pipelines/results/recs_eval.json`](./results/recs_eval.json) (Tier A).

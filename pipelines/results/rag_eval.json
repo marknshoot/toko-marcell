@@ -1,0 +1,91 @@
+{
+  "timestamp": "2026-10-05T02:13:54.195864+00:00",
+  "git_commit": "unknown",
+  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "k": 3,
+  "query_count": 12,
+  "direct_chunk": {
+    "hr@1": 0.25,
+    "hr@3": 0.3333,
+    "mrr@3": 0.2917
+  },
+  "hypothetical_question": {
+    "hr@1": 0.75,
+    "hr@3": 0.9167,
+    "mrr@3": 0.8194
+  },
+  "per_query": [
+    {
+      "query": "ongkir ke surabaya berapa lama",
+      "expected": "shipping",
+      "direct_rank": 0,
+      "hyp_rank": 1
+    },
+    {
+      "query": "gratis ongkir mulai berapa",
+      "expected": "shipping",
+      "direct_rank": 0,
+      "hyp_rank": 1
+    },
+    {
+      "query": "kalau ukuran salah bisa tukar?",
+      "expected": "return",
+      "direct_rank": 0,
+      "hyp_rank": 2
+    },
+    {
+      "query": "berapa lama batas retur barang",
+      "expected": "return",
+      "direct_rank": 0,
+      "hyp_rank": 1
+    },
+    {
+      "query": "cara bayarnya gimana ya",
+      "expected": "payment",
+      "direct_rank": 0,
+      "hyp_rank": 1
+    },
+    {
+      "query": "apakah pembayaran cuma simulasi",
+      "expected": "payment",
+      "direct_rank": 0,
+      "hyp_rank": 1
+    },
+    {
+      "query": "dickies 874 ambil ukuran berapa",
+      "expected": "dickies",
+      "direct_rank": 1,
+      "hyp_rank": 1
+    },
+    {
+      "query": "does champion run large or small",
+      "expected": "champion",
+      "direct_rank": 1,
+      "hyp_rank": 1
+    },
+    {
+      "query": "levis 501 sama 505 beda apa",
+      "expected": "levi",
+      "direct_rank": 1,
+      "hyp_rank": 1
+    },
+    {
+      "query": "birkenstock mending naik atau turun size",
+      "expected": "birkenstock",
+      "direct_rank": 2,
+      "hyp_rank": 0
+    },
+    {
+      "query": "tinggi 170 berat 65 ukuran apa",
+      "expected": "tops",
+      "direct_rank": 0,
+      "hyp_rank": 1
+    },
+    {
+      "query": "tabel ukuran celana berdasarkan pinggang",
+      "expected": "bottoms",
+      "direct_rank": 0,
+      "hyp_rank": 3
+    }
+  ]
+}
