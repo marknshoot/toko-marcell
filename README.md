@@ -39,14 +39,15 @@
 **Toko Marcell is a working e-commerce engine, not a UI mock** — a Next.js storefront, a FastAPI
 backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed live.
 
-**The four things worth inspecting** (each backed by a committed artifact):
+**The five things worth inspecting** (each backed by a committed artifact):
 
 | # | What | Result | Where |
 |---|---|---|---|
 | 1 | **VLM fine-tuning study** — 4 fine-tuning strategies vs a zero-shot baseline, 5,378 image–text pairs, 539 held-out test | champion lifts text→image **Recall@1 26.53% → 39.15%** (+47.57% rel) | [leaderboard](./pipelines/multimodal_benchmark_results.json) |
 | 2 | **Hybrid retrieval** — BM25 + MiniLM (384-d) + CLIP (512-d) → RRF (k=60); optional ONNX cross-encoder on the copilot path | exact SKUs *and* semantic/visual queries; `?mode=` switchable | [API internals](./api/README.md#search--how-it-ranks) |
-| 3 | **Grounded agentic copilot** — LangChain + OpenRouter (free tier), 4 bound tools, policy RAG | answers only from tool evidence; refuses off-topic and injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
+| 3 | **Grounded agentic copilot** — LangChain v1 `create_agent` + OpenRouter (free tier), deterministic zero-LLM guardrail, 7 tools, LangGraph Postgres memory, hypothetical-question policy RAG | answers only from tool evidence; refuses off-topic and injection attempts without an LLM call | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
 | 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe | [recommendation engine](./README.md#-recommendation-engine) |
+| 5 | **Review-derived fit & sizing** — 622,530 fit mentions regex-mined from 3.36 M reviews | per-product/brand `runs_small / true_to_size / runs_large`, Dirichlet-smoothed, surfaced as fit badges + copilot `recommend_size` | [review-derived fit](./README.md#-review-derived-fit--sizing) |
 
 **Measured results** (committed artifacts in [`pipelines/results/`](./pipelines/results/)):
 
@@ -61,6 +62,20 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 | Random | 0.22% | 0.0011 |
 | Popularity | 0.18% | 0.0008 |
 | **Item-to-Item CF** | **7.96%** | **0.0501** |
+
+| RAG retrieval (12 ID+EN queries) | HR@1 | HR@3 | MRR@3 |
+|---|:---:|:---:|:---:|
+| Direct-chunk | 0.250 | 0.333 | 0.292 |
+| **Hypothetical-question** | **0.750** | **0.917** | **0.819** |
+
+Indexing a few template-generated hypothetical questions per policy chunk roughly triples HR@1 over
+embedding the raw chunk text (artifacts: [`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json),
+[`pipelines/eval_rag.py`](./pipelines/eval_rag.py)).
+
+**Multilingual embedding A/B** ([`pipelines/results/search_eval_multilingual.json`](./pipelines/results/search_eval_multilingual.json)):
+`paraphrase-multilingual-MiniLM-L12-v2` lifts overall hybrid nDCG@10 0.879 → 0.894 and the
+Indonesian group 0.622 → 0.765, but roughly doubles peak RSS (~1024 MB vs ~610–650 MB) with both
+CLIP ONNX encoders loaded — so MiniLM stays the default and the multilingual model is opt-in.
 
 The cross-encoder reranker improves nDCG@10 overall (+1.4 pts vs hybrid) and substantially on
 Indonesian queries (+0.117), but slightly lowers MRR@10 overall (0.906 → 0.885). On Category/Attr
@@ -113,8 +128,9 @@ It exists to demonstrate four things a hiring manager can verify rather than tak
    analysis → production export. Not a notebook that trains once and is never evaluated.
 2. **Information retrieval engineering** — three independent rankers (BM25, dense sentence vectors,
    cross-modal CLIP) fused with Reciprocal Rank Fusion, plus an optional cross-encoder reranker on the copilot path.
-3. **Grounded LLM application engineering** — an agent that can only speak from tool results, with a
-   tool whitelist, prompt-injection/off-topic guardrails, token-budget safeguards, and tests.
+3. **Grounded LLM application engineering** — a LangChain v1 `create_agent` loop that can only speak
+   from tool results, fronted by a deterministic zero-LLM guardrail, with a 7-tool whitelist,
+   prompt-injection/off-topic refusal, token-budget and model-call-count safeguards, and tests.
 4. **Systems that survive free-tier reality** — cold starts, edge caching, in-memory TTL caches,
    server-authoritative checkout (a tampered price is rejected, not ignored).
 
@@ -131,6 +147,7 @@ Nothing is invented. Where something is simplified or unfinished, it is written 
 - [Research pillar 1 — the VLM contrastive fine-tuning study](#-research-pillar-1--the-vlm-contrastive-fine-tuning-study)
 - [Research pillar 2 — tri-modal hybrid retrieval](#-research-pillar-2--tri-modal-hybrid-retrieval)
 - [Recommendation engine](#-recommendation-engine)
+- [Review-derived fit & sizing](#-review-derived-fit--sizing)
 - [The agentic copilot](#-the-agentic-copilot-admin-toko-marcell)
 - [Cold-start UX](#-cold-start-ux-turning-a-free-tier-constraint-into-a-feature)
 - [Production reliability, caching & defensive security](#-production-reliability-caching--defensive-security)
@@ -169,10 +186,10 @@ flowchart TD
         CORS["Configurable CORS allowlist"]
         Cache["In-memory facet TTL cache (300s)"]
         Val["Pydantic bounds<br/>(token & payload safeguards)"]
-        subgraph Orchestration["Agentic orchestrator (LangChain + OpenRouter)"]
-            Planner["Planner / guardrail node<br/>decides tools (0..n)"]
-            Fanout["Concurrent tool fan-out<br/>(asyncio.gather)"]
-            Synth["Grounded synthesizer<br/>Admin Toko Marcell persona"]
+        subgraph Orchestration["Agentic copilot (LangChain v1 create_agent + OpenRouter)"]
+            Guard["Deterministic guardrail node<br/>(greeting / off-topic / injection → 0 LLM calls)"]
+            Agent["create_agent loop<br/>+ middleware (context injection,<br/>history trim, 3-call cap)"]
+            Tools7["7 grounding tools"]
         end
     end
 
@@ -187,7 +204,9 @@ flowchart TD
     subgraph Storage["Tier 4 — PostgreSQL 16 + pgvector"]
         PG["Neon Postgres"]
         HNSW["HNSW cosine indexes (384-d & 512-d)"]
-        RAG["store_knowledge RAG table"]
+        RAG["store_knowledge + store_knowledge_questions RAG"]
+        Fit["product_fit · brand_fit"]
+        Ckpt["LangGraph checkpoints<br/>(Postgres saver, created at runtime)"]
         Ops["events · orders · order_items · item_recommendations · reviews"]
     end
 
@@ -195,14 +214,17 @@ flowchart TD
     Chat --> API
     Wakeup --> API
     ClientState --> UI
-    API --> Planner --> Fanout
-    Fanout --> BM25 & MiniLM & CLIP
+    API --> Guard
+    Guard -. "needs tools" .-> Agent --> Tools7
+    Tools7 --> BM25 & MiniLM & CLIP
     BM25 & MiniLM & CLIP --> RRF --> Storage
     RRF -. "copilot, ENABLE_RERANKER" .-> CE
-    Fanout --> RAG
-    Fanout --> Synth --> Chat
+    Tools7 --> RAG
+    Tools7 --> Fit
+    Agent --> Ckpt
+    Agent --> Chat
     Cache --> PG
-    Val --> Planner
+    Val --> Guard
     Ops --> PG
 ```
 
@@ -396,6 +418,26 @@ HitRate@10, Precision@10, MRR@10 and nDCG@10 for **BM25 vs hybrid**, with a grou
 relative gains. `mode=bm25|vector|hybrid|trimodal` is returned in every response so the eval harness
 and the UI can always tell which ranker produced a result set instead of inferring it.
 
+### Multilingual embedding A/B (opt-in)
+
+Many shoppers type Indonesian. `pipelines/results/search_eval_multilingual.json` records a hybrid-mode
+A/B of `paraphrase-multilingual-MiniLM-L12-v2` against the default `all-MiniLM-L6-v2`: overall
+nDCG@10 **0.879 → 0.894**, MRR@10 **0.906 → 0.919**, and the Indonesian query group nDCG@10
+**0.622 → 0.765**. The catch is memory — peak RSS with both CLIP ONNX encoders loaded is **~1024 MB**
+vs **~610–650 MB** for MiniLM, which overruns the 512 MB free tier. So MiniLM stays the default and
+the multilingual model is **opt-in** via `TEXT_EMBED_MODEL` + `TEXT_EMBED_COLUMN=embedding_ml` (the
+`embedding_ml` column already ships in the seed).
+
+### Hypothetical-question RAG
+
+The copilot's policy answers retrieve from `store_knowledge`, but embedding a raw policy chunk and
+embedding the question a shopper actually asks live in different parts of the vector space.
+`pipelines/eval_rag.py` quantifies the gap on **12 labelled ID+EN queries**
+([`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json)): direct-chunk retrieval
+scores HR@1 **0.250** / HR@3 0.333 / MRR@3 0.292, while indexing **82 template-generated hypothetical
+questions** (3–5 ID+EN per chunk, in `store_knowledge_questions`) lifts it to HR@1 **0.750** / HR@3
+**0.917** / MRR@3 **0.819** — roughly triple HR@1.
+
 ---
 
 ## 🎯 Recommendation engine
@@ -462,19 +504,71 @@ and popularity baselines.
 
 ---
 
+## 📏 Review-derived fit & sizing
+
+Fashion returns are driven by fit, and shoppers do not trust a generic size chart — they trust other
+shoppers. `pipelines/build_fit_signals.py` turns the review corpus into a per-product fit signal so
+the storefront and the copilot can answer "does this run small?" from evidence, not guesswork.
+
+### The pipeline
+
+1. **Regex mining with negation handling.** The pipeline streams all **3,363,680** catalog reviews
+   and classifies each fit mention as `runs_small`, `true_to_size` or `runs_large`, handling negations
+   (so "doesn't run small" is not counted as `runs_small`). **622,530 fit mentions** are extracted —
+   **18.5%** of reviews carry a usable fit signal.
+2. **Dirichlet smoothing.** Per-product counts are smoothed (α = 10) toward the department prior, so a
+   product with three reviews is not declared "runs large" on noise.
+3. **Brand fallback.** When a product has fewer than 5 mentions, its label falls back to the
+   brand-level signal in `brand_fit`.
+
+**Coverage** of the 6,000 built ASINs: **99.8%** have ≥ 1 fit mention, **98.1%** have ≥ 5, **90.9%**
+have ≥ 20. Two tables ship in the seed: `product_fit` (**4,670 rows**, the served catalog) and
+`brand_fit` (**1,495 brands**). The classifier is covered by **40 regex unit tests**.
+
+### Data-driven brand corrections
+
+Mining the actual reviews overturned several "common knowledge" sizing rules that an authored chart
+would have gotten wrong:
+
+- **Champion is *not* "runs large"** — 25.4% of mentions say it runs small vs 19.5% large → **true to size**.
+- **Carhartt** is only slightly roomy → **true to size**.
+- **Dickies runs small** (35.7% of mentions say small).
+- **Levi's** → **true to size**.
+- **Birkenstock runs large** → size down.
+
+### The structured size source of truth
+
+`api/knowledge/size_chart.json` is the structured source (TB/BB tops, waist bottoms, footwear, and
+per-brand offsets), labelled **"panduan umum toko"** — a store rule-of-thumb, explicitly *not* an
+official brand chart. `size_charts.md` explains it in prose for the RAG index.
+
+The copilot's `recommend_size` tool reads this plus the product/brand fit signal in a **3-layer**
+scheme (product fit → brand fit → chart offset) and always returns an **advisory**, never a
+certainty.
+
+### Serving
+
+`GET /products/{id}` now includes a `fit` object (`label`, `source` = `product` | `brand`,
+`nMentions`, `shares`, `fitScore`, `phrasing`, `disclaimer`) or `null` when there is no signal, and a
+dedicated `GET /products/{id}/fit` endpoint exposes the same. The storefront renders these as **fit
+badges** on product cards and the product page.
+
+---
+
 ## 🤖 The agentic copilot (Admin Toko Marcell)
 
-An in-store stylist and customer assistant built with **LangChain**. The provider is
-**OpenRouter** (OpenAI-compatible) whenever `OPENROUTER_API_KEY` is set — its free tier is far more
-generous than Gemini's free tier — and it falls back to **Google Gemini** when that key is absent.
-The design principle is boring on purpose: **the model never invents a product, a price, or a policy.**
+An in-store stylist and customer assistant built on **LangChain v1 `create_agent`** (langchain
+1.4.3, langgraph 1.2.12), split across `api/copilot_agent.py`, `api/copilot_tools.py`,
+`api/copilot_llm.py`, `api/copilot_memory.py` and `api/guardrail.py`. The provider is **OpenRouter**
+(OpenAI-compatible) whenever `OPENROUTER_API_KEY` is set — its free tier is far more generous than
+Gemini's — with an optional generic OpenAI-compatible endpoint and **Google Gemini** behind it. The
+design principle is boring on purpose: **the model never invents a product, a price, or a policy.**
 
-**Text-only on purpose — it searches images, it doesn't see them.** The copilot runs on a text LLM, so
-it **cannot see or describe an attached photo**. Free vision-capable models have very small request
-quotas, so no multimodal LLM is used. Instead an image is a **retrieval key**: the CLIP vision encoder
-embeds it and searches `image_embedding` deterministically, then those products are handed to the text
-model as evidence. Net effect: it can *find* products that look like your photo, but it will never
-pretend to *see* it.
+**Text-only on purpose — the chat does not accept images.** The copilot runs on a text LLM, so it
+takes no `image_url`/`imageUrl` and binds no `search_by_image` tool. Free vision-capable models have
+very small request quotas, so no multimodal LLM is used. **Photo search still exists in the
+storefront** via `POST /search/image` (the CLIP vision encoder embeds the upload and matches
+`image_embedding` deterministically) — it is just a separate storefront feature, not a chat turn.
 
 ### Execution model
 
@@ -482,68 +576,106 @@ pretend to *see* it.
 sequenceDiagram
     participant S as Shopper
     participant API as /copilot/chat
-    participant P as Planner (LLM + tool schema)
-    participant T as Tools (asyncio.gather)
-    participant D as Postgres + pgvector
-    S->>API: message(s) [+ optional image]
-    API->>P: system prompt + last 4 turns + browsing context
-    Note over P: guardrails, greetings and off-topic<br/>requests produce ZERO tool calls
-    P-->>API: 0..n tool calls
-    API->>T: fan out concurrently
-    T->>D: catalog / image / knowledge queries
+    participant G as Guardrail (deterministic, 0 LLM)
+    participant A as create_agent loop (≤ 3 model calls)
+    participant T as 7 tools
+    participant D as Postgres + pgvector (incl. checkpointer)
+    S->>API: {thread_id, message, context?}
+    API->>G: classify
+    Note over G: greeting / off-topic / injection<br/>→ canned reply, ZERO LLM calls
+    G-->>API: canned reply (guardrail hit)
+    G->>A: otherwise, run the agent
+    Note over A: middleware injects page/pinned product,<br/>shown-products registry, browsing context;<br/>trims history; caps model calls at 3
+    A->>T: tool calls
+    T->>D: catalog / details / reviews / size / outfit / policy / cart
     D-->>T: authoritative rows
-    T-->>API: compact evidence payloads
-    API->>P: synthesize answer from evidence only
-    P-->>S: reply + structured product cards + tool trace
+    T-->>A: compacted evidence
+    A->>D: persist turn (PostgresSaver, thread_id)
+    A-->>S: reply + products[≤6]+fit + citations + suggestions + ui_actions
 ```
 
-1. **Planner / guardrail node.** One LLM call with the tool schema bound. Greetings and off-topic
-   questions (code, SQL, maths, politics, medical/legal advice, prompt-injection attempts) return
-   **zero tool calls** — the system prompt forbids them and the tests assert it.
-2. **Concurrent tool fan-out.** Every tool the planner requested runs in parallel via
-   `asyncio.gather`; each is a deterministic function over the database, not another LLM.
-3. **Grounded synthesizer.** A second call composes the reply *from the tool evidence only*, in the
-   "Admin Toko Marcell" voice (Indonesian or English, mirroring the shopper).
+1. **Deterministic guardrail (`api/guardrail.py`).** Before any LLM runs, greetings/thanks/identity,
+   off-topic requests (code, SQL, maths, politics, medical/legal, creative) and prompt-injection
+   attempts get a canned "Admin Toko Marcell" reply with **zero LLM calls**. Anything else goes to
+   the agent. The response carries a `guardrail` field (`greeting` | `off_topic` | `injection` |
+   `null`) and the tests assert it.
+2. **`create_agent` loop.** The agent plans tool calls, runs them, and composes the grounded reply in
+   a single LangGraph loop. **Middleware** wraps it: `ContextInjectionMiddleware` injects the current
+   page / pinned product (re-read from the DB), a `[Produk dalam percakapan ini] [1]…` shown-products
+   registry and recent browsing context; `TrimHistoryMiddleware` keeps history under a 2,000-token
+   budget (char/4 estimate); `ModelCallLimitMiddleware` caps the turn at **3 model calls**.
+3. **Grounded reply.** Products, prices and policy all come from tool evidence, in the "Admin Toko
+   Marcell" voice (Indonesian or English, mirroring the shopper).
 
 ### The tool layer
 
-The bound schema is intentionally small — four tools:
+Seven tools are bound to the agent (`GET /copilot/tools` lists them):
 
 | Tool | Reads from | Answers |
 |---|---|---|
-| `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, with department / category / budget filters | "do you have…", style, outfit, budget |
-| `get_product_details` | `products` by ASIN or numeric id | fabric, specs, exact IDR price |
-| `search_by_image` | CLIP 512-d against `image_embedding` | "find something like this photo" |
-| `lookup_store_policy` | `store_knowledge` (384-d RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
+| `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, real category enum + budget filters | "do you have…", style, outfit, budget |
+| `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
+| `get_product_reviews` | `reviews`, with a topic filter (fit / size / fabric / durability) | aspect-level social proof |
+| `recommend_size` | `size_chart.json` + product/brand fit, 3-layer (product → brand → chart offset) | TB/BB sizing advisory, never a certainty |
+| `build_outfit` | catalog search; total summed and verified ≤ budget **in code** | top + bottom + shoes within budget |
+| `lookup_store_policy` | `store_knowledge` / `store_knowledge_questions` (hypothetical-question RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
+| `add_to_cart` | re-reads the price from the DB, returns a `ui_action` the browser executes | "add this to my cart" |
 
-`agent_tools.py` additionally implements `get_product_reviews` as a deterministic helper for
-aspect-level social proof. There is deliberately **no order-status tool**, because checkout is a
-demo simulation with no fulfillment to look up. Tool *results* are compacted before they re-enter
-the prompt (`_compact_tool_result`): at most 4 products, 4 features, a 200-char description, 300-char
-policy chunks — a token-budget safeguard that also keeps answers focused.
+Tool *results* are compacted before they re-enter the prompt — a token-budget safeguard that also
+keeps answers focused. There is deliberately **no order-status tool**, because checkout is a demo
+simulation with no fulfillment to look up.
 
 ### Grounding rules baked into the prompt
 
 - Every product mentioned must come from a tool result. No invented brands, ASINs, stock, or discounts.
 - Prices are always formatted as Indonesian Rupiah and always taken from the database.
-- Sizing answers must apply **brand-specific cut rules** from the knowledge base — e.g. Dickies 874's
-  rigid 8.5 oz twill, Levi's 505 vs 501 fit differences, Carhartt/Champion US relaxed cuts,
-  Birkenstock EU sizing, TOMS canvas stretch. These are authored in
-  [`api/knowledge/size_charts.md`](./api/knowledge/size_charts.md), not hallucinated.
+- Sizing answers apply **data-driven brand cut rules** from the knowledge base and the review-mined
+  fit signal — e.g. Dickies 874's rigid 8.5 oz twill (and that **Dickies runs small**), Levi's 505 vs
+  501 fit differences (Levi's **true to size**), that **Champion and Carhartt are true to size**
+  (not "runs large", per the mined reviews), and that **Birkenstock runs large** (size down). These
+  are authored in [`api/knowledge/size_charts.md`](./api/knowledge/size_charts.md) and
+  [`api/knowledge/size_chart.json`](./api/knowledge/size_chart.json), not hallucinated.
 - Outfit recommendations must sum to a total inside the shopper's stated budget.
 - Off-topic requests are politely refused and redirected to fashion.
 
-### Knowledge base (RAG) and session context
+### Memory and session context
+
+Conversation memory is a **LangGraph `PostgresSaver`** keyed by a browser-generated UUID `thread_id`
+stored in `localStorage` under `tm_copilot_thread`. A sidecar `copilot_thread_activity` table tracks
+last-touch time; a **7-day TTL cleanup** runs on startup and daily. `GET /copilot/threads/{thread_id}`
+returns a thread's messages and `DELETE /copilot/threads/{thread_id}` clears it (`204`). The
+checkpoint tables are created by the saver at runtime, not shipped in the seed.
+
+Before the agent runs, `ContextInjectionMiddleware` also injects the shopper's recent
+`view_product` / `add_to_cart` events and any page/pinned product — so "do you have these in black?"
+has a referent.
+
+### Provider chain and deterministic testing
+
+The LLM is assembled with `.with_fallbacks`: **OpenRouter** (primary) → an optional generic
+OpenAI-compatible endpoint (`LLM_FALLBACK_BASE_URL` / `LLM_FALLBACK_API_KEY` / `LLM_FALLBACK_MODEL`)
+→ **Gemini**. Setting `COPILOT_FAKE_LLM=1` swaps in a deterministic fake tool-calling model, so CI
+exercises the full agent and tool path **without ever calling a real LLM**.
+
+### API contract (v2)
+
+`POST /copilot/chat` accepts `{session_id?, thread_id, message (1..2000), context?: {page_asin?,
+referenced_asins[≤3]}}` with `extra="forbid"`. It returns `{reply, thread_id, products[≤6] (each
+with a `ref` and `fit`), citations, suggestions (2–3 follow-up chips), ui_actions (`add_to_cart` |
+`size_form`), tool_calls, guardrail, took_ms}`. Errors are `422` (validation), `429` (rate limit),
+`503` (no LLM key) and `502` (upstream failure). `GET /copilot/tools` returns the 7 tool names.
+
+### Knowledge base (RAG)
 
 `api/knowledge_seed.py` chunks the two hand-written markdown sources
 ([`size_charts.md`](./api/knowledge/size_charts.md),
 [`store_policies.md`](./api/knowledge/store_policies.md)) by section header, embeds each chunk with
-MiniLM, and upserts them into `store_knowledge` (22 chunks in the seed) with an HNSW index. Nothing
-here is scraped or auto-generated; it is authored store policy, which is why the copilot can be
-trusted about shipping, returns and sizing.
-
-Before planning, the API also pulls the shopper's last few `view_product` / `add_to_cart` events by
-session id and injects them as browsing context — so "do you have these in black?" has a referent.
+MiniLM, and upserts them into `store_knowledge` (**23 chunks** in the seed). It also generates **82
+hypothetical questions** (3–5 ID+EN per chunk) into `store_knowledge_questions` and indexes those —
+embedding questions a shopper would actually ask rather than the raw policy text roughly triples
+HR@1 (see [Research pillar 2](#-research-pillar-2--tri-modal-hybrid-retrieval)). Nothing here is
+scraped; it is authored store policy, which is why the copilot can be trusted about shipping, returns
+and sizing.
 
 ---
 
@@ -583,9 +715,9 @@ confusing hour.
 
 ### Defensive boundaries
 
-- **AI token safeguard.** `/copilot/chat` enforces strict Pydantic bounds: ≤ 2,000 chars per message,
-  ≤ 20 messages of history, ≤ 8 MB image reference. Oversized or malformed requests get a `422`, not
-  a metered bill.
+- **AI token safeguard.** `/copilot/chat` enforces strict Pydantic bounds: ≤ 2,000 chars for the
+  single message per turn, `extra="forbid"` on the request body, and no image payload (the chat is
+  text-only). Oversized or malformed requests get a `422`, not a metered bill.
 - **Server-authoritative checkout.** The client sends only `{asin, qty}`; the server looks up every
   price and computes the total. `ConfirmIn` sets `extra="forbid"`, so a request that *tries* to send
   a price is **rejected with a 422** rather than silently ignored. A tampered "pay Rp 1" is structurally
@@ -614,6 +746,12 @@ numbers cannot be read as more precise than they are:
    client-side; zero-result rate becomes a true metric only when search moves fully server-side.
 3. Rates are `null`, never `0.0`, when a denominator is missing — an empty events table must not
    produce a fake "0% conversion".
+
+`GET /events/summary` also carries a `copilot` block (`messages`, `product_clicks`, `add_to_cart`,
+`total_add_to_cart`, `assisted_add_to_cart_rate` = `copilot_add_to_cart` / all add-to-cart, `null`
+when there is no denominator) fed by the `copilot_message` / `copilot_product_click` /
+`copilot_add_to_cart` event types — with a caveat that a copilot add fires both the generic and the
+copilot event.
 
 ---
 
@@ -650,7 +788,10 @@ Full provenance, quirks and filters: [`pipelines/README.md`](./pipelines/README.
 | Reviews | 46,700 | **46,700** |
 | Interactions | 3,363,680 | (offline signal) |
 | Distinct users | 972,184 | — |
-| Knowledge chunks | — | 22 |
+| Knowledge chunks | — | 23 |
+| Hypothetical questions | — | 82 |
+| Product fit signals | — | 4,670 |
+| Brand fit signals | — | 1,495 |
 
 Why 4,670 and not 6,000: after the catalog is built, `pipelines/cleanup_catalog.py` deletes products
 whose image CDN link is dead (`image_embedding IS NULL`) and collapses duplicate title variants to the
@@ -676,6 +817,7 @@ products (
   avg_rating NUMERIC(3,2), rating_count INTEGER,
   also_buy JSONB, also_view JSONB,
   embedding vector(384),             -- MiniLM, HNSW cosine
+  embedding_ml vector(384),          -- multilingual MiniLM (opt-in), HNSW cosine
   image_embedding vector(512)        -- CLIP,   HNSW cosine
 )
 events (id, session_id, event_type, asin, query, results_count, qty, price_idr, created_at)
@@ -684,6 +826,11 @@ order_items (id, order_id, asin, title, qty, unit_price_idr)
 item_recommendations (asin PRIMARY KEY, recs JSONB)
 reviews (id, asin, rating, summary, comment, author, verified, review_date, created_at)
 store_knowledge (id, category, title, content, embedding vector(384))
+store_knowledge_questions (id, knowledge_id, question, embedding vector(384))
+product_fit (asin PRIMARY KEY, label, n_mentions, shares JSONB, fit_score, …)
+brand_fit (brand PRIMARY KEY, label, n_mentions, shares JSONB, …)
+copilot_thread_activity (thread_id PRIMARY KEY, last_active_at)
+-- LangGraph checkpoint tables are created by the PostgresSaver at runtime (not in the seed)
 ```
 
 Notes that matter:
@@ -730,8 +877,11 @@ cp .env.example .env
 | `LLM_MODEL` | OpenRouter model id | `openrouter/free` (auto-routes the free pool) |
 | `LLM_BASE_URL` | OpenRouter endpoint | `https://openrouter.ai/api/v1` |
 | `LLM_FALLBACK_MODELS` | optional OpenRouter fallbacks (429/503) | *(empty)* |
+| `LLM_FALLBACK_BASE_URL` · `LLM_FALLBACK_API_KEY` · `LLM_FALLBACK_MODEL` | optional generic OpenAI-compatible fallback endpoint | *(empty)* |
 | `GEMINI_API_KEY` | the copilot **fallback** provider | empty → Gemini not used |
 | `GEMINI_MODEL` | fallback model override | `gemini-3.5-flash-lite` |
+| `TEXT_EMBED_MODEL` · `TEXT_EMBED_COLUMN` | opt-in multilingual embeddings (`…-MiniLM-L12-v2` + `embedding_ml`) | MiniLM default |
+| `COPILOT_FAKE_LLM` | deterministic fake tool-calling model (tests/CI only) | unset |
 | `DATABASE_URL` · `NEXT_PUBLIC_API_URL` · `INTERNAL_API_URL` | wiring the three services | pre-set in `.env.example` and `docker-compose.yml` |
 
 ### Run
@@ -764,10 +914,12 @@ message instead of crashing, and the copilot panel simply can't produce answers.
 > setup problem — see [Honest limitations](#-honest-limitations--what-is-not-built). Text search is
 > unaffected.
 
-> **How the auto-seed works.** The Postgres container mounts `data/seed/init.sql.gz` into
+> **How the auto-seed works.** The Postgres container mounts `data/seed/init.sql.gz` (~33 MB) into
 > `/docker-entrypoint-initdb.d/`, so the official image restores the complete schema, 4,670 products,
-> HNSW indexes, 46,700 reviews, 22 knowledge chunks, recommendations and a small demo funnel
-> (~357 events, ~106 orders) in seconds on first boot.
+> HNSW indexes, 46,700 reviews, 23 knowledge chunks (plus 82 hypothetical questions), the
+> `product_fit` / `brand_fit` tables, recommendations and a small demo funnel
+> (~357 events, ~106 orders) in seconds on first boot. The ephemeral LangGraph checkpoint tables are
+> excluded from the dump and recreated at startup.
 
 ### Running the pieces separately
 
@@ -807,19 +959,25 @@ manual/
 │   │   └── copilot.py            #     AI copilot chat + tool listing
 │   ├── search.py                 #   BM25 + embeddings + RRF + CLIP encoders (ONNX)
 │   ├── reranker.py               #   Stage-2 ONNX cross-encoder
-│   ├── agent.py                  #   LangChain orchestrator (OpenRouter/Gemini) + tools
-│   ├── agent_tools.py            #   deterministic grounding tools
+│   ├── copilot_agent.py          #   LangChain v1 create_agent loop + middleware
+│   ├── copilot_tools.py          #   the 7 grounding tools (schema bound to the agent)
+│   ├── copilot_llm.py            #   provider chain (.with_fallbacks) + COPILOT_FAKE_LLM
+│   ├── copilot_memory.py         #   LangGraph PostgresSaver + thread activity / TTL
+│   ├── guardrail.py              #   deterministic zero-LLM greeting/off-topic/injection gate
+│   ├── fit.py                    #   product/brand fit lookup served on the product API
+│   ├── sizing.py                 #   3-layer recommend_size (product → brand → chart offset)
 │   ├── rate_limiter.py           #   sliding-window per-IP rate limiter
-│   ├── knowledge_seed.py         #   markdown → embedded store_knowledge chunks
-│   ├── knowledge/                #   authored size charts + store policies (RAG source)
-│   └── tests/                    #   85+ pytest cases (unit + live API)
+│   ├── knowledge_seed.py         #   markdown → embedded store_knowledge + hypothetical questions
+│   ├── knowledge/                #   authored size_charts.md + size_chart.json + policies (RAG source)
+│   └── tests/                    #   188 pytest cases (unit + live API, fake-LLM copilot)
 ├── shop/                         # Next.js 16 storefront
-│   └── src/{app,components,lib}  #   routes, UI, API client, session & cart state
+│   └── src/{app,components,lib}  #   routes, UI (CopilotChat + ProductCopilotEntry), API client, session & cart state
 ├── pipelines/                    # offline ML + data engineering
 │   ├── build_catalog.py          #   raw Amazon data → 6,000-product catalog (3 streaming passes)
 │   ├── seed.py                   #   catalog → Postgres (offline, upsert by asin)
 │   ├── cleanup_catalog.py        #   drop dead images + duplicate titles → 4,670 live
 │   ├── build_recs.py             #   co-occurrence + co-view + embedding backfill → recs
+│   ├── build_fit_signals.py      #   review regex-mining → product_fit / brand_fit (negation-aware)
 │   ├── embed_catalog.py          #   MiniLM 384-d text embeddings + HNSW
 │   ├── embed_images.py / embed_catalog_vlm.py   # CLIP 512-d image embeddings
 │   ├── extract_reviews.py        #   top reviews per ASIN → reviews table
@@ -829,8 +987,10 @@ manual/
 │   ├── eval_multimodal.py        #   text→image Recall@K / MRR evaluation + error mining
 │   ├── eval_search.py            #   32-query BM25 vs hybrid IR harness
 │   ├── eval_recs.py              #   leave-one-out HR@K / MRR / nDCG harness
+│   ├── eval_rag.py               #   direct-chunk vs hypothetical-question RAG eval
 │   ├── eda_interactions.py       #   sparsity, long tail, rating distribution
 │   ├── migrate_to_neon.py        #   local → Neon serverless migration
+│   ├── migrations/               #   idempotent SQL migrations (2026_10_phase4.sql)
 │   ├── kaggle/                   #   notebook + CLI metadata for the GPU study
 │   ├── failure_case_analysis.md  #   qualitative research report
 │   └── literature_review_clip_finetuning.md
@@ -859,12 +1019,12 @@ manual/
 ## 🧪 Testing & CI
 
 ```bash
-# Frontend: 15 tests across 5 suites (components, cart, copilot, cold-start, session)
+# Frontend: 20 tests across 5 files (components, cart, copilot, cold-start, session)
 cd shop && npm test
 
-# Backend + pipelines: 82 tests total
-cd api && python3 -m pytest tests/          # 76 cases (needs a live DB for most)
-python3 -m pytest pipelines/tests/          #  6 pure-math pipeline tests (no DB)
+# Backend + pipelines
+cd api && python3 -m pytest tests/          # 188 passed + 1 skipped (fake-LLM copilot; needs a live DB)
+python3 -m pytest pipelines/tests/          #  46 tests (6 pipeline-math + 40 fit classifier, no DB)
 ```
 
 Every push and PR runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
@@ -872,13 +1032,14 @@ Every push and PR runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
 | Job | Steps |
 |---|---|
 | **Frontend** (Node 22) | `npm ci` → `npm run lint` → `npm run test` → `npm run build` |
-| **Backend & pipelines** (Python 3.11) | install → `pytest api/tests/test_search_unit.py pipelines/tests/test_pipeline_math.py` |
+| **Backend & pipelines** (Python 3.12) | Ruff → full API suite against a Postgres service restored from the seed, with `COPILOT_FAKE_LLM=1` → pipeline tests |
 
-CI deliberately runs the **offline-safe** subset (BM25 maths, tokenizer, pipeline maths) because a
-hosted runner has no Postgres or LLM key. The full 76-case API suite runs locally against the
-Docker stack. The API tests cover the things that are easy to get wrong: price-tampering rejection,
-duplicate-ASIN aggregation, event-type validation, session-id bounds, search modes/filters/reindex,
-recommendation cold-start fallbacks, review aggregates, and the copilot's use cases + guardrails.
+CI runs **Ruff + the full API suite** against a Postgres service restored from the committed seed,
+with `COPILOT_FAKE_LLM=1` so the whole agent and tool path is exercised **without ever calling a real
+LLM** — plus the frontend lint/test/build. The API tests cover the things that are easy to get wrong:
+price-tampering rejection, duplicate-ASIN aggregation, event-type validation, session-id bounds,
+search modes/filters/reindex, recommendation cold-start fallbacks, review aggregates, the fit
+classifier, and the copilot's use cases + guardrails.
 
 ---
 
@@ -930,10 +1091,11 @@ This section exists because a portfolio that hides its edges is less useful than
   migration system. A schema rewrite would need care.
 - **Reindex is manual.** After reseeding, `POST /search/reindex` must be called (or the container
   restarted) because the BM25 index lives for the life of the process.
-- **Copilot tool set is intentionally 4 tools.** `get_product_reviews` exists in `agent_tools.py` as
-  a helper but is not bound to the planner; aspect-level social proof is assembled from
-  `search_catalog` / `get_product_details` evidence. There is deliberately **no order-status tool**:
-  checkout is a demo simulation with no fulfillment, shipping or tracking to report.
+- **The copilot chat is text-only.** It binds no vision tool and accepts no image payload — free
+  vision-capable LLMs have very small usage quotas, so no multimodal model is used. Photo search is
+  not gone, it just lives in the storefront (`POST /search/image` → CLIP vision → `image_embedding`);
+  the chat is a separate text surface. There is also deliberately **no order-status tool**: checkout
+  is a demo simulation with no fulfillment, shipping or tracking to report.
 - **Image search needs the champion vision encoder (~96 MB int8 ONNX), and has no fallback.** It runs
   without `torch` and matches the stored fine-tuned vectors (cosine 0.991 vs fp32). The artifact is
   published at
@@ -947,14 +1109,21 @@ This section exists because a portfolio that hides its edges is less useful than
   MiniLM, it is **disabled by default** on the deployment (`ENABLE_TRIMODAL`) and returns `400` when
   off. If no encoder is present the endpoint returns **`503`** by design (a zero-shot encoder would
   occupy a different space). Text search and the copilot are unaffected.
-- **The copilot is text-only — it cannot see images.** Free vision-capable LLMs have very small usage
-  quotas, so no multimodal model is used. An attached photo is treated as a **search key**
-  (CLIP vision → `image_embedding`), and the retrieved products are passed to the text model as tool
-  evidence: the assistant can find visually similar products but cannot describe the image.
-- **On the 512 MB free tier the copilot's cross-encoder reranker is off** (`ENABLE_RERANKER=false`).
-  A copilot image turn (visual search + catalog search) otherwise peaks at ~560 MB and OOMs the
-  instance; without the reranker it peaks at ~460 MB and falls back to Stage-1 ranking. The `/search`
-  endpoint never used the reranker, so HTTP search quality is unchanged; local Compose keeps it on.
+- **The multilingual embedding model is too big for the free tier.** It lifts overall hybrid nDCG@10
+  0.879 → 0.894 and the Indonesian group 0.622 → 0.765, but peak RSS with both CLIP ONNX encoders
+  loaded is ~1024 MB vs ~610–650 MB for MiniLM — over the 512 MB budget. So it stays opt-in
+  (`TEXT_EMBED_MODEL` + `TEXT_EMBED_COLUMN=embedding_ml`) and MiniLM is the default.
+- **Fit signals are review-regex derived and advisory only.** `build_fit_signals.py` classifies fit
+  mentions with regex + negation handling (not an aspect-sentiment model); `runs_large` is the
+  weakest-signalled label, and the copilot always frames sizing as an advisory, never a certainty.
+- **The RAG eval set is small** — 12 labelled ID+EN queries. The hypothetical-question lift (HR@1
+  0.250 → 0.750) is real on that set but a larger labelled set would tighten the estimate.
+- **Live copilot quality depends on the free OpenRouter model.** The grounding, tools and guardrail
+  are deterministic, but the prose quality on the live demo rides on whichever free model the pool
+  routes to; `COPILOT_FAKE_LLM=1` is what CI uses for determinism.
+- **On the 512 MB free tier the copilot's cross-encoder reranker is off** (`ENABLE_RERANKER=false`)
+  to stay within the memory budget; it falls back to Stage-1 ranking. The `/search` endpoint never
+  used the reranker, so HTTP search quality is unchanged; local Compose keeps it on.
 - **Live API sleeps.** Render free tier cold-starts in 30–50 s; the UI handles it, but the first
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA
@@ -971,10 +1140,10 @@ This section exists because a portfolio that hides its edges is less useful than
 Ordered by value to the product, not by ease:
 
 1. **Confirm the Render memory budget end-to-end.** Both encoders are now size-reduced and published
-   (vision int8 ~96 MB, text fp16 ~127 MB); the remaining option is a ≥1 GB Render plan so every
-   model can be resident at once without approaching the 512 MB free-tier limit.
-2. Bind `get_product_reviews` into the copilot tool schema (aspect-level social proof) if the
-   conversational path proves too thin.
+   (vision int8 ~96 MB, text fp16 ~127 MB); a ≥1 GB Render plan would let every model — including the
+   opt-in multilingual embeddings — be resident at once without approaching the 512 MB free-tier limit.
+2. Grow the RAG and fit eval sets (currently 12 labelled RAG queries) so the hypothetical-question
+   and fit-signal gains are estimated on a larger, more representative sample.
 3. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`
    becomes a true CTR.
 4. Add `Idempotency-Key` support to checkout.
