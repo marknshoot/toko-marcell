@@ -1,7 +1,9 @@
 # Toko Marcell — Master Sizing & Measurement Guide
-**Document Version:** 1.0 (Store Knowledge Base)  
+**Document Version:** 2.0 (Store Knowledge Base)  
 **Applicability:** Toko Marcell Multi-Brand Apparel & Footwear Catalog  
-**Usage:** Grounding reference for AI Stylist & Sizing Concierge (UC-2)
+**Usage:** Grounding reference for AI Stylist & Sizing Concierge (UC-2)  
+**Structured source of truth:** [`api/knowledge/size_chart.json`](./size_chart.json) — machine-readable baseline tables and data-driven brand offsets. This markdown explains and contextualises those values for the RAG knowledge base.  
+**Label:** *panduan umum toko* — this is NOT an official brand size chart.
 
 ---
 
@@ -73,12 +75,23 @@ Certain iconic brands in Toko Marcell have proprietary heritage patterns, fabric
 
 ---
 
-### 3. Carhartt & Champion (US Heavyweight Workwear & Hoodies)
-* **Deviation Rule:** **RUNS 1 FULL SIZE LARGER (US RELAXED FIT).**
-* **Why:** Cut for American workwear utility with generous shoulder drops and wider chest dimensions.
+### 3. Carhartt (US Heavyweight Workwear)
+* **Deviation Rule:** **SLIGHTLY ROOMIER THAN STANDARD, BUT NOT A FULL SIZE LARGE.**
+* **Why:** US workwear cut with moderate shoulder drop and wider chest. Review data (n=11,491) shows Carhartt is close to TTS: 21.1% say runs small, 54.9% TTS, 24.0% runs large — near-balanced, leaning only marginally roomy.
 * **Stylist Action:**
-  - An Asian/Indonesian **Size L** customer should order a **Size M** in Carhartt / Champion for a standard clean look.
-  - If they specifically ask for an oversized 90s streetwear look, they can stay with their normal Size L.
+  - Recommend **standard size** for a comfortable workwear fit.
+  - Only suggest sizing down if the customer specifically asks for a slim/fitted look.
+  - For an oversized streetwear look, they can stay with their normal size or size up 1.
+
+---
+
+### 3b. Champion (US Athletic Hoodies & Sweatshirts)
+* **Deviation Rule:** **TRUE TO SIZE — NOT "RUNS LARGE" AS COMMONLY ASSUMED.**
+* **Why:** Review data (n=6,086) shows Champion actually **leans slightly small** — 25.4% say runs small vs only 19.5% say runs large. Standard US athletic cut, but not oversized.
+* **Stylist Action:**
+  - Recommend **standard size** for normal fit.
+  - If the customer is between sizes, suggest sizing **up** rather than down.
+  - For an oversized look, recommend sizing up 1 full size.
 
 ---
 

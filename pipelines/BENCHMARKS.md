@@ -27,7 +27,7 @@ Three tiers of provenance:
 | Departments / categories / brands | see stats | A | `data/processed/stats.json` |
 | Interaction range per item | min 198 · median 333 · max 19,693 | A | `data/processed/stats.json` → `interactions_per_item` |
 | USD→IDR demo rate | 16,000 | A | `data/processed/stats.json` → `usd_idr_rate_used` |
-| Knowledge chunks | 22 | A | `data/seed/init.sql.gz` → `store_knowledge` COPY block |
+| Knowledge chunks / hypothetical questions | 23 / 82 | A | `data/seed/init.sql.gz` → `store_knowledge` + `store_knowledge_questions` COPY blocks |
 | Demo funnel rows | 357 events · 106 orders | A | `data/seed/init.sql.gz` |
 | VLM pairs / splits | 5,378 total · 4,302 train / 537 val / 539 test | A | `data/processed/clip_dataset_summary.json` |
 | Fit signals — ASIN coverage | 99.8% any · 98.1% ≥5 · 90.9% ≥20 mentions | B | `python3 pipelines/build_fit_signals.py`; `product_fit` table (6,000 rows), `brand_fit` (1,495 brands) |
@@ -319,10 +319,9 @@ are read directly from `pipelines/build_recs.py` (Tier A).
 
 | Suite | Count | Tier | Command |
 |---|---:|:---:|---|
-| API (pytest, needs DB; copilot needs an LLM key) | 76 | B | `cd api && python3 -m pytest tests/` |
-| Offline-safe unit tests (CI) | 17 | B | `pytest api/tests/test_search_unit.py pipelines/tests/test_pipeline_math.py` |
-| Pipelines maths | 6 | B | `python3 -m pytest pipelines/tests/` |
-| Frontend (Vitest) | 15 | B | `cd shop && npm test` |
+| API (pytest, needs DB; copilot runs on the fake LLM) | 188 passed + 1 skipped | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
+| Pipelines (maths + fit classifier) | 46 (6 + 40) | B | `python3 -m pytest pipelines/tests/` |
+| Frontend (Vitest) | 21 (5 files) | B | `cd shop && npm test` |
 
 ---
 

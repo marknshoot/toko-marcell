@@ -60,16 +60,26 @@ shield, because a false "down" is worse than a heavier probe.
 ### 3. Floating AI copilot (`components/CopilotChat.js` + `FloatingCopilot.js`)
 
 - A chat panel mounted globally in `layout.js`, loaded with `dynamic(..., { ssr: false })` so it never
-  costs first paint.
-- Sends conversation history plus an optional image to `POST /copilot/chat`; renders the reply, the
-  **structured product cards** the backend returns, and a tool trace.
-- **Image upload** (max 5 MB, validated client-side) is sent as a data URL. The copilot is
-  **text-only** (free vision models have tiny quotas), so the backend runs the CLIP visual search
-  deterministically and feeds the products back as evidence — the assistant *searches* the photo, it
-  cannot *see* it.
-- Quick prompts cover the demo's best paths (outfit under a budget, TB/BB sizing, Levi's fit
-  comparison, shipping/QRIS).
-- Product cards in replies can be added to the cart inline.
+  costs first paint. A floating **"Tanya Admin"** button opens it; **Escape** closes it, and controls
+  carry `aria-label`s.
+- **Text-only (v2).** The chat sends a single `message` plus a browser `thread_id` to
+  `POST /copilot/chat`; conversation history lives server-side in the LangGraph checkpointer, not in
+  the request. **There is no image upload** — photo search is a separate storefront feature (see
+  Catalog, below).
+- **Page-aware starter chips** differ between the home page and a product page.
+- Replies render **numbered product cards** (`[1]`, `[2]`) with **fit badges**, each exposing
+  **Tanya**, **Bandingkan** (compare tray, max 3), **Ukuran?** and **+ Keranjang** actions.
+- An inline **TB/BB size form** (triggered by a `size_form` ui_action), **follow-up suggestion chips**,
+  and an **add-to-cart confirmation with a "Batalkan" undo**.
+- A **pinned product chip** shows which product the conversation is anchored to, and a **reset button**
+  clears the thread (`DELETE /copilot/threads/{id}` + wipes the local copy).
+
+### 3b. Product-page copilot entry (`components/ProductCopilotEntry.js`)
+
+On a product page, a **"Tanya soal produk ini"** button opens the **same floating copilot** that
+`app/layout.js` mounts on every page (bottom-right), **pinned to that product**, so follow-ups resolve to
+the right ASIN and the product starter chips appear. It renders no chat of its own: it dispatches a
+`copilot:open` window event (`{asin, title}`) that the single `CopilotChat` instance listens for.
 
 ### 4. Cart without accounts (`components/CartProvider.js`)
 
@@ -137,7 +147,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8001
 
 ```bash
 npm run dev      # http://localhost:3000
-npm test         # 15 tests across 5 suites
+npm test         # 21 tests across 5 suites
 npm run lint
 npm run build
 ```
@@ -187,12 +197,13 @@ src/
 │   ├── RecommendationsRail.js    # session recommendations + load more
 │   ├── TrackView.js              # fires view_product once per ASIN
 │   ├── ServerWakeup.js           # cold-start health ping + overlay
-│   ├── CopilotChat.js            # copilot panel (text + image + product cards)
+│   ├── CopilotChat.js            # v2 copilot panel (text-only; numbered cards, fit badges, compare tray, size form, undo)
+│   ├── ProductCopilotEntry.js    # "Tanya soal produk ini" button on the PDP; opens the floating copilot pinned to the product (copilot:open event)
 │   └── FloatingCopilot.js        # lazy, client-only mount for the copilot
 └── lib/
     ├── api.js                    # the ONLY place that knows the API URL; all fetches
     ├── formatRp.js               # IDR currency formatting
-    └── session.js                # anonymous session id (sessionStorage + crypto.randomUUID)
+    └── session.js                # anonymous session id + copilot thread id/messages (local storage)
 ```
 
 ### Data flow
@@ -227,14 +238,14 @@ sequenceDiagram
 npm test
 ```
 
-**15 tests across 5 suites**:
+**21 tests across 5 suites**:
 
 | Suite | Tests | Covers |
 |---|:---:|---|
 | `components/__tests__/CartProvider.test.jsx` | 7 | empty cart, add, duplicate merge, quantity, remove-at-zero, clear, multi-item subtotal |
 | `components/__tests__/AddToCartButton.test.jsx` | 3 | add with quantity, navigate home, existing-quantity display |
 | `components/__tests__/ServerWakeup.test.jsx` | 2 | ready indicator on healthy check, spinner while waiting |
-| `components/__tests__/CopilotChat.test.jsx` | 1 | rejects uploads over 5 MB |
+| `components/__tests__/CopilotChat.test.jsx` | 7 | no image-upload control (text-only), home vs product starter chips, `copilot:open` event opens the panel pinned to a product, v2 single-message turn + guardrail, numbered cards with fit badge, reset deletes the thread |
 | `lib/__tests__/session.test.js` | 2 | id persists in `sessionStorage`, stable across calls |
 
 CI also runs `npm run lint` and `npm run build` so the Next build cannot regress silently.
