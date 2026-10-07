@@ -551,7 +551,7 @@ certainty.
 `GET /products/{id}` now includes a `fit` object (`label`, `source` = `product` | `brand`,
 `nMentions`, `shares`, `fitScore`, `phrasing`, `disclaimer`) or `null` when there is no signal, and a
 dedicated `GET /products/{id}/fit` endpoint exposes the same. The storefront renders these as **fit
-badges** on product cards and the product page.
+badges** on the copilot's product cards.
 
 ---
 
@@ -1019,7 +1019,7 @@ manual/
 ## 🧪 Testing & CI
 
 ```bash
-# Frontend: 20 tests across 5 files (components, cart, copilot, cold-start, session)
+# Frontend: 21 tests across 5 files (components, cart, copilot, cold-start, session)
 cd shop && npm test
 
 # Backend + pipelines

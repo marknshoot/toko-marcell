@@ -321,7 +321,7 @@ are read directly from `pipelines/build_recs.py` (Tier A).
 |---|---:|:---:|---|
 | API (pytest, needs DB; copilot runs on the fake LLM) | 188 passed + 1 skipped | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
 | Pipelines (maths + fit classifier) | 46 (6 + 40) | B | `python3 -m pytest pipelines/tests/` |
-| Frontend (Vitest) | 20 (5 files) | B | `cd shop && npm test` |
+| Frontend (Vitest) | 21 (5 files) | B | `cd shop && npm test` |
 
 ---
 

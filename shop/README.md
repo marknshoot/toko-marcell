@@ -76,9 +76,10 @@ shield, because a false "down" is worse than a heavier probe.
 
 ### 3b. Product-page copilot entry (`components/ProductCopilotEntry.js`)
 
-On a product page, a **"Tanya soal produk ini"** box shows the product's fit badge and quick chips
-("Ukuran saya pas yang mana?", "Bahannya panas nggak?", "Yang mirip tapi lebih murah?"). Clicking any
-chip opens the copilot **pinned to that product** so follow-ups resolve to the right ASIN.
+On a product page, a **"Tanya soal produk ini"** button opens the **same floating copilot** that
+`app/layout.js` mounts on every page (bottom-right), **pinned to that product**, so follow-ups resolve to
+the right ASIN and the product starter chips appear. It renders no chat of its own: it dispatches a
+`copilot:open` window event (`{asin, title}`) that the single `CopilotChat` instance listens for.
 
 ### 4. Cart without accounts (`components/CartProvider.js`)
 
@@ -146,7 +147,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8001
 
 ```bash
 npm run dev      # http://localhost:3000
-npm test         # 20 tests across 5 suites
+npm test         # 21 tests across 5 suites
 npm run lint
 npm run build
 ```
@@ -197,7 +198,7 @@ src/
 │   ├── TrackView.js              # fires view_product once per ASIN
 │   ├── ServerWakeup.js           # cold-start health ping + overlay
 │   ├── CopilotChat.js            # v2 copilot panel (text-only; numbered cards, fit badges, compare tray, size form, undo)
-│   ├── ProductCopilotEntry.js    # "Tanya soal produk ini" box on the PDP; opens the copilot pinned to the product
+│   ├── ProductCopilotEntry.js    # "Tanya soal produk ini" button on the PDP; opens the floating copilot pinned to the product (copilot:open event)
 │   └── FloatingCopilot.js        # lazy, client-only mount for the copilot
 └── lib/
     ├── api.js                    # the ONLY place that knows the API URL; all fetches
@@ -237,14 +238,14 @@ sequenceDiagram
 npm test
 ```
 
-**20 tests across 5 suites**:
+**21 tests across 5 suites**:
 
 | Suite | Tests | Covers |
 |---|:---:|---|
 | `components/__tests__/CartProvider.test.jsx` | 7 | empty cart, add, duplicate merge, quantity, remove-at-zero, clear, multi-item subtotal |
 | `components/__tests__/AddToCartButton.test.jsx` | 3 | add with quantity, navigate home, existing-quantity display |
 | `components/__tests__/ServerWakeup.test.jsx` | 2 | ready indicator on healthy check, spinner while waiting |
-| `components/__tests__/CopilotChat.test.jsx` | 6 | no image-upload control (text-only), home vs product starter chips, v2 single-message turn + guardrail, numbered cards with fit badge, reset deletes the thread |
+| `components/__tests__/CopilotChat.test.jsx` | 7 | no image-upload control (text-only), home vs product starter chips, `copilot:open` event opens the panel pinned to a product, v2 single-message turn + guardrail, numbered cards with fit badge, reset deletes the thread |
 | `lib/__tests__/session.test.js` | 2 | id persists in `sessionStorage`, stable across calls |
 
 CI also runs `npm run lint` and `npm run build` so the Next build cannot regress silently.
