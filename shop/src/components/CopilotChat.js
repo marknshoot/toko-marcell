@@ -83,6 +83,18 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
     return () => document.removeEventListener("keydown", handleEsc);
   }, [handleEsc]);
 
+  // Other components (e.g. the product-page button) open this chat with a
+  // product pinned by dispatching a "copilot:open" window event.
+  useEffect(() => {
+    function onOpen(e) {
+      const { asin, title } = e.detail || {};
+      if (asin) setPinned({ asin, title, priceIdr: null });
+      setIsOpen(true);
+    }
+    window.addEventListener("copilot:open", onOpen);
+    return () => window.removeEventListener("copilot:open", onOpen);
+  }, []);
+
   async function handleReset() {
     const newTid = resetCopilotThread();
     setThreadId(newTid);
@@ -211,7 +223,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
     setUndoItem(null);
   }
 
-  const starterChips = pageAsin ? PRODUCT_CHIPS : HOME_CHIPS;
+  const starterChips = pinned ? PRODUCT_CHIPS : HOME_CHIPS;
 
   return (
     <>
