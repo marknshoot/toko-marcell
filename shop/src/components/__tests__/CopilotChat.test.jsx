@@ -1,4 +1,4 @@
-import { render, fireEvent, waitFor } from "@testing-library/react";
+import { render, fireEvent, waitFor, act } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import CopilotChat from "../CopilotChat";
 import { CartProvider } from "../CartProvider";
@@ -45,6 +45,27 @@ describe("CopilotChat v2", () => {
       </CartProvider>
     );
     expect(getByText("Bahannya panas nggak?")).toBeTruthy();
+  });
+
+  it("opens the floating panel pinned to a product on a copilot:open event", async () => {
+    const { container, findByText } = render(
+      <CartProvider>
+        <CopilotChat />
+      </CartProvider>
+    );
+    // closed initially: launcher visible, no dialog
+    expect(container.querySelector('[role="dialog"]')).toBeNull();
+
+    act(() => {
+      window.dispatchEvent(
+        new CustomEvent("copilot:open", { detail: { asin: "B09", title: "Dickies 874" } })
+      );
+    });
+
+    expect(await findByText(/Sedang dilihat: Dickies 874/)).toBeTruthy();
+    expect(container.querySelector('[role="dialog"]')).toBeTruthy();
+    // product chips, not home chips
+    expect(await findByText("Bahannya panas nggak?")).toBeTruthy();
   });
 
   it("sends a v2 single-message turn and renders the reply + guardrail", async () => {

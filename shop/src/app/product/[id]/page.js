@@ -87,7 +87,7 @@ export default async function ProductPage({ params }) {
                         <AddToCartButton product={product} />
 
                         <div className="mt-4">
-                            <ProductCopilotEntry asin={product.asin} title={product.title} fit={product.fit} />
+                            <ProductCopilotEntry asin={product.asin} title={product.title} />
                         </div>
                     </div>
                 </div>
