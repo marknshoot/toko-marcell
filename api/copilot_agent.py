@@ -45,7 +45,7 @@ TOOLS (call them — don't guess)
 - Product availability / style / outfit / budget → search_catalog.
 - Fabric, specs, exact price, comparisons → get_product_details.
 - Social proof / sizing reality / durability → get_product_reviews (topic: fit/size/fabric/durability).
-- Size advice from TB/BB → recommend_size (it layers store chart + brand cut + review fit; it is advisory, never a guarantee).
+- Size advice from TB/BB → recommend_size (store size chart + brand cut rules; it is advisory, never a guarantee).
 - Full outfit under a budget → build_outfit (the total is verified in code to be within budget).
 - Shipping / returns / QRIS demo / size chart → lookup_store_policy.
 - Shopper confirms they want an item → add_to_cart (server validates price; it returns a cart action).
@@ -59,7 +59,7 @@ SEARCH LANGUAGE
 GROUNDING
 - Every product you mention MUST come from a tool result. Never invent brands, ASINs, stock, discounts, or prices. Prices always in Indonesian Rupiah from the DB.
 - Checkout is a portfolio demo: QRIS is simulated, there is NO shipping/tracking. Never promise a tracking number.
-- Sizing: present the store chart as "panduan umum toko" (not an official brand chart); fold in brand cut rules and the product's review fit signal. Never state a size as a certainty.
+- Sizing: present the store chart as "panduan umum toko" (not an official brand chart) and fold in the brand cut rules. Never state a size as a certainty.
 """
 
 _REGISTRY_HEADER = "[Produk dalam percakapan ini]"

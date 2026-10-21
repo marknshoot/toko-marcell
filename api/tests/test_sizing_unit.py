@@ -71,7 +71,7 @@ def test_brand_offset_dickies_runs_small():
 
 
 def test_brand_offset_champion_not_runs_large():
-    """Design §3 correction: Champion is NOT runs_large; data says true_to_size."""
+    """The guide says Champion is NOT runs_large — it is true_to_size."""
     o = brand_offset("Champion")
     assert o["fit_label"] == "true_to_size"
 
@@ -95,7 +95,7 @@ def test_brand_offset_unknown_is_none():
     assert brand_offset(None) is None
 
 
-# ── The 3-layer recommender ──────────────────────────────────────────────────
+# ── The 2-layer recommender ──────────────────────────────────────────────────
 
 def test_recommend_never_a_certainty():
     """Must always read as guidance + carry a disclaimer."""
@@ -116,7 +116,7 @@ def test_recommend_runs_small_brand_shifts_up():
 
 
 def test_recommend_champion_does_not_shift_down():
-    """Champion is true_to_size now — must NOT be treated as runs_large."""
+    """Champion is true_to_size in the guide — it must NOT be treated as runs_large."""
     base = recommend_size_core(178, 75, garment_kind="tops")
     champ = recommend_size_core(178, 75, garment_kind="tops", brand="Champion")
     assert champ["suggested"]["size"] == base["suggested"]["size"]
@@ -133,9 +133,3 @@ def test_recommend_bottoms_returns_waist():
     r = recommend_size_core(175, 70, garment_kind="bottoms", brand="Dickies")
     assert "waist_size" in r["suggested"]
     assert r["garment_kind"] == "bottoms"
-
-
-def test_recommend_includes_product_fit_phrasing():
-    pf = {"phrasing": "Dari 50 ulasan: 60% bilang kekecilan, 30% pas, 10% kebesaran.", "label": "runs_small"}
-    r = recommend_size_core(170, 65, garment_kind="tops", product_fit=pf)
-    assert any("ulasan" in n for n in r["notes"])

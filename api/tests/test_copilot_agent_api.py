@@ -83,9 +83,10 @@ def test_scripted_tool_call_populates_registry():
     )
     _run(agent.ainvoke({"messages": [HumanMessage(content="ada celana chino hitam?")]}))
     assert len(ctx.registry) >= 1
-    # fit enrichment present (object or None key)
+    # registry entries carry the card projection (no fit field — sizing is chart-only)
     for ref in ctx.registry:
-        assert "fit" in ctx.registry[ref]
+        assert "fit" not in ctx.registry[ref]
+        assert ctx.registry[ref]["asin"]
 
 
 # ── Context block assembly (page product re-read from DB) ────────────────────

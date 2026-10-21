@@ -1,11 +1,14 @@
-"""Store sizing guidance — the 3-layer recommender (design §3).
+"""Store sizing guidance — the 2-layer recommender (design §3).
 
 Layers, applied in order and always surfaced together, **never** as a certainty:
   a. Store baseline chart (``api/knowledge/size_chart.json``, "panduan umum toko")
      maps TB/BB → a tops size and a bottoms waist size.
-  b. Product-level review fit signal (``product_fit``) nudges the baseline.
-  c. Brand fallback (``brand_fit`` / size_chart brand offsets) when the product
-     has too few mentions.
+  b. Brand cut rule from the same knowledge base (``brand_offsets``) overrides
+     the baseline for the heritage brands documented in
+     ``api/knowledge/size_charts.md`` §2.
+
+Everything here comes from the authored sizing guide — there is no
+review-derived signal and no per-product fitting data.
 
 The output is advisory text + a structured breakdown. It must read like a
 helpful "mimin" suggestion, not "you must buy size X".
@@ -106,7 +109,7 @@ def brand_offset(brand: str | None) -> dict | None:
     return None
 
 
-# ── The 3-layer recommender ──────────────────────────────────────────────────
+# ── The 2-layer recommender ──────────────────────────────────────────────────
 
 def recommend_size_core(
     height_cm: float,
@@ -114,12 +117,10 @@ def recommend_size_core(
     *,
     garment_kind: str = "tops",
     brand: str | None = None,
-    product_fit: dict | None = None,
 ) -> dict:
-    """Pure logic (no DB): combine baseline + brand offset + product fit signal.
+    """Pure logic (no DB): combine the baseline chart with the brand cut rule.
 
-    ``product_fit`` is the serving fit object from ``fit.get_product_fit`` (or
-    None). Returns a structured dict with ``recommendation`` text that is always
+    Returns a structured dict with ``recommendation`` text that is always
     phrased as guidance, never a guarantee.
     """
     chart = load_size_chart()
@@ -149,7 +150,7 @@ def recommend_size_core(
             )
         suggested = {"size": suggested_size}
 
-    # ── Layer b/c: brand offset (data-driven) ────────────────────────────────
+    # ── Layer b: brand cut rule from the knowledge base ──────────────────────
     offset = brand_offset(brand)
     if offset:
         notes.append(f"Catatan brand {offset['brand']}: {offset['offset_note']} {offset['action']}")
@@ -160,10 +161,6 @@ def recommend_size_core(
             elif offset["fit_label"] == "runs_large":
                 suggested["size"] = _shift_size(suggested["size"], -1)
                 notes.append(f"Karena {offset['brand']} cenderung kebesaran, mimin geser saran ke {suggested['size']}.")
-
-    # ── Layer b: product-level review signal ─────────────────────────────────
-    if product_fit:
-        notes.append(product_fit.get("phrasing", ""))
 
     # ── Compose a non-certain recommendation ─────────────────────────────────
     if garment_kind == "bottoms":
@@ -183,11 +180,10 @@ def recommend_size_core(
         "baseline": baseline,
         "brand": offset["brand"] if offset else brand,
         "brand_offset": offset,
-        "product_fit": product_fit,
         "source_label": label,
         "notes": [n for n in notes if n],
         "disclaimer": (
-            "Panduan ukuran ini estimasi umum toko dari standar Asia + ulasan "
-            "pelanggan, bukan chart resmi brand. Hasil bisa beda tiap orang."
+            "Panduan ukuran ini estimasi umum toko dari standar Asia, bukan "
+            "chart resmi brand. Hasil bisa beda tiap orang."
         ),
     }

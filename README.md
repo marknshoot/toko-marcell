@@ -47,7 +47,7 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 | 2 | **Hybrid retrieval** — BM25 + MiniLM (384-d) + CLIP (512-d) → RRF (k=60); optional ONNX cross-encoder on the copilot path | exact SKUs *and* semantic/visual queries; `?mode=` switchable | [API internals](./api/README.md#search--how-it-ranks) |
 | 3 | **Grounded agentic copilot** — LangChain v1 `create_agent` + OpenRouter (free tier), deterministic zero-LLM guardrail, 7 tools, LangGraph Postgres memory, hypothetical-question policy RAG | answers only from tool evidence; refuses off-topic and injection attempts without an LLM call | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
 | 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe | [recommendation engine](./README.md#-recommendation-engine) |
-| 5 | **Review-derived fit & sizing** — 622,530 fit mentions regex-mined from 3.36 M reviews | per-product/brand `runs_small / true_to_size / runs_large`, Dirichlet-smoothed, surfaced as fit badges + copilot `recommend_size` | [review-derived fit](./README.md#-review-derived-fit--sizing) |
+| 5 | **Authored sizing knowledge base** — TB/BB charts, waist conversions and per-brand cut rules, embedded into RAG | deterministic `recommend_size` (2-layer chart → brand rule) + natural-language sizing answers, always advisory | [sizing knowledge base](./README.md#-sizing--fit-knowledge-base) |
 
 **Measured results** (committed artifacts in [`pipelines/results/`](./pipelines/results/)):
 
@@ -147,7 +147,7 @@ Nothing is invented. Where something is simplified or unfinished, it is written 
 - [Research pillar 1 — the VLM contrastive fine-tuning study](#-research-pillar-1--the-vlm-contrastive-fine-tuning-study)
 - [Research pillar 2 — tri-modal hybrid retrieval](#-research-pillar-2--tri-modal-hybrid-retrieval)
 - [Recommendation engine](#-recommendation-engine)
-- [Review-derived fit & sizing](#-review-derived-fit--sizing)
+- [Sizing & fit knowledge base](#-sizing--fit-knowledge-base)
 - [The agentic copilot](#-the-agentic-copilot-admin-toko-marcell)
 - [Cold-start UX](#-cold-start-ux-turning-a-free-tier-constraint-into-a-feature)
 - [Production reliability, caching & defensive security](#-production-reliability-caching--defensive-security)
@@ -205,7 +205,6 @@ flowchart TD
         PG["Neon Postgres"]
         HNSW["HNSW cosine indexes (384-d & 512-d)"]
         RAG["store_knowledge + store_knowledge_questions RAG"]
-        Fit["product_fit · brand_fit"]
         Ckpt["LangGraph checkpoints<br/>(Postgres saver, created at runtime)"]
         Ops["events · orders · order_items · item_recommendations · reviews"]
     end
@@ -220,7 +219,6 @@ flowchart TD
     BM25 & MiniLM & CLIP --> RRF --> Storage
     RRF -. "copilot, ENABLE_RERANKER" .-> CE
     Tools7 --> RAG
-    Tools7 --> Fit
     Agent --> Ckpt
     Agent --> Chat
     Cache --> PG
@@ -504,54 +502,52 @@ and popularity baselines.
 
 ---
 
-## 📏 Review-derived fit & sizing
+## 📏 Sizing & fit knowledge base
 
-Fashion returns are driven by fit, and shoppers do not trust a generic size chart — they trust other
-shoppers. `pipelines/build_fit_signals.py` turns the review corpus into a per-product fit signal so
-the storefront and the copilot can answer "does this run small?" from evidence, not guesswork.
+Sizing is the single biggest driver of fashion returns, and most "size chart" AI features hallucinate
+one. Toko Marcell answers sizing questions from an **authored, versioned knowledge base** — nothing is
+mined per product, and nothing is invented at answer time.
 
-### The pipeline
+### The two artefacts
 
-1. **Regex mining with negation handling.** The pipeline streams all **3,363,680** catalog reviews
-   and classifies each fit mention as `runs_small`, `true_to_size` or `runs_large`, handling negations
-   (so "doesn't run small" is not counted as `runs_small`). **622,530 fit mentions** are extracted —
-   **18.5%** of reviews carry a usable fit signal.
-2. **Dirichlet smoothing.** Per-product counts are smoothed (α = 10) toward the department prior, so a
-   product with three reviews is not declared "runs large" on noise.
-3. **Brand fallback.** When a product has fewer than 5 mentions, its label falls back to the
-   brand-level signal in `brand_fit`.
+| File | Role |
+|---|---|
+| [`api/knowledge/size_charts.md`](./api/knowledge/size_charts.md) | the human-readable guide: TB/BB tops chart, waist-inches bottoms chart, footwear conversion, and the per-brand cut rules |
+| [`api/knowledge/size_chart.json`](./api/knowledge/size_chart.json) | the same values machine-readable, read directly by `api/sizing.py` |
 
-**Coverage** of the 6,000 built ASINs: **99.8%** have ≥ 1 fit mention, **98.1%** have ≥ 5, **90.9%**
-have ≥ 20. Two tables ship in the seed: `product_fit` (**4,670 rows**, the served catalog) and
-`brand_fit` (**1,495 brands**). The classifier is covered by **40 regex unit tests**.
+Both are labelled **"panduan umum toko"** — a store rule-of-thumb, explicitly *not* an official brand
+chart. `size_charts.md` is also split by section header, embedded with MiniLM and ingested into
+`store_knowledge`, so the RAG index and the deterministic tool answer from **the same source**.
 
-### Data-driven brand corrections
+### Two consumers, one source of truth
 
-Mining the actual reviews overturned several "common knowledge" sizing rules that an authored chart
-would have gotten wrong:
+1. **`recommend_size` — deterministic, 2-layer.** `api/sizing.py` maps TB/BB to a baseline tops size
+   (and weight → waist inches for bottoms), then applies the brand cut rule if the brand is
+   documented. It returns a structured breakdown plus Indonesian phrasing, always framed as
+   *"coba ukuran X dulu, ini perkiraan"* with a disclaimer — never a guarantee.
+2. **`lookup_store_policy` — RAG.** The same guide is retrievable in prose, so "kalau tinggi 175 berat
+   70 ambil apa di Dickies 874?" can be answered conversationally without the tool path.
 
-- **Champion is *not* "runs large"** — 25.4% of mentions say it runs small vs 19.5% large → **true to size**.
-- **Carhartt** is only slightly roomy → **true to size**.
-- **Dickies runs small** (35.7% of mentions say small).
-- **Levi's** → **true to size**.
-- **Birkenstock runs large** → size down.
+### Why authored, not mined
 
-### The structured size source of truth
+An earlier Phase 4a experiment mined 622,530 fit mentions out of the 3.36 M-review corpus into
+`product_fit` / `brand_fit` tables and surfaced them as per-product `runs_small / true_to_size /
+runs_large` badges. It was removed, for three reasons:
 
-`api/knowledge/size_chart.json` is the structured source (TB/BB tops, waist bottoms, footwear, and
-per-brand offsets), labelled **"panduan umum toko"** — a store rule-of-thumb, explicitly *not* an
-official brand chart. `size_charts.md` explains it in prose for the RAG index.
+- **Coverage was uneven in a way shoppers could not see.** A badge rendered only when a product had
+  ≥ 5 mentions; below that it fell back to a brand aggregate, below 3 it silently disappeared. Two
+  nearly identical products could show totally different, or no, guidance.
+- **It was unreproducible without the 2.8 GB raw dump.** `data/processed/` is gitignored, so any
+  deployment that did not run the pipeline served zero badges — with no error to notice.
+- **It duplicated the brand rules it was supposed to correct.** The genuinely useful output was six
+  brand-level cut rules (Dickies runs small; Champion and Carhartt are true to size; Birkenstock runs
+  large; Levi's and TOMS true to size). Those now live in the guide as authored, reviewable text.
 
-The copilot's `recommend_size` tool reads this plus the product/brand fit signal in a **3-layer**
-scheme (product fit → brand fit → chart offset) and always returns an **advisory**, never a
-certainty.
-
-### Serving
-
-`GET /products/{id}` now includes a `fit` object (`label`, `source` = `product` | `brand`,
-`nMentions`, `shares`, `fitScore`, `phrasing`, `disclaimer`) or `null` when there is no signal, and a
-dedicated `GET /products/{id}/fit` endpoint exposes the same. The storefront renders these as **fit
-badges** on the copilot's product cards.
+The brand rules themselves are kept, and they still encode the surprise findings — **Champion is not
+"runs large"** and **Carhartt is only slightly roomy** — but as documented knowledge with a reviewer,
+not as a silent weekly recompute. `product_fit`, `brand_fit`, `/products/{id}/fit`, `api/fit.py` and
+`pipelines/build_fit_signals.py` are gone; an older database that still has the tables can drop them
+with `DROP TABLE IF EXISTS product_fit, brand_fit;`.
 
 ---
 
@@ -591,7 +587,7 @@ sequenceDiagram
     D-->>T: authoritative rows
     T-->>A: compacted evidence
     A->>D: persist turn (PostgresSaver, thread_id)
-    A-->>S: reply + products[≤6]+fit + citations + suggestions + ui_actions
+    A-->>S: reply + products[≤6] + citations + suggestions + ui_actions
 ```
 
 1. **Deterministic guardrail (`api/guardrail.py`).** Before any LLM runs, greetings/thanks/identity,
@@ -616,7 +612,7 @@ Seven tools are bound to the agent (`GET /copilot/tools` lists them):
 | `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, real category enum + budget filters | "do you have…", style, outfit, budget |
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
 | `get_product_reviews` | `reviews`, with a topic filter (fit / size / fabric / durability) | aspect-level social proof |
-| `recommend_size` | `size_chart.json` + product/brand fit, 3-layer (product → brand → chart offset) | TB/BB sizing advisory, never a certainty |
+| `recommend_size` | `size_chart.json` + brand cut rules, 2-layer (store baseline → brand offset) | TB/BB sizing advisory, never a certainty |
 | `build_outfit` | catalog search; total summed and verified ≤ budget **in code** | top + bottom + shoes within budget |
 | `lookup_store_policy` | `store_knowledge` / `store_knowledge_questions` (hypothetical-question RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
 | `add_to_cart` | re-reads the price from the DB, returns a `ui_action` the browser executes | "add this to my cart" |
@@ -629,12 +625,13 @@ simulation with no fulfillment to look up.
 
 - Every product mentioned must come from a tool result. No invented brands, ASINs, stock, or discounts.
 - Prices are always formatted as Indonesian Rupiah and always taken from the database.
-- Sizing answers apply **data-driven brand cut rules** from the knowledge base and the review-mined
-  fit signal — e.g. Dickies 874's rigid 8.5 oz twill (and that **Dickies runs small**), Levi's 505 vs
-  501 fit differences (Levi's **true to size**), that **Champion and Carhartt are true to size**
-  (not "runs large", per the mined reviews), and that **Birkenstock runs large** (size down). These
-  are authored in [`api/knowledge/size_charts.md`](./api/knowledge/size_charts.md) and
-  [`api/knowledge/size_chart.json`](./api/knowledge/size_chart.json), not hallucinated.
+- Sizing answers apply the **authored brand cut rules** in the store's sizing guide — e.g. Dickies
+  874's rigid 8.5 oz twill (and that **Dickies runs small**), Levi's 505 vs 501 fit differences
+  (Levi's **true to size**), that **Champion and Carhartt are true to size** (not "runs large"), and
+  that **Birkenstock runs large** (size down). These are authored in
+  [`api/knowledge/size_charts.md`](./api/knowledge/size_charts.md) and
+  [`api/knowledge/size_chart.json`](./api/knowledge/size_chart.json), not hallucinated and not mined
+  per product.
 - Outfit recommendations must sum to a total inside the shopper's stated budget.
 - Off-topic requests are politely refused and redirected to fashion.
 
@@ -661,7 +658,7 @@ exercises the full agent and tool path **without ever calling a real LLM**.
 
 `POST /copilot/chat` accepts `{session_id?, thread_id, message (1..2000), context?: {page_asin?,
 referenced_asins[≤3]}}` with `extra="forbid"`. It returns `{reply, thread_id, products[≤6] (each
-with a `ref` and `fit`), citations, suggestions (2–3 follow-up chips), ui_actions (`add_to_cart` |
+with a `ref`), citations, suggestions (2–3 follow-up chips), ui_actions (`add_to_cart` |
 `size_form`), tool_calls, guardrail, took_ms}`. Errors are `422` (validation), `429` (rate limit),
 `503` (no LLM key) and `502` (upstream failure). `GET /copilot/tools` returns the 7 tool names.
 
@@ -790,8 +787,6 @@ Full provenance, quirks and filters: [`pipelines/README.md`](./pipelines/README.
 | Distinct users | 972,184 | — |
 | Knowledge chunks | — | 23 |
 | Hypothetical questions | — | 82 |
-| Product fit signals | — | 4,670 |
-| Brand fit signals | — | 1,495 |
 
 Why 4,670 and not 6,000: after the catalog is built, `pipelines/cleanup_catalog.py` deletes products
 whose image CDN link is dead (`image_embedding IS NULL`) and collapses duplicate title variants to the
@@ -827,8 +822,6 @@ item_recommendations (asin PRIMARY KEY, recs JSONB)
 reviews (id, asin, rating, summary, comment, author, verified, review_date, created_at)
 store_knowledge (id, category, title, content, embedding vector(384))
 store_knowledge_questions (id, knowledge_id, question, embedding vector(384))
-product_fit (asin PRIMARY KEY, label, n_mentions, shares JSONB, fit_score, …)
-brand_fit (brand PRIMARY KEY, label, n_mentions, shares JSONB, …)
 copilot_thread_activity (thread_id PRIMARY KEY, last_active_at)
 -- LangGraph checkpoint tables are created by the PostgresSaver at runtime (not in the seed)
 ```
@@ -916,8 +909,8 @@ message instead of crashing, and the copilot panel simply can't produce answers.
 
 > **How the auto-seed works.** The Postgres container mounts `data/seed/init.sql.gz` (~33 MB) into
 > `/docker-entrypoint-initdb.d/`, so the official image restores the complete schema, 4,670 products,
-> HNSW indexes, 46,700 reviews, 23 knowledge chunks (plus 82 hypothetical questions), the
-> `product_fit` / `brand_fit` tables, recommendations and a small demo funnel
+> HNSW indexes, 46,700 reviews, 23 knowledge chunks (plus 82 hypothetical questions),
+> recommendations and a small demo funnel
 > (~357 events, ~106 orders) in seconds on first boot. The ephemeral LangGraph checkpoint tables are
 > excluded from the dump and recreated at startup.
 
@@ -964,12 +957,11 @@ manual/
 │   ├── copilot_llm.py            #   provider chain (.with_fallbacks) + COPILOT_FAKE_LLM
 │   ├── copilot_memory.py         #   LangGraph PostgresSaver + thread activity / TTL
 │   ├── guardrail.py              #   deterministic zero-LLM greeting/off-topic/injection gate
-│   ├── fit.py                    #   product/brand fit lookup served on the product API
-│   ├── sizing.py                 #   3-layer recommend_size (product → brand → chart offset)
+│   ├── sizing.py                 #   2-layer recommend_size (store chart → brand offset)
 │   ├── rate_limiter.py           #   sliding-window per-IP rate limiter
 │   ├── knowledge_seed.py         #   markdown → embedded store_knowledge + hypothetical questions
 │   ├── knowledge/                #   authored size_charts.md + size_chart.json + policies (RAG source)
-│   └── tests/                    #   188 pytest cases (unit + live API, fake-LLM copilot)
+│   └── tests/                    #   177 pytest cases (unit + live API, fake-LLM copilot)
 ├── shop/                         # Next.js 16 storefront
 │   └── src/{app,components,lib}  #   routes, UI (CopilotChat + ProductCopilotEntry), API client, session & cart state
 ├── pipelines/                    # offline ML + data engineering
@@ -977,7 +969,6 @@ manual/
 │   ├── seed.py                   #   catalog → Postgres (offline, upsert by asin)
 │   ├── cleanup_catalog.py        #   drop dead images + duplicate titles → 4,670 live
 │   ├── build_recs.py             #   co-occurrence + co-view + embedding backfill → recs
-│   ├── build_fit_signals.py      #   review regex-mining → product_fit / brand_fit (negation-aware)
 │   ├── embed_catalog.py          #   MiniLM 384-d text embeddings + HNSW
 │   ├── embed_images.py / embed_catalog_vlm.py   # CLIP 512-d image embeddings
 │   ├── extract_reviews.py        #   top reviews per ASIN → reviews table
@@ -1023,8 +1014,8 @@ manual/
 cd shop && npm test
 
 # Backend + pipelines
-cd api && python3 -m pytest tests/          # 188 passed + 1 skipped (fake-LLM copilot; needs a live DB)
-python3 -m pytest pipelines/tests/          #  46 tests (6 pipeline-math + 40 fit classifier, no DB)
+cd api && python3 -m pytest tests/          # 173 passed, 4 env-gated skips (needs a live DB)
+python3 -m pytest pipelines/tests/          #   6 tests (pipeline maths, no DB)
 ```
 
 Every push and PR runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
@@ -1038,8 +1029,8 @@ CI runs **Ruff + the full API suite** against a Postgres service restored from t
 with `COPILOT_FAKE_LLM=1` so the whole agent and tool path is exercised **without ever calling a real
 LLM** — plus the frontend lint/test/build. The API tests cover the things that are easy to get wrong:
 price-tampering rejection, duplicate-ASIN aggregation, event-type validation, session-id bounds,
-search modes/filters/reindex, recommendation cold-start fallbacks, review aggregates, the fit
-classifier, and the copilot's use cases + guardrails.
+search modes/filters/reindex, recommendation cold-start fallbacks, review aggregates, sizing
+advisories, and the copilot's use cases + guardrails.
 
 ---
 
@@ -1113,9 +1104,10 @@ This section exists because a portfolio that hides its edges is less useful than
   0.879 → 0.894 and the Indonesian group 0.622 → 0.765, but peak RSS with both CLIP ONNX encoders
   loaded is ~1024 MB vs ~610–650 MB for MiniLM — over the 512 MB budget. So it stays opt-in
   (`TEXT_EMBED_MODEL` + `TEXT_EMBED_COLUMN=embedding_ml`) and MiniLM is the default.
-- **Fit signals are review-regex derived and advisory only.** `build_fit_signals.py` classifies fit
-  mentions with regex + negation handling (not an aspect-sentiment model); `runs_large` is the
-  weakest-signalled label, and the copilot always frames sizing as an advisory, never a certainty.
+- **Sizing is authored, deterministic and advisory only.** `api/sizing.py` maps TB/BB to a size using
+  the store's own chart and applies the documented brand cut rules; there is no per-product fit
+  signal and no ML model in the loop. The copilot always frames sizing as an advisory, never a
+  certainty, because the guide is a store rule-of-thumb rather than an official brand chart.
 - **The RAG eval set is small** — 12 labelled ID+EN queries. The hypothetical-question lift (HR@1
   0.250 → 0.750) is real on that set but a larger labelled set would tighten the estimate.
 - **Live copilot quality depends on the free OpenRouter model.** The grounding, tools and guardrail
@@ -1142,8 +1134,8 @@ Ordered by value to the product, not by ease:
 1. **Confirm the Render memory budget end-to-end.** Both encoders are now size-reduced and published
    (vision int8 ~96 MB, text fp16 ~127 MB); a ≥1 GB Render plan would let every model — including the
    opt-in multilingual embeddings — be resident at once without approaching the 512 MB free-tier limit.
-2. Grow the RAG and fit eval sets (currently 12 labelled RAG queries) so the hypothetical-question
-   and fit-signal gains are estimated on a larger, more representative sample.
+2. Grow the RAG eval set (currently 12 labelled RAG queries) so the hypothetical-question
+   gains are estimated on a larger, more representative sample.
 3. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`
    becomes a true CTR.
 4. Add `Idempotency-Key` support to checkout.

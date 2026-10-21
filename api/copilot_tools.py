@@ -1,15 +1,14 @@
 """Copilot v2 tool layer (design §5).
 
 LangChain ``@tool``-decorated functions the agent binds. They wrap the
-deterministic logic in ``agent_tools.py`` / ``sizing.py`` / ``fit.py`` and add:
+deterministic logic in ``agent_tools.py`` / ``sizing.py`` and add:
 
   - a per-request **context** (``ToolContext``) holding the shown-products
     registry, the pinned/page ASIN, and the DB url, so tools can resolve
     "ref"/registry references and record what they showed;
   - ``build_outfit`` whose total is summed **in code** and verified ``<= budget``;
   - ``add_to_cart`` which returns a server-validated ``ui_action`` (never trusts
-    a client price);
-  - fit enrichment on returned products.
+    a client price).
 
 The chat image tool (``search_by_image``) is deliberately **absent** — the v2
 copilot is text-only (design §4).
@@ -22,7 +21,6 @@ import logging
 from dataclasses import dataclass, field
 
 import agent_tools
-from fit import get_product_fit
 from langchain_core.tools import tool
 
 logger = logging.getLogger(__name__)
@@ -80,15 +78,6 @@ class ToolContext:
         return str(token)
 
 
-def _enrich_fit(cur, product: dict) -> dict:
-    """Attach a 'fit' object to a product dict (best-effort)."""
-    try:
-        product = {**product, "fit": get_product_fit(cur, product.get("asin"), product.get("brand"))}
-    except Exception:
-        product.setdefault("fit", None)
-    return product
-
-
 def _slim(product: dict) -> dict:
     """Compact product projection for registry + response cards."""
     return {
@@ -102,7 +91,6 @@ def _slim(product: dict) -> dict:
         "ratingCount": product.get("ratingCount", 0),
         "category": product.get("category", ""),
         "department": product.get("department", ""),
-        "fit": product.get("fit"),
     }
 
 
@@ -135,12 +123,9 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
             price_max=price_max, limit=limit, db_url=ctx.db_url,
         )
         out = []
-        with agent_tools._connect(ctx.db_url) as conn:
-            with conn.cursor() as cur:
-                for p in results:
-                    p = _enrich_fit(cur, p)
-                    ref = ctx.register(_slim(p))
-                    out.append({"ref": ref, **_slim(p)})
+        for p in results:
+            ref = ctx.register(_slim(p))
+            out.append({"ref": ref, **_slim(p)})
         return out
 
     @tool
@@ -158,9 +143,6 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
             if hits:
                 res = agent_tools.get_product_details(hits[0]["asin"], db_url=ctx.db_url)
         if isinstance(res, dict) and res.get("asin"):
-            with agent_tools._connect(ctx.db_url) as conn:
-                with conn.cursor() as cur:
-                    res = _enrich_fit(cur, res)
             ref = ctx.register(_slim(res))
             res["ref"] = ref
         return res
@@ -180,8 +162,8 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         category: str | None = None,
         brand: str | None = None,
     ) -> dict:
-        """Suggest a size from height (TB, cm) + weight (BB, kg). Layers the store
-        baseline chart, the brand cut rule, and the product's review fit signal.
+        """Suggest a size from height (TB, cm) + weight (BB, kg) using the store's
+        size chart plus the brand cut rules for that brand.
         Always advisory, never a guarantee. Pass a ref/ASIN to tie it to a
         specific product."""
         asin = ctx.resolve_ref(ref_or_asin) if ref_or_asin else None
@@ -245,24 +227,21 @@ def _build_outfit_impl(ctx: ToolContext, query: str, budget_idr: int, department
     per_slot_budget = max(1, budget_idr // 3)
     chosen: dict[str, dict] = {}
     total = 0
-    with agent_tools._connect(ctx.db_url) as conn:
-        with conn.cursor() as cur:
-            for slot, q in slots:
-                remaining = budget_idr - total
-                cap = min(per_slot_budget * 2, remaining)
-                hits = agent_tools.search_catalog(
-                    query=q, department=department, price_max=cap, limit=4, db_url=ctx.db_url,
-                )
-                pick = None
-                for h in hits:
-                    if total + (h.get("priceIdr") or 0) <= budget_idr:
-                        pick = h
-                        break
-                if pick:
-                    pick = _enrich_fit(cur, pick)
-                    ref = ctx.register(_slim(pick))
-                    chosen[slot] = {"ref": ref, **_slim(pick)}
-                    total += pick.get("priceIdr") or 0
+    for slot, q in slots:
+        remaining = budget_idr - total
+        cap = min(per_slot_budget * 2, remaining)
+        hits = agent_tools.search_catalog(
+            query=q, department=department, price_max=cap, limit=4, db_url=ctx.db_url,
+        )
+        pick = None
+        for h in hits:
+            if total + (h.get("priceIdr") or 0) <= budget_idr:
+                pick = h
+                break
+        if pick:
+            ref = ctx.register(_slim(pick))
+            chosen[slot] = {"ref": ref, **_slim(pick)}
+            total += pick.get("priceIdr") or 0
 
     within = total <= budget_idr and len(chosen) >= 2
     return {

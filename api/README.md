@@ -95,8 +95,7 @@ from booting, and catalog browsing never pays for a search model it does not use
 | `GET` | `/health` | Liveness; also the target of the frontend cold-start ping |
 | `GET` | `/categories` | Facets with real counts (departments + top 24 categories); in-memory TTL cache (~2 ms) |
 | `GET` | `/products` | Paginated catalog (`limit≤24`, `offset`, `department=`, `category=`) |
-| `GET` | `/products/{id}` | Single product (now includes a review-derived `fit` object, or `null`) · `404` missing · `422` invalid id |
-| `GET` | `/products/{id}/fit` | Just the review-derived fit signal for a product (or `null`) — lazy-loaded by the storefront badge |
+| `GET` | `/products/{id}` | Single product · `404` missing · `422` invalid id |
 | `GET` | `/products/{id}/reviews` | Reviews + rating breakdown for a numeric product id |
 | `GET` | `/search` | Hybrid/BM25/vector/trimodal search: `q`, `mode`, `department`, `category`, `limit`, `offset` |
 | `POST` | `/search/image` | Visual similarity search from an uploaded image (multipart `file`) |
@@ -154,7 +153,7 @@ api/
 ├── schemas.py                # shared Pydantic request/response models
 ├── routers/
 │   ├── health.py             # GET /health
-│   ├── catalog.py            # GET /categories, /products, /products/{id} (+ fit), /products/{id}/fit
+│   ├── catalog.py            # GET /categories, /products, /products/{id}
 │   ├── search.py             # GET /search, POST /search/image, POST /search/reindex
 │   ├── recs.py               # GET /recs/popular, /recs/item/{asin}, /recs/session
 │   ├── reviews.py            # GET /products/{id}/reviews, /reviews/{asin}
@@ -168,8 +167,7 @@ api/
 ├── copilot_tools.py          # the 7 deterministic @tool functions bound to the agent
 ├── copilot_llm.py            # provider fallback chain (OpenRouter → generic → Gemini) + fake LLM
 ├── copilot_memory.py         # LangGraph PostgresSaver checkpointer + thread activity / TTL cleanup
-├── fit.py                    # review-derived product/brand fit lookup (product_fit / brand_fit)
-├── sizing.py                 # deterministic recommend_size logic (TB/BB, brand offsets)
+├── sizing.py                 # deterministic recommend_size logic (TB/BB chart + brand cut rules)
 ├── rate_limiter.py           # sliding-window per-IP rate limiter for /copilot/chat
 ├── knowledge_seed.py         # markdown → embedded store_knowledge chunks + hypothetical questions
 ├── knowledge/                # authored RAG source: size_charts.md, store_policies.md, size_chart.json
@@ -349,7 +347,7 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
 | `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, department/category (real enum)/budget filters | product discovery; the planner writes English catalog-vocabulary queries |
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
 | `get_product_reviews` | `reviews`, topic filter (fit / size / fabric / durability) | aspect-level social proof |
-| `recommend_size` | `sizing.py` (TB/BB, 3-layer: product fit → brand offset → base chart) | advisory sizing, framed as guidance never a certainty |
+| `recommend_size` | `sizing.py` (TB/BB, 2-layer: store baseline chart → brand cut rule) | advisory sizing, framed as guidance never a certainty |
 | `build_outfit` | catalog search for top + bottom + shoes | the total is **summed and verified ≤ budget in code**, not by the LLM |
 | `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` (hypothetical-question RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
 | `add_to_cart` | re-reads `products.price_idr` server-side | returns a `ui_action` the browser executes |
@@ -386,8 +384,8 @@ replays the display messages; `DELETE /copilot/threads/{thread_id}` resets the c
 }
 ```
 
-Response (`CopilotChatV2Out`): `reply`, `thread_id`, `products` (≤6, each with a stable `ref` number
-and a `fit` object), `citations`, `suggestions` (2–3 follow-up chips), `ui_actions`
+Response (`CopilotChatV2Out`): `reply`, `thread_id`, `products` (≤6, each with a stable `ref` number),
+`citations`, `suggestions` (2–3 follow-up chips), `ui_actions`
 (`add_to_cart` | `size_form`), `tool_calls`, `guardrail` (`greeting` | `off_topic` | `injection` |
 `null`) and `took_ms`. Errors: `422` (malformed/oversized), `429` (rate limit), `503` (no LLM key),
 `502` (upstream failure).
@@ -398,8 +396,9 @@ and a `fit` object), `citations`, `suggestions` (2–3 follow-up chips), `ui_act
   stock or discounts, and the tool results are the only catalog data in context.
 - Prices are always IDR, always from `products.price_idr`; `add_to_cart` re-reads the price server-side.
 - Sizing is answered by the deterministic `recommend_size` tool and framed as guidance, applying the
-  data-driven brand corrections authored in `knowledge/size_chart.json` (the structured source of
-  truth, labelled *panduan umum toko*) and explained in `knowledge/size_charts.md`.
+  authored brand cut rules in `knowledge/size_chart.json` (the structured source of truth, labelled
+  *panduan umum toko*) and explained in `knowledge/size_charts.md`. Sizing and fit come **only** from
+  that knowledge base — no per-product or review-derived signal.
 - Outfit budgets are summed and verified in code, not by the LLM.
 - Off-topic, coding, SQL, academic, medical/legal and prompt-injection requests are stopped by the
   deterministic guardrail with **zero LLM calls**.
@@ -549,19 +548,17 @@ item_recommendations (asin PRIMARY KEY, recs JSONB)
 reviews          (id SERIAL, asin, rating, summary, comment, author, verified, review_date, created_at)
 store_knowledge  (id SERIAL, category, title, content, embedding vector(384))        -- 23 chunks
 store_knowledge_questions (id SERIAL, knowledge_id → store_knowledge, question, embedding vector(384))  -- 82 hypothetical questions
-product_fit      (asin, label, n_mentions, shares, fit_score, phrasing, …)           -- 4,670 rows
-brand_fit        (brand, label, n_mentions, shares, …)                               -- 1,495 brands
 copilot_thread_activity (thread_id, last_touch)   -- sidecar for the 7-day TTL cleanup
 ```
 
 Indexes: `products(department)`, `products(category)`, HNSW on `products.embedding`,
 `products.embedding_ml` and `products.image_embedding`, HNSW on `store_knowledge.embedding` and
-`store_knowledge_questions.embedding`, plus events/orders/reviews/fit indexes.
+`store_knowledge_questions.embedding`, plus events/orders/reviews indexes.
 
 The LangGraph **checkpointer tables** (used by the copilot's `PostgresSaver`) are **created at
 runtime** by the saver, not shipped in the seed — they are ephemeral conversation state and are
-excluded from `data/seed/init.sql.gz`. The Phase 4 additions (`product_fit`, `brand_fit`,
-`embedding_ml`, `store_knowledge_questions`) ship in the seed and are applied idempotently by
+excluded from `data/seed/init.sql.gz`. The Phase 4 additions (`embedding_ml`,
+`store_knowledge_questions`) ship in the seed and are applied idempotently by
 `../pipelines/migrations/2026_10_phase4.sql`.
 
 `pgvector` is enabled defensively: if the extension is unavailable the API still boots, just without
@@ -581,15 +578,16 @@ python3 -m pytest tests/test_search_unit.py
 COPILOT_FAKE_LLM=1 python3 -m pytest tests/
 ```
 
-The API suite is **188 passed + 1 skipped** (the skip is a copilot case that needs a real LLM), and
-the pipeline suite is **46** (6 pipeline-math + 40 fit-classifier regex tests, no DB). The suites,
+The API suite is **173 passed + 4 skipped**. The skips are environment-gated (image/trimodal
+encoders, a rate-limit integration test, and an LLM-key case); the pipeline suite is **6**
+(pipeline-math only, no DB). The suites,
 grouped by concern:
 
 | Suite | Covers |
 |---|---|
 | `test_search_unit.py` | stemmer, tokenizer, BM25 scoring, dedupe, facet filtering |
 | `test_search_api.py` | modes, semantic/SKU queries, plural equivalence, filters, reindex |
-| `test_catalog_api.py` | health, facets, pagination boundaries, detail 404/422, the `fit` object |
+| `test_catalog_api.py` | health, facets, pagination boundaries, detail 404/422 |
 | `test_checkout_and_events_api.py` | valid/invalid events (incl. copilot types), **price-tampering rejection**, duplicate-ASIN aggregation, order lookup |
 | `test_copilot_api.py` | tool registry (7 names), guardrails, thread memory, the v2 shopping/ops use cases (fake LLM) |
 | `test_recs_api.py` | popular, department filter, item CF + fallback, session cold vs warm |
