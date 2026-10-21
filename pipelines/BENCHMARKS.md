@@ -30,8 +30,6 @@ Three tiers of provenance:
 | Knowledge chunks / hypothetical questions | 23 / 82 | A | `data/seed/init.sql.gz` → `store_knowledge` + `store_knowledge_questions` COPY blocks |
 | Demo funnel rows | 357 events · 106 orders | A | `data/seed/init.sql.gz` |
 | VLM pairs / splits | 5,378 total · 4,302 train / 537 val / 539 test | A | `data/processed/clip_dataset_summary.json` |
-| Fit signals — ASIN coverage | 99.8% any · 98.1% ≥5 · 90.9% ≥20 mentions | B | `python3 pipelines/build_fit_signals.py`; `product_fit` table (6,000 rows), `brand_fit` (1,495 brands) |
-| Fit signals — mentions mined | 622,530 of 3,363,680 catalog reviews (18.5%) | B | `pipelines/build_fit_signals.py` → `data/processed/fit_signals.json` |
 
 Reproduce the full catalog (needs ~2.8 GB raw download):
 
@@ -319,8 +317,8 @@ are read directly from `pipelines/build_recs.py` (Tier A).
 
 | Suite | Count | Tier | Command |
 |---|---:|:---:|---|
-| API (pytest, needs DB; copilot runs on the fake LLM) | 188 passed + 1 skipped | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
-| Pipelines (maths + fit classifier) | 46 (6 + 40) | B | `python3 -m pytest pipelines/tests/` |
+| API (pytest, needs DB; copilot runs on the fake LLM) | 173 passed + 4 skipped | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
+| Pipelines (maths) | 6 | B | `python3 -m pytest pipelines/tests/` |
 | Frontend (Vitest) | 21 (5 files) | B | `cd shop && npm test` |
 
 ---

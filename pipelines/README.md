@@ -185,49 +185,42 @@ but peaks ~1 GB RSS with the CLIP encoders loaded) are recorded in
 
 ---
 
-## 5b. Review-derived fit signals
+## 5b. Sizing knowledge (authored, not mined)
 
-`build_fit_signals.py` streams the full review file (~11 M lines), keeps the ~3.36 M that match a
-catalog ASIN, and classifies each with a hand-written regex into `runs_small / true_to_size /
-runs_large`. Negation is handled in a 40-char window ("not too small" → not a small signal; a negated
-large pattern flips to a weak small signal; negated TTS is discarded). Per-ASIN shares are
-**Dirichlet-smoothed** toward the department prior (α = 10 pseudocounts) so a single review cannot
-label a product.
+Sizing and fit guidance comes entirely from the **authored knowledge base**, not from the review
+corpus:
 
-Outputs:
-
-| Target | What |
+| File | What |
 |---|---|
-| `product_fit` table (asin PK) | `n_mentions, share_small, share_tts, share_large, fit_score, label` per ASIN |
-| `brand_fit` table (brand PK) | same aggregate per brand (the `<5 mentions` fallback) |
-| `data/processed/fit_signals.json` | flat JSON of everything, for inspection |
+| `api/knowledge/size_charts.md` | the store's sizing guide: TB/BB tops chart, waist bottoms chart, footwear conversion, and per-brand cut rules for Dickies, Levi's, Carhartt, Champion, Birkenstock and TOMS |
+| `api/knowledge/size_chart.json` | the same values in machine-readable form, consumed by `api/sizing.py`'s `recommend_size` |
 
-```bash
-python3 pipelines/build_fit_signals.py                 # writes JSON + both tables
-python3 pipelines/build_fit_signals.py --no-db         # JSON only (no DB write)
-```
+`size_charts.md` is also embedded into the RAG index (`store_knowledge`), so shoppers can ask about
+sizing in natural language. `size_chart.json` is labelled **"panduan umum toko"** — a store
+rule-of-thumb, explicitly not an official brand chart — and `recommend_size` applies it in two layers
+(store baseline → brand cut rule), always as an advisory with a disclaimer.
 
-Coverage: **99.8%** of ASINs have ≥1 fit mention, **98.1%** have ≥5, **90.9%** have ≥20. The regex
-classifier is unit-tested (incl. negation cases) in `pipelines/tests/test_fit_classifier.py`.
-Data-driven brand corrections (Champion is **not** "runs large"; Carhartt only slightly roomy) feed
-`api/knowledge/size_chart.json`.
+> There is no per-product or review-derived fit signal any more. An earlier Phase 4a experiment mined
+> fit mentions from the review corpus into `product_fit` / `brand_fit` tables; those tables, the
+> `build_fit_signals.py` pipeline and the `/products/{id}/fit` endpoint were removed. If an older
+> database still carries them they are inert and can be dropped:
+> `DROP TABLE IF EXISTS product_fit, brand_fit;`
 
 ### Applying Phase 4 schema to an existing database
 
-The new tables and the `embedding_ml` column are created automatically by the API's `init_db()` on a
-fresh database, and they ship inside the committed seed dump. To add them to an **already-populated**
-target (e.g. the Neon/Render DB) **without a full reseed**, run the idempotent migration — it only
-ADDs objects, never drops or alters existing data:
+The `embedding_ml` column is created automatically by the API's `init_db()` on a fresh database, and
+it ships inside the committed seed dump. To add it to an **already-populated** target (e.g. the
+Neon/Render DB) **without a full reseed**, run the idempotent migration — it only ADDs objects, never
+drops or alters existing data:
 
 ```bash
 psql "$DATABASE_URL" -f pipelines/migrations/2026_10_phase4.sql
 ```
 
-Then load the data (either via the pipelines, or by restoring the regenerated seed dump):
+Then load the data (either via the pipeline, or by restoring the regenerated seed dump):
 
 ```bash
-# Fit tables + multilingual embeddings from the pipelines, against the target DB:
-python3 pipelines/build_fit_signals.py --database-url "$DATABASE_URL"
+# Multilingual embeddings from the pipeline, against the target DB:
 python3 pipelines/embed_catalog.py --database-url "$DATABASE_URL" \
   --model sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 --column embedding_ml
 ```
@@ -397,7 +390,6 @@ All harnesses print human-readable tables and are safe to run repeatedly against
 | `cleanup_catalog.py` | remove dead-image and duplicate-title rows (6,000 → 4,670) |
 | `download_images.py` | prefetch product images to the local cache |
 | `embed_catalog.py` | MiniLM 384-d text embeddings + HNSW (`--model`/`--column` for the multilingual A/B) |
-| `build_fit_signals.py` | review-derived per-ASIN + per-brand fit signals → `product_fit`, `brand_fit`, `fit_signals.json` |
 | `embed_images.py` | fastembed CLIP 512-d image embeddings + HNSW |
 | `embed_catalog_vlm.py` | fine-tuned champion CLIP image embeddings (+ offline `.npy`) |
 | `export_vision_onnx.py` | export the champion vision tower to ONNX (fp32 + int8) for torch-free serving |
@@ -412,7 +404,7 @@ All harnesses print human-readable tables and are safe to run repeatedly against
 | `eval_search.py` | BM25 vs hybrid IR harness |
 | `eval_recs.py` | recommendation HR/nDCG harness |
 | `migrate_to_neon.py` | local → Neon serverless migration (schema, catalog, embeddings, indexes) |
-| `migrations/2026_10_phase4.sql` | idempotent DDL for Phase 4a (`embedding_ml` column + `product_fit`/`brand_fit` tables) |
+| `migrations/2026_10_phase4.sql` | idempotent DDL for Phase 4a (`embedding_ml` column + HNSW index) |
 | `kaggle/` | notebook + CLI metadata for the GPU study |
 
 ---

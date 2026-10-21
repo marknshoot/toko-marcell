@@ -109,7 +109,6 @@ class CopilotProductV2(BaseModel):
     ratingCount: int | None = None
     category: str | None = None
     department: str | None = None
-    fit: dict | None = None
 
 
 class CopilotCitationV2(BaseModel):

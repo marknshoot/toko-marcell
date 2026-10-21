@@ -16,7 +16,6 @@ from schemas import (
     CopilotChatV2In,
     CopilotChatV2Out,
     CopilotContextV2,
-    CopilotProductV2,
 )
 
 
@@ -93,9 +92,3 @@ class TestResponseV2:
         assert out.guardrail == "greeting"
         with pytest.raises(ValidationError):
             CopilotChatV2Out(reply="x", thread_id="t1", took_ms=1.0, guardrail="bogus")
-
-    def test_product_fit_optional(self):
-        p = CopilotProductV2(ref=1, asin="B01", title="t", priceIdr=1, fit={"label": "runs_small"})
-        assert p.fit["label"] == "runs_small"
-        p2 = CopilotProductV2(ref=2, asin="B02", title="t", priceIdr=1)
-        assert p2.fit is None

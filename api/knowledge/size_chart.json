@@ -2,8 +2,8 @@
   "_meta": {
     "version": "2.0",
     "label": "panduan umum toko",
-    "disclaimer": "Panduan ukuran ini adalah estimasi umum Toko Marcell berdasarkan standar Asia/Indonesia dan data ulasan pelanggan. Bukan chart resmi dari brand. Selalu cek detail produk dan ulasan untuk akurasi terbaik.",
-    "generated_from": "api/knowledge/size_charts.md + data-driven corrections from pipelines/build_fit_signals.py"
+    "disclaimer": "Panduan ukuran ini adalah estimasi umum Toko Marcell berdasarkan standar Asia/Indonesia. Bukan chart resmi dari brand. Selalu cek detail produk untuk akurasi terbaik.",
+    "generated_from": "api/knowledge/size_charts.md (authored store sizing guide)"
   },
   "tops": {
     "description": "Tops & Outerwear — Height (TB) & Weight (BB) Guidelines",
@@ -43,61 +43,37 @@
     ]
   },
   "brand_offsets": {
-    "_note": "Data-driven corrections from 3.36M reviews (pipelines/build_fit_signals.py). Values override generic baseline assumptions from the original size_charts.md.",
+    "_note": "Authored brand cut rules from size_charts.md §2. These override the generic baseline for the brands listed here.",
     "brands": {
       "Dickies": {
         "fit_label": "runs_small",
         "offset_note": "Runs 1–2 sizes smaller than standard denim. Non-stretch 8.5 oz twill, sits at natural waist.",
-        "action": "Size up 1–2 inches from standard jeans size. For oversized/baggy look, size up 2.",
-        "data_n": 32974,
-        "data_share_small": 0.357,
-        "data_share_tts": 0.482,
-        "data_share_large": 0.161
+        "action": "Size up 1–2 inches from standard jeans size. For oversized/baggy look, size up 2."
       },
       "Levi's": {
         "fit_label": "true_to_size",
         "offset_note": "True to American denim size. Cut varies by model: 501 = straight/button-fly, 505 = roomier seat/thigh/zip. Truckers are snug in shoulders — size up 1 for layering.",
-        "action": "Order standard size. For 501 vs 505, recommend 505 for athletic/muscular thighs.",
-        "data_n": 24536,
-        "data_share_small": 0.189,
-        "data_share_tts": 0.676,
-        "data_share_large": 0.135
+        "action": "Order standard size. For 501 vs 505, recommend 505 for athletic/muscular thighs."
       },
       "Carhartt": {
         "fit_label": "true_to_size",
         "offset_note": "Slightly roomier than standard but NOT a full size large. US workwear cut with moderate shoulder drop. Data shows near-balanced fit, leaning marginally large.",
-        "action": "Order standard size for a comfortable workwear fit. Only size down if you want a slim/fitted look.",
-        "data_n": 11491,
-        "data_share_small": 0.211,
-        "data_share_tts": 0.549,
-        "data_share_large": 0.240
+        "action": "Order standard size for a comfortable workwear fit. Only size down if you want a slim/fitted look."
       },
       "Champion": {
         "fit_label": "true_to_size",
         "offset_note": "NOT runs large as commonly assumed. Data shows Champion actually leans slightly small (25.4% small vs 19.5% large). Standard US athletic cut.",
-        "action": "Order standard size. If between sizes, consider sizing up rather than down.",
-        "data_n": 6086,
-        "data_share_small": 0.254,
-        "data_share_tts": 0.551,
-        "data_share_large": 0.195
+        "action": "Order standard size. If between sizes, consider sizing up rather than down."
       },
       "Birkenstock": {
         "fit_label": "runs_large",
         "offset_note": "European sizing with contoured cork-latex footbed. Toes and heels must sit within the rim. If between sizes, size down.",
-        "action": "Use foot length in cm or EU size. If between sizes (e.g., 41.5), take EU 41. Break-in period 7–10 days.",
-        "data_n": 3134,
-        "data_share_small": 0.099,
-        "data_share_tts": 0.562,
-        "data_share_large": 0.340
+        "action": "Use foot length in cm or EU size. If between sizes (e.g., 41.5), take EU 41. Break-in period 7–10 days."
       },
       "TOMS": {
         "fit_label": "true_to_size",
         "offset_note": "True to US size. Canvas stretches slightly after 3–5 wears. Data shows near-balanced with slight small lean.",
-        "action": "Order standard size. For wide feet or wearing with socks, consider half size up.",
-        "data_n": 17823,
-        "data_share_small": 0.276,
-        "data_share_tts": 0.486,
-        "data_share_large": 0.238
+        "action": "Order standard size. For wide feet or wearing with socks, consider half size up."
       }
     }
   }

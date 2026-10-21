@@ -32,12 +32,6 @@ const PRODUCT_CHIPS = [
   { label: "Cocok dipadukan dengan apa?", prompt: "Produk ini cocok dipadukan dengan apa?" },
 ];
 
-const FIT_BADGE = {
-  runs_small: { label: "Cenderung kecil", cls: "bg-amber-100 text-amber-800 border-amber-200" },
-  runs_large: { label: "Cenderung besar", cls: "bg-sky-100 text-sky-800 border-sky-200" },
-  true_to_size: { label: "Sesuai ukuran", cls: "bg-emerald-100 text-emerald-800 border-emerald-200" },
-};
-
 export default function CopilotChat({ embedded = false, pageAsin = null, pageTitle = null, autoOpen = false }) {
   const [isOpen, setIsOpen] = useState(embedded || autoOpen);
   const [messages, setMessages] = useState(() => loadCopilotMessages());
@@ -493,8 +487,6 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
 }
 
 function ProductCard({ product, inCompare, onPin, onCompare, onSize, onAdd }) {
-  const fit = product.fit;
-  const badge = fit?.label ? FIT_BADGE[fit.label] : null;
   return (
     <div className="rounded-xl border border-border bg-surface p-2.5 shadow-xs">
       <div className="flex items-start gap-2.5">
@@ -516,11 +508,6 @@ function ProductCard({ product, inCompare, onPin, onCompare, onSize, onAdd }) {
             <span className="font-semibold text-foreground">{formatRp(product.priceIdr || 0)}</span>
             {product.brand && <span className="text-muted">· {product.brand}</span>}
           </div>
-          {badge && (
-            <span className={`mt-1 inline-block rounded-full border px-1.5 py-0.5 text-[9px] font-medium ${badge.cls}`} title={fit.phrasing || ""}>
-              {badge.label}
-            </span>
-          )}
         </div>
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">

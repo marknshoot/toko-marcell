@@ -99,7 +99,7 @@ describe("CopilotChat v2", () => {
     await waitFor(() => expect(getByText("Halo kak!")).toBeTruthy());
   });
 
-  it("renders numbered product cards with a fit badge", async () => {
+  it("renders numbered product cards", async () => {
     vi.spyOn(api, "sendCopilotMessage").mockResolvedValue({
       reply: "Ini pilihannya kak",
       thread_id: "t1",
@@ -111,7 +111,6 @@ describe("CopilotChat v2", () => {
           title: "Volcom Chino",
           priceIdr: 495800,
           brand: "Volcom",
-          fit: { label: "true_to_size", phrasing: "Sesuai ukuran menurut ulasan" },
         },
       ],
       suggestions: [],
@@ -132,7 +131,6 @@ describe("CopilotChat v2", () => {
 
     await waitFor(() => expect(getByText("Volcom Chino")).toBeTruthy());
     expect(getByText("1")).toBeTruthy(); // ref badge
-    expect(getByText("Sesuai ukuran")).toBeTruthy(); // fit badge
   });
 
   it("reset calls deleteCopilotThread and clears messages", async () => {

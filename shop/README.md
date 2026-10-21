@@ -67,7 +67,7 @@ shield, because a false "down" is worse than a heavier probe.
   the request. **There is no image upload** — photo search is a separate storefront feature (see
   Catalog, below).
 - **Page-aware starter chips** differ between the home page and a product page.
-- Replies render **numbered product cards** (`[1]`, `[2]`) with **fit badges**, each exposing
+- Replies render **numbered product cards** (`[1]`, `[2]`), each exposing
   **Tanya**, **Bandingkan** (compare tray, max 3), **Ukuran?** and **+ Keranjang** actions.
 - An inline **TB/BB size form** (triggered by a `size_form` ui_action), **follow-up suggestion chips**,
   and an **add-to-cart confirmation with a "Batalkan" undo**.
@@ -197,7 +197,7 @@ src/
 │   ├── RecommendationsRail.js    # session recommendations + load more
 │   ├── TrackView.js              # fires view_product once per ASIN
 │   ├── ServerWakeup.js           # cold-start health ping + overlay
-│   ├── CopilotChat.js            # v2 copilot panel (text-only; numbered cards, fit badges, compare tray, size form, undo)
+│   ├── CopilotChat.js            # v2 copilot panel (text-only; numbered cards, compare tray, size form, undo)
 │   ├── ProductCopilotEntry.js    # "Tanya soal produk ini" button on the PDP; opens the floating copilot pinned to the product (copilot:open event)
 │   └── FloatingCopilot.js        # lazy, client-only mount for the copilot
 └── lib/
@@ -245,7 +245,7 @@ npm test
 | `components/__tests__/CartProvider.test.jsx` | 7 | empty cart, add, duplicate merge, quantity, remove-at-zero, clear, multi-item subtotal |
 | `components/__tests__/AddToCartButton.test.jsx` | 3 | add with quantity, navigate home, existing-quantity display |
 | `components/__tests__/ServerWakeup.test.jsx` | 2 | ready indicator on healthy check, spinner while waiting |
-| `components/__tests__/CopilotChat.test.jsx` | 7 | no image-upload control (text-only), home vs product starter chips, `copilot:open` event opens the panel pinned to a product, v2 single-message turn + guardrail, numbered cards with fit badge, reset deletes the thread |
+| `components/__tests__/CopilotChat.test.jsx` | 7 | no image-upload control (text-only), home vs product starter chips, `copilot:open` event opens the panel pinned to a product, v2 single-message turn + guardrail, numbered product cards, reset deletes the thread |
 | `lib/__tests__/session.test.js` | 2 | id persists in `sessionStorage`, stable across calls |
 
 CI also runs `npm run lint` and `npm run build` so the Next build cannot regress silently.
