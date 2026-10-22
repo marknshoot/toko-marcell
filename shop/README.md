@@ -71,6 +71,8 @@ shield, because a false "down" is worse than a heavier probe.
   **Tanya**, **Bandingkan** (compare tray, max 3), **Ukuran?** and **+ Keranjang** actions.
 - An inline **TB/BB size form** (triggered by a `size_form` ui_action), **follow-up suggestion chips**,
   and an **add-to-cart confirmation with a "Batalkan" undo**.
+- Agent `add_to_cart` ui_actions are executed through `CartProvider`, so a chat-driven add updates
+  `localStorage`, the header count and the cart page — the server never tries to write the cart itself.
 - A **pinned product chip** shows which product the conversation is anchored to, and a **reset button**
   clears the thread (`DELETE /copilot/threads/{id}` + wipes the local copy).
 

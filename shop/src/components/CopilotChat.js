@@ -136,10 +136,10 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
       };
       setMessages((prev) => [...prev, assistantMsg]);
 
-      // auto-execute size_form ui_action
-      if ((res.ui_actions || []).some((a) => a.type === "size_form")) {
-        setShowSizeForm(true);
-      }
+      // Execute browser-side effects requested by agent tools (add_to_cart,
+      // size_form). The cart lives in localStorage, so the server can only
+      // return an action for this component to apply via CartProvider.
+      executeUiActions(res.ui_actions || []);
     } catch {
       setMessages((prev) => [
         ...prev,
@@ -208,6 +208,26 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
     postEvent({ eventType: "copilot_add_to_cart", asin: product.asin, qty, priceIdr: product.priceIdr });
     setUndoItem({ ...product, qty, size });
     setTimeout(() => setUndoItem((cur) => (cur && cur.asin === product.asin ? null : cur)), 6000);
+  }
+
+  function executeUiActions(actions) {
+    for (const action of actions) {
+      if (action.type === "size_form") {
+        setShowSizeForm(true);
+      } else if (action.type === "add_to_cart" && action.asin) {
+        handleAddToCart(
+          {
+            id: action.id ?? action.asin,
+            asin: action.asin,
+            title: action.title,
+            priceIdr: action.priceIdr,
+            imageUrl: action.imageUrl,
+            size: action.size,
+          },
+          action.qty || 1
+        );
+      }
+    }
   }
 
   function handleUndo() {

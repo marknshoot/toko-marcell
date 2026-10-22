@@ -127,11 +127,13 @@ class CopilotUIActionV2(BaseModel):
     ``size_form`` prompt."""
 
     type: Literal["add_to_cart", "size_form"]
+    id: int | None = None
     asin: str | None = None
     qty: int | None = None
     size: str | None = None
     title: str | None = None
     priceIdr: int | None = None
+    imageUrl: str | None = None
 
 
 class CopilotToolCallV2(BaseModel):
