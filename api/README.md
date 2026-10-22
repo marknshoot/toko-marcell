@@ -148,6 +148,8 @@ A product is the shape the storefront renders (camelCase, numbers as numbers):
 ```text
 api/
 ├── main.py                   # thin app factory: lifespan, CORS, schema migration, include routers
+├── migrate.py                # programmatic `alembic upgrade head` (run on startup)
+├── alembic.ini · migrations/ # Alembic env + hand-written SQL revisions
 ├── config.py                 # pydantic-settings Settings, one cached get_settings()
 ├── db.py                     # psycopg_pool ConnectionPool, get_conn() context manager / Depends
 ├── schemas.py                # shared Pydantic request/response models
@@ -522,11 +524,27 @@ Designed to be reliable on free infrastructure (Render + Neon + Vercel).
 
 ## Schema
 
-`init_db()` runs at import time and owns every table. It uses
-`CREATE TABLE IF NOT EXISTS` and then **diffs `information_schema`** to `ALTER TABLE ADD COLUMN`
-whatever an existing database is missing — because `IF NOT EXISTS` is a no-op on an existing table,
-and a silently missing column reads like a broken query rather than a missing migration. It also drops
-the legacy v1 demo table (4 hand-written rows, no `asin`) once.
+The schema is versioned with **Alembic** (`alembic.ini`, `migrations/versions/`). Migrations are
+hand-written SQL via `op.execute` — there are no ORM models; SQLAlchemy is only Alembic's connection
+layer and all queries stay raw psycopg. On startup `init_db()` runs `alembic upgrade head`
+(`migrate.py`), so `docker compose up` and Render need no extra step.
+
+| Revision | Adds |
+|---|---|
+| `0001` baseline | every app table + indexes (incl. HNSW); drops the legacy v1 demo table (no `asin`) |
+| `0002` | `products.embedding_ml vector(384)` + HNSW index (opt-in multilingual) |
+
+Each revision is idempotent (`IF NOT EXISTS`), so databases created before Alembic (the seed dump,
+Neon) are adopted by a plain `upgrade head` — no `alembic stamp` needed. The LangGraph checkpoint
+tables and their `copilot_thread_activity` sidecar are still created at runtime by
+`copilot_memory.py`.
+
+```bash
+cd api
+alembic upgrade head            # or: python migrate.py
+alembic current
+alembic revision -m "add foo"   # then write upgrade()/downgrade() SQL by hand
+```
 
 ```sql
 products (

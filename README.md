@@ -797,7 +797,7 @@ The interactions matrix is **0.057% dense** (3,363,680 filled of 5,833,104,000 c
 min 198 / median 333 / max 19,693 interactions per item). The long tail is real, which is why item
 recommendations combine co-occurrence with an embedding-based backfill for cold items.
 
-### Database schema (created by `api/main.py`, seeded offline)
+### Database schema (Alembic migrations in `api/migrations/`, seeded offline)
 
 ```sql
 products (
@@ -835,10 +835,10 @@ Notes that matter:
   conversion, not a live FX rate.
 - **No fake completeness.** 4,689 of 6,000 products have a description and 5,371 have a brand at build
   time. Empty fields stay empty rather than being filled with invented text.
-- **Migrations.** `init_db()` creates tables with `CREATE TABLE IF NOT EXISTS` and then diffs
-  `information_schema` to `ALTER TABLE ADD COLUMN` whatever is missing, so a column added after a
-  database was created cannot silently disappear. A real migration tool (Alembic) is still a known
-  gap — see [Honest limitations](#-honest-limitations--what-is-not-built).
+- **Migrations.** The schema is versioned with **Alembic** (`api/migrations/versions/`, hand-written
+  SQL — no ORM; queries stay raw psycopg). The API runs `alembic upgrade head` on startup, and every
+  revision is idempotent, so databases created before Alembic (the seed dump, Neon) are adopted
+  without a manual `alembic stamp`. Details: [`api/README.md`](./api/README.md#schema).
 
 ---
 
@@ -938,6 +938,8 @@ To **regenerate the catalog from raw data** (≈8 min, streaming, no pandas), se
 manual/
 ├── api/                          # FastAPI backend (owns all data + logic)
 │   ├── main.py                   #   thin app factory: lifespan, CORS, schema migration, routers
+│   ├── migrate.py · alembic.ini  #   `alembic upgrade head` on startup
+│   ├── migrations/               #   Alembic env + versioned SQL revisions (0001 baseline, 0002 embedding_ml)
 │   ├── config.py                 #   pydantic-settings Settings, cached get_settings()
 │   ├── db.py                     #   psycopg_pool ConnectionPool, get_conn() / Depends
 │   ├── schemas.py                #   shared Pydantic request/response models
@@ -981,7 +983,6 @@ manual/
 │   ├── eval_rag.py               #   direct-chunk vs hypothetical-question RAG eval
 │   ├── eda_interactions.py       #   sparsity, long tail, rating distribution
 │   ├── migrate_to_neon.py        #   local → Neon serverless migration
-│   ├── migrations/               #   idempotent SQL migrations (2026_10_phase4.sql)
 │   ├── kaggle/                   #   notebook + CLI metadata for the GPU study
 │   ├── failure_case_analysis.md  #   qualitative research report
 │   └── literature_review_clip_finetuning.md
@@ -1078,8 +1079,6 @@ This section exists because a portfolio that hides its edges is less useful than
   products, not the whole catalog, until filtering moves fully server-side.
 - **`search_to_pdp` is a session proxy**, not a click-through rate (the click event is not recorded
   separately yet).
-- **No Alembic migrations.** `init_db()` diffs and adds columns additively; it is not a versioned
-  migration system. A schema rewrite would need care.
 - **Reindex is manual.** After reseeding, `POST /search/reindex` must be called (or the container
   restarted) because the BM25 index lives for the life of the process.
 - **The copilot chat is text-only.** It binds no vision tool and accepts no image payload — free
@@ -1139,7 +1138,7 @@ Ordered by value to the product, not by ease:
 3. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`
    becomes a true CTR.
 4. Add `Idempotency-Key` support to checkout.
-5. Introduce Alembic migrations and a scheduled reindex.
+5. Add a scheduled reindex.
 6. Add the qualitative failure analysis' logo/patch fix (multi-crop or RoI-Align training) and
    re-run the leaderboard.
 7. Publish a reproducible eval report artifact per CI run so leaderboard numbers can be re-generated

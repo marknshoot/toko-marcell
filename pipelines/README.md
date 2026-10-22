@@ -208,13 +208,13 @@ rule-of-thumb, explicitly not an official brand chart — and `recommend_size` a
 
 ### Applying Phase 4 schema to an existing database
 
-The `embedding_ml` column is created automatically by the API's `init_db()` on a fresh database, and
-it ships inside the committed seed dump. To add it to an **already-populated** target (e.g. the
-Neon/Render DB) **without a full reseed**, run the idempotent migration — it only ADDs objects, never
-drops or alters existing data:
+The `embedding_ml` column is Alembic revision `0002` (`api/migrations/versions/`), applied
+automatically when the API starts, and it ships inside the committed seed dump. To add it to an
+**already-populated** target (e.g. the Neon/Render DB) **without a full reseed** or a deploy, run the
+migrations directly — they are idempotent and only ADD objects:
 
 ```bash
-psql "$DATABASE_URL" -f pipelines/migrations/2026_10_phase4.sql
+cd api && DATABASE_URL="$DATABASE_URL" alembic upgrade head
 ```
 
 Then load the data (either via the pipeline, or by restoring the regenerated seed dump):
@@ -404,7 +404,6 @@ All harnesses print human-readable tables and are safe to run repeatedly against
 | `eval_search.py` | BM25 vs hybrid IR harness |
 | `eval_recs.py` | recommendation HR/nDCG harness |
 | `migrate_to_neon.py` | local → Neon serverless migration (schema, catalog, embeddings, indexes) |
-| `migrations/2026_10_phase4.sql` | idempotent DDL for Phase 4a (`embedding_ml` column + HNSW index) |
 | `kaggle/` | notebook + CLI metadata for the GPU study |
 
 ---

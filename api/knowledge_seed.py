@@ -13,34 +13,8 @@ from search import embed_query
 
 logger = logging.getLogger(__name__)
 
-KNOWLEDGE_SCHEMA = [
-    ("id", "SERIAL PRIMARY KEY"),
-    ("category", "TEXT NOT NULL"),
-    ("title", "TEXT NOT NULL"),
-    ("content", "TEXT NOT NULL"),
-    ("embedding", "vector(384)"),
-]
-
-KNOWLEDGE_INDEXES = [
-    ("store_knowledge_category_idx", "store_knowledge (category)"),
-    ("store_knowledge_embedding_idx", "store_knowledge USING hnsw (embedding vector_cosine_ops)"),
-]
-
-# Hypothetical-questions table (design §6): each row is one ID/EN question whose
-# embedding points at a parent store_knowledge chunk. Retrieval matches the
-# question and returns the parent chunk (deduped).
-KNOWLEDGE_QUESTIONS_SCHEMA = [
-    ("id", "SERIAL PRIMARY KEY"),
-    ("chunk_id", "INTEGER NOT NULL REFERENCES store_knowledge(id) ON DELETE CASCADE"),
-    ("question", "TEXT NOT NULL"),
-    ("lang", "TEXT NOT NULL DEFAULT 'id'"),
-    ("embedding", "vector(384)"),
-]
-
-KNOWLEDGE_QUESTIONS_INDEXES = [
-    ("store_knowledge_q_chunk_idx", "store_knowledge_questions (chunk_id)"),
-    ("store_knowledge_q_embedding_idx", "store_knowledge_questions USING hnsw (embedding vector_cosine_ops)"),
-]
+# Table DDL (store_knowledge, store_knowledge_questions) lives in the Alembic
+# migrations under api/migrations/versions/; this module only writes rows.
 
 
 def _hypothetical_questions(chunk: dict) -> list[tuple[str, str]]:
@@ -150,7 +124,7 @@ def _chunk_markdown(filepath: str, default_category: str) -> list[dict]:
 
 
 def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
-    """Ensure `store_knowledge` table exists, and seed chunks if empty or forced."""
+    """Seed `store_knowledge` chunks if empty or forced (schema comes from Alembic)."""
     knowledge_dir = os.path.join(os.path.dirname(__file__), "knowledge")
     if not os.path.isdir(knowledge_dir):
         alt_dir = os.path.join(os.path.dirname(__file__), "..", "data", "knowledge")
@@ -182,12 +156,6 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
 
             if force_reload:
                 cur.execute("TRUNCATE TABLE store_knowledge")
-
-            # Ensure the questions table exists (idempotent).
-            q_cols = ",\n                ".join(f"{n} {d}" for n, d in KNOWLEDGE_QUESTIONS_SCHEMA)
-            cur.execute(f"CREATE TABLE IF NOT EXISTS store_knowledge_questions (\n                {q_cols}\n            )")
-            for idx_name, idx_target in KNOWLEDGE_QUESTIONS_INDEXES:
-                cur.execute(f"CREATE INDEX IF NOT EXISTS {idx_name} ON {idx_target}")
 
             logger.info("Embedding and inserting %d knowledge chunks...", len(chunks))
             inserted = 0
