@@ -71,13 +71,18 @@ class TestResponseV2:
             }],
             citations=[{"type": "product", "title": "Chino", "ref": "B01"}],
             suggestions=[{"label": "Mirip lebih murah", "prompt": "yang mirip tapi lebih murah"}],
-            ui_actions=[{"type": "add_to_cart", "asin": "B01", "qty": 1, "title": "Chino", "priceIdr": 199000}],
+            ui_actions=[{
+                "type": "add_to_cart", "id": 5, "asin": "B01", "qty": 1, "title": "Chino",
+                "priceIdr": 199000, "imageUrl": "https://example.com/chino.jpg",
+            }],
             tool_calls=[{"name": "search_catalog", "args": {"query": "chino"}}],
             guardrail=None,
             took_ms=50.0,
         )
         assert out.products[0].ref == 1
         assert out.ui_actions[0].type == "add_to_cart"
+        assert out.ui_actions[0].id == 5
+        assert out.ui_actions[0].imageUrl == "https://example.com/chino.jpg"
         assert out.citations[0].type == "product"
 
     def test_products_max_6(self):

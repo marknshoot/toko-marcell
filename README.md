@@ -615,7 +615,7 @@ Seven tools are bound to the agent (`GET /copilot/tools` lists them):
 | `recommend_size` | `size_chart.json` + brand cut rules, 2-layer (store baseline → brand offset) | TB/BB sizing advisory, never a certainty |
 | `build_outfit` | catalog search; total summed and verified ≤ budget **in code** | top + bottom + shoes within budget |
 | `lookup_store_policy` | `store_knowledge` / `store_knowledge_questions` (hypothetical-question RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
-| `add_to_cart` | re-reads the price from the DB, returns a `ui_action` the browser executes | "add this to my cart" |
+| `add_to_cart` | re-reads the price from the DB, returns a `ui_action` the browser executes through `CartProvider` (localStorage) | "add this to my cart" |
 
 Tool *results* are compacted before they re-enter the prompt — a token-budget safeguard that also
 keeps answers focused. There is deliberately **no order-status tool**, because checkout is a demo

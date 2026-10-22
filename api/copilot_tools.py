@@ -197,11 +197,13 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         q = max(1, min(int(qty or 1), 99))
         action = {
             "type": "add_to_cart",
+            "id": details.get("id"),
             "asin": details["asin"],
             "qty": q,
             "size": size,
             "title": details.get("title"),
             "priceIdr": details.get("priceIdr"),
+            "imageUrl": details.get("imageUrl"),
         }
         ctx.ui_actions.append(action)
         return {"ok": True, "ui_action": action}

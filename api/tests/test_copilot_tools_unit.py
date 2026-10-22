@@ -9,7 +9,8 @@ from pathlib import Path
 API_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API_DIR))
 
-from copilot_tools import MAX_REGISTRY, ToolContext
+import agent_tools
+from copilot_tools import MAX_REGISTRY, ToolContext, build_tools
 
 
 def _ctx(**kw):
@@ -70,3 +71,33 @@ class TestResolveRef:
     def test_resolve_unknown_ref_falls_through_to_literal(self):
         ctx = _ctx()
         assert ctx.resolve_ref("5") == "5"
+
+
+class TestAddToCartAction:
+    def test_action_carries_everything_the_local_cart_needs(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_tools,
+            "get_product_details",
+            lambda asin, db_url=None: {
+                "id": 5,
+                "asin": asin,
+                "title": "Volcom Chino",
+                "priceIdr": 495800,
+                "imageUrl": "https://example.com/chino.jpg",
+            },
+        )
+        ctx = _ctx()
+        add_to_cart = next(t for t in build_tools(ctx) if t.name == "add_to_cart")
+
+        result = add_to_cart.invoke({"ref_or_asin": "B01", "qty": 2, "size": "M"})
+
+        action = result["ui_action"]
+        assert result["ok"] is True
+        assert action["type"] == "add_to_cart"
+        assert action["id"] == 5
+        assert action["asin"] == "B01"
+        assert action["qty"] == 2
+        assert action["size"] == "M"
+        assert action["priceIdr"] == 495800
+        assert action["imageUrl"] == "https://example.com/chino.jpg"
+        assert ctx.ui_actions == [action]

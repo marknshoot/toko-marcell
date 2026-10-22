@@ -99,6 +99,52 @@ describe("CopilotChat v2", () => {
     await waitFor(() => expect(getByText("Halo kak!")).toBeTruthy());
   });
 
+  it("executes an add_to_cart ui_action against the local cart", async () => {
+    vi.spyOn(api, "sendCopilotMessage").mockResolvedValue({
+      reply: "Sudah mimin masukin ke keranjang ya kak",
+      thread_id: "t1",
+      products: [],
+      suggestions: [],
+      ui_actions: [
+        {
+          type: "add_to_cart",
+          id: 5,
+          asin: "B01",
+          qty: 2,
+          size: "M",
+          title: "Volcom Chino",
+          priceIdr: 495800,
+          imageUrl: "https://example.com/chino.jpg",
+        },
+      ],
+      guardrail: null,
+      took_ms: 20,
+    });
+
+    const { container, getByLabelText } = render(
+      <CartProvider>
+        <CopilotChat />
+      </CartProvider>
+    );
+    openPanel(container);
+    const input = getByLabelText("Ketik pesan untuk Admin Toko Marcell");
+    fireEvent.change(input, { target: { value: "masukin celana chinonya dong" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem("toko-cart-v2") || "[]");
+      expect(stored).toHaveLength(1);
+      expect(stored[0]).toMatchObject({
+        id: 5,
+        asin: "B01",
+        title: "Volcom Chino",
+        priceIdr: 495800,
+        imageUrl: "https://example.com/chino.jpg",
+        qty: 2,
+      });
+    });
+  });
+
   it("renders numbered product cards", async () => {
     vi.spyOn(api, "sendCopilotMessage").mockResolvedValue({
       reply: "Ini pilihannya kak",
