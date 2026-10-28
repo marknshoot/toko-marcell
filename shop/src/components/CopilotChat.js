@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useContext, useCallback } from "react";
 import Link from "next/link";
 import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { CartContext } from "./CartProvider";
 import {
   streamCopilotMessage,
@@ -44,7 +45,29 @@ const markdownComponents = {
   code: ({ children }) => (
     <code className="rounded bg-muted/20 px-1 py-0.5 font-mono text-[11px]">{children}</code>
   ),
+  table: ({ children }) => (
+    <div className="my-2 overflow-x-auto rounded-lg border border-border bg-surface">
+      <table className="w-full border-collapse text-left text-[11px]">{children}</table>
+    </div>
+  ),
+  thead: ({ children }) => <thead className="border-b border-border bg-muted/15 text-foreground">{children}</thead>,
+  tbody: ({ children }) => <tbody className="divide-y divide-border">{children}</tbody>,
+  tr: ({ children }) => <tr className="align-top">{children}</tr>,
+  th: ({ children }) => <th className="px-2 py-1.5 font-semibold">{children}</th>,
+  td: ({ children }) => <td className="px-2 py-1.5 leading-snug">{children}</td>,
 };
+
+function normalizeMarkdown(text) {
+  if (!text) return "";
+  return text
+    .split("\n")
+    .map((line) =>
+      /\|[\s:-]{2,}\|/.test(line) && /\|[ \t]+\|/.test(line)
+        ? line.replace(/\|[ \t]+\|/g, "|\n|")
+        : line
+    )
+    .join("\n");
+}
 
 export default function CopilotChat({ embedded = false, pageAsin = null, pageTitle = null, autoOpen = false }) {
   const [isOpen, setIsOpen] = useState(embedded || autoOpen);
@@ -446,7 +469,9 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                     <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background text-[11px] font-bold">TM</div>
                     <div className="max-w-[88%] space-y-2.5">
                       <div className="rounded-2xl rounded-tl-xs border border-border bg-muted/10 px-3.5 py-2.5 text-foreground leading-relaxed">
-                        <ReactMarkdown components={markdownComponents}>{msg.content || ""}</ReactMarkdown>
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
+                          {normalizeMarkdown(msg.content)}
+                        </ReactMarkdown>
                       </div>
 
                       {msg.products?.length > 0 && (
