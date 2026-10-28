@@ -52,8 +52,26 @@ def test_real_question_runs_agent():
     r = _run(run_turn("ada celana chino hitam?", db_url=DB_URL, fake=True))
     assert r["guardrail"] is None
     assert isinstance(r["reply"], str) and r["reply"]
-    assert "suggestions" in r
+    assert r["suggestions"] == []
     assert isinstance(r["took_ms"], float)
+
+
+def test_stream_turn_emits_tokens_and_done():
+    from copilot_agent import stream_turn
+
+    async def _collect():
+        events = []
+        async for evt in stream_turn("ada celana chino hitam?", db_url=DB_URL, fake=True, thread_id="t-stream"):
+            events.append(evt)
+        return events
+
+    events = _run(_collect())
+    token_events = [e for e in events if e.get("type") == "token"]
+    done_events = [e for e in events if e.get("type") == "done"]
+    assert len(token_events) >= 1
+    assert len(done_events) == 1
+    assert "".join(e["content"] for e in token_events) == done_events[0]["reply"]
+    assert done_events[0]["thread_id"] == "t-stream"
 
 
 # ── Agent path with a scripted tool call → products populate with fit ────────

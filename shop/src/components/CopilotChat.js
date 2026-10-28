@@ -2,11 +2,13 @@
 
 import { useState, useRef, useEffect, useContext, useCallback } from "react";
 import Link from "next/link";
+import ReactMarkdown from "react-markdown";
 import { CartContext } from "./CartProvider";
 import {
-  sendCopilotMessage,
+  streamCopilotMessage,
   deleteCopilotThread,
-  getCopilotThread,
+  searchProducts,
+  getProducts,
   postEvent,
 } from "../lib/api";
 import {
@@ -21,8 +23,8 @@ import ProductImage from "./ProductImage";
 const HOME_CHIPS = [
   { label: "Outfit kondangan < Rp500rb", prompt: "Outfit kondangan pria di bawah Rp500.000 dong" },
   { label: "Ukuran saya TB 170 BB 65", prompt: "Ukuran saya pas yang mana? TB 170 BB 65" },
-  { label: "Ongkir ke Surabaya berapa?", prompt: "Ongkir ke Surabaya berapa dan berapa lama?" },
-  { label: "Jaket buat hujan", prompt: "Ada jaket yang bagus buat hujan?" },
+  { label: "Jaket buat hujan", prompt: "Ada jaket yang bagus dan tahan air buat hujan?" },
+  { label: "Info bayar QRIS & retur", prompt: "Gimana cara pembayaran QRIS dan kebijakan retur toko?" },
 ];
 
 const PRODUCT_CHIPS = [
@@ -32,19 +34,32 @@ const PRODUCT_CHIPS = [
   { label: "Cocok dipadukan dengan apa?", prompt: "Produk ini cocok dipadukan dengan apa?" },
 ];
 
+const markdownComponents = {
+  p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
+  ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-4 last:mb-0">{children}</ul>,
+  ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-4 last:mb-0">{children}</ol>,
+  li: ({ children }) => <li className="leading-relaxed">{children}</li>,
+  strong: ({ children }) => <strong className="font-semibold text-foreground">{children}</strong>,
+  em: ({ children }) => <em className="italic">{children}</em>,
+  code: ({ children }) => (
+    <code className="rounded bg-muted/20 px-1 py-0.5 font-mono text-[11px]">{children}</code>
+  ),
+};
+
 export default function CopilotChat({ embedded = false, pageAsin = null, pageTitle = null, autoOpen = false }) {
   const [isOpen, setIsOpen] = useState(embedded || autoOpen);
   const [messages, setMessages] = useState(() => loadCopilotMessages());
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [isThinking, setIsThinking] = useState(false);
   const [threadId, setThreadId] = useState(() => getCopilotThreadId());
-  const [pinned, setPinned] = useState(() =>
-    pageAsin && pageTitle ? { asin: pageAsin, title: pageTitle, priceIdr: null } : null
+  const [attachedProducts, setAttachedProducts] = useState(() =>
+    pageAsin && pageTitle ? [{ asin: pageAsin, title: pageTitle, priceIdr: null }] : []
   );
-  const [showSizeForm, setShowSizeForm] = useState(false);
-  const [sizeTB, setSizeTB] = useState("");
-  const [sizeBB, setSizeBB] = useState("");
-  const [compareTray, setCompareTray] = useState([]); // [{asin,title,priceIdr}]
+  const [showAttachMenu, setShowAttachMenu] = useState(false);
+  const [attachQuery, setAttachQuery] = useState("");
+  const [attachResults, setAttachResults] = useState([]);
+  const [attachSearching, setAttachSearching] = useState(false);
   const [undoItem, setUndoItem] = useState(null);
 
   const { addToCart, removeItem } = useContext(CartContext) || {};
@@ -59,18 +74,23 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
 
   useEffect(() => {
     if (isOpen) messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, isLoading, isOpen]);
+  }, [messages, isLoading, isThinking, isOpen]);
 
   useEffect(() => {
     if (isOpen) setTimeout(() => inputRef.current?.focus(), 150);
   }, [isOpen]);
 
-  // Escape closes the floating panel
+  // Escape closes the attach menu first, then the floating panel
   const handleEsc = useCallback(
     (e) => {
-      if (e.key === "Escape" && !embedded && isOpen) setIsOpen(false);
+      if (e.key !== "Escape") return;
+      if (showAttachMenu) {
+        setShowAttachMenu(false);
+        return;
+      }
+      if (!embedded && isOpen) setIsOpen(false);
     },
-    [embedded, isOpen]
+    [embedded, isOpen, showAttachMenu]
   );
   useEffect(() => {
     document.addEventListener("keydown", handleEsc);
@@ -78,16 +98,46 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
   }, [handleEsc]);
 
   // Other components (e.g. the product-page button) open this chat with a
-  // product pinned by dispatching a "copilot:open" window event.
+  // product attached by dispatching a "copilot:open" window event.
   useEffect(() => {
     function onOpen(e) {
-      const { asin, title } = e.detail || {};
-      if (asin) setPinned({ asin, title, priceIdr: null });
+      const { asin, title, priceIdr = null } = e.detail || {};
+      if (asin) {
+        setAttachedProducts((prev) => {
+          if (prev.some((p) => p.asin === asin)) return prev;
+          return [...prev.slice(-2), { asin, title, priceIdr }];
+        });
+      }
       setIsOpen(true);
     }
     window.addEventListener("copilot:open", onOpen);
     return () => window.removeEventListener("copilot:open", onOpen);
   }, []);
+
+  // Debounced product search for the paperclip attach menu
+  useEffect(() => {
+    if (!showAttachMenu) return;
+    let cancelled = false;
+    const q = attachQuery.trim();
+    const timer = setTimeout(async () => {
+      setAttachSearching(true);
+      try {
+        const res = q
+          ? await searchProducts({ q, limit: 6 })
+          : await getProducts({ limit: 6 });
+        if (!cancelled) setAttachResults(res?.items || []);
+      } catch {
+        if (!cancelled) setAttachResults([]);
+      } finally {
+        if (!cancelled) setAttachSearching(false);
+      }
+    }, q ? 200 : 0);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [showAttachMenu, attachQuery]);
 
   async function handleReset() {
     const newTid = resetCopilotThread();
@@ -95,50 +145,104 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
     if (threadId) deleteCopilotThread(threadId);
     setMessages([]);
     setInputValue("");
-    setCompareTray([]);
-    setShowSizeForm(false);
+    setAttachedProducts([]);
+    setShowAttachMenu(false);
+    setAttachQuery("");
   }
 
   function buildContext() {
-    const referencedAsins = compareTray.map((c) => c.asin).slice(0, 3);
+    const referencedAsins = attachedProducts.map((p) => p.asin).slice(0, 3);
     return {
-      pageAsin: pinned?.asin || pageAsin || null,
+      pageAsin: attachedProducts[0]?.asin || pageAsin || null,
       referencedAsins,
     };
+  }
+
+  function toggleAttachProduct(product) {
+    setAttachedProducts((prev) => {
+      const exists = prev.some((p) => p.asin === product.asin);
+      if (exists) return prev.filter((p) => p.asin !== product.asin);
+      if (prev.length >= 3) return prev;
+      return [
+        ...prev,
+        {
+          id: product.id,
+          asin: product.asin,
+          title: product.title,
+          priceIdr: product.priceIdr,
+          imageUrl: product.imageUrl,
+        },
+      ];
+    });
+  }
+
+  function removeAttachedProduct(asin) {
+    setAttachedProducts((prev) => prev.filter((p) => p.asin !== asin));
   }
 
   async function handleSend(textToSend = null) {
     const query = (textToSend !== null ? textToSend : inputValue).trim();
     if (!query || isLoading || !threadId) return;
 
-    const userMsg = { role: "user", content: query };
+    const userMsg = {
+      role: "user",
+      content: query,
+      attached: attachedProducts.map((p) => ({ asin: p.asin, title: p.title })),
+    };
     setMessages((prev) => [...prev, userMsg]);
     setInputValue("");
+    setShowAttachMenu(false);
     setIsLoading(true);
+    setIsThinking(true);
 
     postEvent({ eventType: "copilot_message", query });
 
+    let streamingInserted = false;
+
     try {
-      const res = await sendCopilotMessage({
+      const res = await streamCopilotMessage({
         message: query,
         threadId,
         context: buildContext(),
+        onToken: (_chunk, fullText) => {
+          setIsThinking(false);
+          if (!streamingInserted) {
+            streamingInserted = true;
+            setMessages((prev) => [
+              ...prev,
+              { role: "assistant", content: fullText, products: [], citations: [], uiActions: [] },
+            ]);
+          } else {
+            setMessages((prev) => {
+              const copy = [...prev];
+              const lastIdx = copy.length - 1;
+              if (lastIdx >= 0 && copy[lastIdx].role === "assistant") {
+                copy[lastIdx] = { ...copy[lastIdx], content: fullText };
+              }
+              return copy;
+            });
+          }
+        },
       });
 
-      const assistantMsg = {
+      const finalMsg = {
         role: "assistant",
         content: res.reply,
         products: res.products || [],
         citations: res.citations || [],
-        suggestions: res.suggestions || [],
         uiActions: res.ui_actions || [],
         guardrail: res.guardrail || null,
       };
-      setMessages((prev) => [...prev, assistantMsg]);
 
-      // Execute browser-side effects requested by agent tools (add_to_cart,
-      // size_form). The cart lives in localStorage, so the server can only
-      // return an action for this component to apply via CartProvider.
+      setMessages((prev) => {
+        if (streamingInserted) {
+          const copy = [...prev];
+          copy[copy.length - 1] = finalMsg;
+          return copy;
+        }
+        return [...prev, finalMsg];
+      });
+
       executeUiActions(res.ui_actions || []);
     } catch {
       setMessages((prev) => [
@@ -151,6 +255,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
         },
       ]);
     } finally {
+      setIsThinking(false);
       setIsLoading(false);
     }
   }
@@ -160,36 +265,6 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
       e.preventDefault();
       handleSend();
     }
-  }
-
-  function handlePin(product) {
-    setPinned({ asin: product.asin, title: product.title, priceIdr: product.priceIdr });
-    inputRef.current?.focus();
-  }
-
-  function handleCompareToggle(product) {
-    setCompareTray((prev) => {
-      const exists = prev.find((p) => p.asin === product.asin);
-      if (exists) return prev.filter((p) => p.asin !== product.asin);
-      if (prev.length >= 3) return prev;
-      return [...prev, { asin: product.asin, title: product.title, priceIdr: product.priceIdr }];
-    });
-  }
-
-  function handleSizeFor(product) {
-    setPinned({ asin: product.asin, title: product.title, priceIdr: product.priceIdr });
-    setShowSizeForm(true);
-  }
-
-  function submitSizeForm() {
-    const tb = parseInt(sizeTB, 10);
-    const bb = parseInt(sizeBB, 10);
-    if (!tb || !bb) return;
-    setShowSizeForm(false);
-    const ref = pinned ? ` untuk ${pinned.title}` : "";
-    handleSend(`Ukuran saya pas yang mana${ref}? TB ${tb} BB ${bb}`);
-    setSizeTB("");
-    setSizeBB("");
   }
 
   function handleAddToCart(product, qty = 1, size = null) {
@@ -212,9 +287,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
 
   function executeUiActions(actions) {
     for (const action of actions) {
-      if (action.type === "size_form") {
-        setShowSizeForm(true);
-      } else if (action.type === "add_to_cart" && action.asin) {
+      if (action.type === "add_to_cart" && action.asin) {
         handleAddToCart(
           {
             id: action.id ?? action.asin,
@@ -237,7 +310,18 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
     setUndoItem(null);
   }
 
-  const starterChips = pinned ? PRODUCT_CHIPS : HOME_CHIPS;
+  const starterChips =
+    attachedProducts.length >= 2
+      ? [
+          {
+            label: "Bandingkan produk yang dilampirkan",
+            prompt: `Tolong bandingkan produk: ${attachedProducts.map((p) => p.title).join(" vs ")}`,
+          },
+          ...PRODUCT_CHIPS.slice(0, 3),
+        ]
+      : attachedProducts.length === 1
+      ? PRODUCT_CHIPS
+      : HOME_CHIPS;
 
   return (
     <>
@@ -340,7 +424,19 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
             {messages.map((msg, index) => (
               <div key={index} className="space-y-2">
                 {msg.role === "user" ? (
-                  <div className="flex justify-end">
+                  <div className="flex flex-col items-end gap-1">
+                    {msg.attached?.length > 0 && (
+                      <div className="flex flex-wrap justify-end gap-1 max-w-[85%]">
+                        {msg.attached.map((att) => (
+                          <span
+                            key={att.asin}
+                            className="inline-flex items-center gap-1 rounded-full border border-border bg-muted/15 px-2 py-0.5 text-[10px] text-muted"
+                          >
+                            📎 <span className="truncate max-w-[140px]">{att.title}</span>
+                          </span>
+                        ))}
+                      </div>
+                    )}
                     <div className="max-w-[85%] rounded-2xl rounded-tr-xs bg-foreground px-3.5 py-2.5 text-background text-sm leading-relaxed">
                       {msg.content}
                     </div>
@@ -349,8 +445,8 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                   <div className="flex items-start gap-2">
                     <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background text-[11px] font-bold">TM</div>
                     <div className="max-w-[88%] space-y-2.5">
-                      <div className="rounded-2xl rounded-tl-xs border border-border bg-muted/10 px-3.5 py-2.5 text-foreground whitespace-pre-wrap leading-relaxed">
-                        {msg.content}
+                      <div className="rounded-2xl rounded-tl-xs border border-border bg-muted/10 px-3.5 py-2.5 text-foreground leading-relaxed">
+                        <ReactMarkdown components={markdownComponents}>{msg.content || ""}</ReactMarkdown>
                       </div>
 
                       {msg.products?.length > 0 && (
@@ -359,27 +455,10 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                             <ProductCard
                               key={p.asin}
                               product={p}
-                              inCompare={compareTray.some((c) => c.asin === p.asin)}
-                              onPin={() => handlePin(p)}
-                              onCompare={() => handleCompareToggle(p)}
-                              onSize={() => handleSizeFor(p)}
+                              isAttached={attachedProducts.some((a) => a.asin === p.asin)}
+                              onAttach={() => toggleAttachProduct(p)}
                               onAdd={() => handleAddToCart(p)}
                             />
-                          ))}
-                        </div>
-                      )}
-
-                      {msg.suggestions?.length > 0 && (
-                        <div className="flex flex-wrap gap-1.5 pt-0.5">
-                          {msg.suggestions.map((s, sIdx) => (
-                            <button
-                              key={sIdx}
-                              type="button"
-                              onClick={() => handleSend(s.prompt)}
-                              className="rounded-full border border-border bg-surface px-2.5 py-1 text-[11px] text-foreground transition hover:bg-muted/15"
-                            >
-                              {s.label}
-                            </button>
                           ))}
                         </div>
                       )}
@@ -389,15 +468,11 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
               </div>
             ))}
 
-            {isLoading && (
+            {isThinking && (
               <div className="flex items-start gap-2">
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background text-[11px] font-bold">TM</div>
-                <div className="flex items-center gap-2 rounded-2xl rounded-tl-xs border border-border bg-muted/10 px-3.5 py-2.5 text-xs text-muted">
-                  <div className="flex gap-1">
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground" style={{ animationDelay: "0ms" }} />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground" style={{ animationDelay: "150ms" }} />
-                    <span className="h-1.5 w-1.5 animate-bounce rounded-full bg-foreground" style={{ animationDelay: "300ms" }} />
-                  </div>
+                <div className="flex items-center rounded-2xl rounded-tl-xs border border-border bg-muted/10 px-3.5 py-2.5 text-xs">
+                  <span className="animate-pulse font-medium text-muted">Sedang berpikir...</span>
                 </div>
               </div>
             )}
@@ -415,71 +490,121 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
             </div>
           )}
 
-          {/* Compare tray */}
-          {compareTray.length > 0 && (
-            <div className="mx-3 mb-1 flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/10 px-3 py-2 text-[11px]">
-              <span className="truncate text-muted">Bandingkan ({compareTray.length}/3): {compareTray.map((c) => c.title.slice(0, 14)).join(", ")}</span>
-              <button
-                type="button"
-                onClick={() => handleSend(`Bandingkan produk: ${compareTray.map((c) => c.title).join(" vs ")}`)}
-                className="shrink-0 rounded-md bg-foreground px-2 py-1 font-medium text-background"
-              >
-                Bandingkan sekarang
-              </button>
-            </div>
-          )}
-
-          {/* Size form */}
-          {showSizeForm && (
-            <div className="mx-3 mb-1 rounded-lg border border-border bg-surface px-3 py-2.5">
-              <p className="mb-1.5 text-[11px] font-medium text-foreground">Isi tinggi & berat badan kakak:</p>
-              <div className="flex items-center gap-2">
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  value={sizeTB}
-                  onChange={(e) => setSizeTB(e.target.value)}
-                  placeholder="TB (cm)"
-                  aria-label="Tinggi badan dalam cm"
-                  className="w-20 rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
-                />
-                <input
-                  type="number"
-                  inputMode="numeric"
-                  value={sizeBB}
-                  onChange={(e) => setSizeBB(e.target.value)}
-                  placeholder="BB (kg)"
-                  aria-label="Berat badan dalam kg"
-                  className="w-20 rounded-lg border border-border bg-background px-2 py-1.5 text-xs"
-                />
-                <button type="button" onClick={submitSizeForm} className="rounded-lg bg-foreground px-3 py-1.5 text-xs font-medium text-background">
-                  Cek
+          {/* Paperclip search & attach popover */}
+          {showAttachMenu && (
+            <div className="mx-3 mb-1.5 rounded-xl border border-border bg-surface p-2.5 shadow-lg">
+              <div className="flex items-center justify-between gap-2 pb-2">
+                <span className="text-[11px] font-semibold text-foreground">
+                  Lampirkan Produk ({attachedProducts.length}/3)
+                </span>
+                <button
+                  type="button"
+                  onClick={() => setShowAttachMenu(false)}
+                  aria-label="Tutup pencarian produk"
+                  className="text-xs text-muted hover:text-foreground"
+                >
+                  ✕
                 </button>
-                <button type="button" onClick={() => setShowSizeForm(false)} className="text-xs text-muted hover:underline">
-                  Batal
-                </button>
+              </div>
+              <input
+                type="search"
+                value={attachQuery}
+                onChange={(e) => setAttachQuery(e.target.value)}
+                placeholder="Cari nama produk atau brand..."
+                aria-label="Cari produk untuk dilampirkan"
+                className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-xs text-foreground placeholder:text-muted focus:border-foreground focus:outline-hidden"
+              />
+              <div className="mt-2 max-h-44 overflow-y-auto space-y-1">
+                {attachSearching ? (
+                  <p className="py-2 text-center text-[11px] text-muted animate-pulse">Mencari produk...</p>
+                ) : attachResults.length === 0 ? (
+                  <p className="py-2 text-center text-[11px] text-muted">Produk tidak ditemukan.</p>
+                ) : (
+                  attachResults.map((item) => {
+                    const selected = attachedProducts.some((p) => p.asin === item.asin);
+                    const disabled = !selected && attachedProducts.length >= 3;
+                    return (
+                      <button
+                        key={item.asin}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() => toggleAttachProduct(item)}
+                        className={`flex w-full items-center justify-between gap-2 rounded-lg px-2 py-1.5 text-left text-xs transition ${
+                          selected
+                            ? "bg-foreground/10 font-medium text-foreground"
+                            : "hover:bg-muted/15 text-foreground disabled:opacity-40"
+                        }`}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-[11px] font-medium">{item.title}</p>
+                          <p className="text-[10px] text-muted">{formatRp(item.priceIdr || 0)}</p>
+                        </div>
+                        <span className="shrink-0 text-[10px] font-semibold">
+                          {selected ? "✓ Terlampir" : "+ Lampirkan"}
+                        </span>
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </div>
           )}
 
-          {/* Pinned product chip */}
-          {pinned && (
-            <div className="mx-3 mb-1 flex items-center justify-between gap-2 rounded-lg border border-border bg-muted/10 px-3 py-1.5 text-[11px]">
-              <span className="truncate text-foreground">🔖 Sedang dilihat: {pinned.title}{pinned.priceIdr ? ` — ${formatRp(pinned.priceIdr)}` : ""}</span>
-              <button type="button" onClick={() => setPinned(null)} aria-label="Lepas produk" className="shrink-0 text-muted hover:text-foreground">✕</button>
+          {/* Attached product chips */}
+          {attachedProducts.length > 0 && (
+            <div className="mx-3 mb-1 flex flex-wrap gap-1.5">
+              {attachedProducts.map((item) => (
+                <div
+                  key={item.asin}
+                  className="flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-muted/10 px-2.5 py-1 text-[11px]"
+                >
+                  <span className="truncate text-foreground">
+                    📎 {item.title}
+                    {item.priceIdr ? ` — ${formatRp(item.priceIdr)}` : ""}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => removeAttachedProduct(item.asin)}
+                    aria-label="Lepas produk"
+                    className="shrink-0 text-muted hover:text-foreground"
+                  >
+                    ✕
+                  </button>
+                </div>
+              ))}
             </div>
           )}
 
           {/* Input */}
           <div className="border-t border-border bg-surface p-3">
             <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => setShowAttachMenu((v) => !v)}
+                title="Cari & lampirkan produk"
+                aria-label="Lampirkan produk"
+                className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl border transition ${
+                  showAttachMenu || attachedProducts.length > 0
+                    ? "border-foreground bg-foreground/10 text-foreground"
+                    : "border-border bg-background text-muted hover:text-foreground"
+                }`}
+              >
+                <svg className="h-4 w-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path
+                    strokeLinecap="round"
+                    strokeLinejoin="round"
+                    strokeWidth="2"
+                    d="M15.172 7l-6.586 6.586a2 2 0 102.828 2.828l6.414-6.586a4 4 0 00-5.656-5.656l-6.415 6.585a6 6 0 108.486 8.486L20.5 13"
+                  />
+                </svg>
+              </button>
               <input
                 ref={inputRef}
                 type="text"
                 value={inputValue}
                 onChange={(e) => setInputValue(e.target.value)}
                 onKeyDown={handleKeyDown}
-                placeholder="Tanya style, ukuran, atau kebijakan toko..."
+                placeholder="Tanya style, ukuran (TB/BB), atau kebijakan toko..."
                 disabled={isLoading}
                 aria-label="Ketik pesan untuk Admin Toko Marcell"
                 className="flex-1 rounded-xl border border-border bg-background px-3 py-2 text-xs sm:text-sm text-foreground placeholder:text-muted focus:border-foreground focus:outline-hidden"
@@ -506,7 +631,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
   );
 }
 
-function ProductCard({ product, inCompare, onPin, onCompare, onSize, onAdd }) {
+function ProductCard({ product, isAttached, onAttach, onAdd }) {
   return (
     <div className="rounded-xl border border-border bg-surface p-2.5 shadow-xs">
       <div className="flex items-start gap-2.5">
@@ -531,9 +656,9 @@ function ProductCard({ product, inCompare, onPin, onCompare, onSize, onAdd }) {
         </div>
       </div>
       <div className="mt-2 flex flex-wrap gap-1.5">
-        <CardBtn onClick={onPin}>Tanya</CardBtn>
-        <CardBtn onClick={onCompare} active={inCompare}>{inCompare ? "✓ Bandingkan" : "Bandingkan"}</CardBtn>
-        <CardBtn onClick={onSize}>Ukuran?</CardBtn>
+        <CardBtn onClick={onAttach} active={isAttached}>
+          {isAttached ? "✓ Terlampir" : "📎 Lampirkan"}
+        </CardBtn>
         <CardBtn onClick={onAdd} primary>+ Keranjang</CardBtn>
       </div>
     </div>

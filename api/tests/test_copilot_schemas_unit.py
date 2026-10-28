@@ -97,3 +97,12 @@ class TestResponseV2:
         assert out.guardrail == "greeting"
         with pytest.raises(ValidationError):
             CopilotChatV2Out(reply="x", thread_id="t1", took_ms=1.0, guardrail="bogus")
+
+    def test_ui_action_rejects_removed_size_form(self):
+        with pytest.raises(ValidationError):
+            CopilotChatV2Out(
+                reply="x",
+                thread_id="t1",
+                took_ms=1.0,
+                ui_actions=[{"type": "size_form"}],
+            )

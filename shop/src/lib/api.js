@@ -235,6 +235,78 @@ export async function sendCopilotMessage({ message, threadId, context = null }) 
   return response.json();
 }
 
+export async function streamCopilotMessage({ message, threadId, context = null, onToken }) {
+  const sessionId = getSessionId();
+  const response = await fetch(`${API_URL}/copilot/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      thread_id: threadId,
+      message,
+      context: context
+        ? {
+            page_asin: context.pageAsin ?? null,
+            referenced_asins: context.referencedAsins ?? [],
+          }
+        : null,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not reach Toko Marcell Copilot");
+  }
+
+  if (!response.body) {
+    return response.json();
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let donePayload = null;
+  let fullReply = "";
+
+  while (true) {
+    const { value, done } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() || "";
+
+    for (const line of lines) {
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("data:")) continue;
+      const raw = trimmed.slice(5).trim();
+      if (!raw) continue;
+      try {
+        const evt = JSON.parse(raw);
+        if (evt.type === "token" && evt.content) {
+          fullReply += evt.content;
+          if (onToken) onToken(evt.content, fullReply);
+        } else if (evt.type === "done") {
+          donePayload = evt;
+        }
+      } catch {
+        // ignore malformed chunk
+      }
+    }
+  }
+
+  return (
+    donePayload || {
+      reply: fullReply,
+      thread_id: threadId,
+      products: [],
+      citations: [],
+      suggestions: [],
+      ui_actions: [],
+      guardrail: null,
+    }
+  );
+}
+
 export async function getCopilotThread(threadId) {
   try {
     const response = await fetch(`${API_URL}/copilot/threads/${encodeURIComponent(threadId)}`);

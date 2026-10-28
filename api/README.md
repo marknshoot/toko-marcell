@@ -386,9 +386,9 @@ replays the display messages; `DELETE /copilot/threads/{thread_id}` resets the c
 }
 ```
 
-Response (`CopilotChatV2Out`): `reply`, `thread_id`, `products` (≤6, each with a stable `ref` number),
-`citations`, `suggestions` (2–3 follow-up chips), `ui_actions`
-(`add_to_cart` | `size_form`), `tool_calls`, `guardrail` (`greeting` | `off_topic` | `injection` |
+Response (`CopilotChatV2Out`, or streamed via `POST /copilot/chat/stream` as SSE `token` + `done` events): `reply`, `thread_id`, `products` (≤6, each with a stable `ref` number),
+`citations`, `suggestions`, `ui_actions`
+(`add_to_cart`), `tool_calls`, `guardrail` (`greeting` | `off_topic` | `injection` |
 `null`) and `took_ms`. Errors: `422` (malformed/oversized), `429` (rate limit), `503` (no LLM key),
 `502` (upstream failure).
 

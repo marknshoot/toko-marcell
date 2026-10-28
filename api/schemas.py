@@ -123,10 +123,9 @@ class CopilotSuggestionV2(BaseModel):
 
 
 class CopilotUIActionV2(BaseModel):
-    """A browser-executed action. ``add_to_cart`` (server-validated) or a
-    ``size_form`` prompt."""
+    """A browser-executed action: ``add_to_cart`` (server-validated)."""
 
-    type: Literal["add_to_cart", "size_form"]
+    type: Literal["add_to_cart"]
     id: int | None = None
     asin: str | None = None
     qty: int | None = None
