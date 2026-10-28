@@ -167,7 +167,7 @@ describe("CopilotChat v2", () => {
 
     await act(async () => {
       resolveStream({
-        reply: "Ini **Pilihan Terbaik** untuk kakak!",
+        reply: "Ini **Pilihan Terbaik** untuk kakak!\n| # | Produk | Harga | |---|---|---| | 1 | Jaket | Rp 100.000 |",
         thread_id: "t1",
         products: [],
         ui_actions: [],
@@ -177,6 +177,8 @@ describe("CopilotChat v2", () => {
     });
 
     expect(getByText("untuk kakak!", { exact: false })).toBeTruthy();
+    expect(container.querySelector("table")).toBeTruthy();
+    expect(getByText("Jaket").tagName).toBe("TD");
   });
 
   it("executes an add_to_cart ui_action against the local cart", async () => {

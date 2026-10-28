@@ -656,10 +656,10 @@ exercises the full agent and tool path **without ever calling a real LLM**.
 
 ### API contract (v2)
 
-`POST /copilot/chat` accepts `{session_id?, thread_id, message (1..2000), context?: {page_asin?,
-referenced_asins[≤3]}}` with `extra="forbid"`. It returns `{reply, thread_id, products[≤6] (each
-with a `ref`), citations, suggestions (2–3 follow-up chips), ui_actions (`add_to_cart` |
-`size_form`), tool_calls, guardrail, took_ms}`. Errors are `422` (validation), `429` (rate limit),
+`POST /copilot/chat` (JSON) and `POST /copilot/chat/stream` (Server-Sent Events emitting `token` and `done` events) accept `{session_id?, thread_id, message (1..2000), context?: {page_asin?,
+referenced_asins[≤3]}}` with `extra="forbid"`. The turn payload contains `{reply, thread_id, products[≤6] (each
+with a `ref`), citations, suggestions, ui_actions (`add_to_cart`), tool_calls, guardrail, took_ms}`.
+In the storefront (`CopilotChat.js`), shoppers can search and attach up to 3 products via the paperclip (`📎`) menu (`referenced_asins`), see a pulsing `"Sedang berpikir..."` indicator while waiting for the first token, and view streamed replies rendered as GitHub Flavored Markdown (`react-markdown` + `remark-gfm`). Errors are `422` (validation), `429` (rate limit),
 `503` (no LLM key) and `502` (upstream failure). `GET /copilot/tools` returns the 7 tool names.
 
 ### Knowledge base (RAG)
@@ -1011,11 +1011,11 @@ manual/
 ## 🧪 Testing & CI
 
 ```bash
-# Frontend: 21 tests across 5 files (components, cart, copilot, cold-start, session)
+# Frontend: 23 tests across 5 files (components, cart, copilot, cold-start, session)
 cd shop && npm test
 
 # Backend + pipelines
-cd api && python3 -m pytest tests/          # 173 passed, 4 env-gated skips (needs a live DB)
+cd api && python3 -m pytest tests/          # 175 passed, 4 env-gated skips (needs a live DB)
 python3 -m pytest pipelines/tests/          #   6 tests (pipeline maths, no DB)
 ```
 
@@ -1025,6 +1025,7 @@ Every push and PR runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
 |---|---|
 | **Frontend** (Node 22) | `npm ci` → `npm run lint` → `npm run test` → `npm run build` |
 | **Backend & pipelines** (Python 3.12) | Ruff → full API suite against a Postgres service restored from the seed, with `COPILOT_FAKE_LLM=1` → pipeline tests |
+| **Render Deploy Status** (`main` push) | Triggers and polls the Render deployment until `live` when `RENDER_API_KEY` and `RENDER_SERVICE_ID` secrets are configured |
 
 CI runs **Ruff + the full API suite** against a Postgres service restored from the committed seed,
 with `COPILOT_FAKE_LLM=1` so the whole agent and tool path is exercised **without ever calling a real

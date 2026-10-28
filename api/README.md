@@ -105,6 +105,7 @@ from booting, and catalog browsing never pays for a search model it does not use
 | `GET` | `/recs/session` | Session-based recommendations from the current visit's events; cold → popularity |
 | `GET` | `/reviews/{asin}` | Reviews for an ASIN · `404` if the product is unknown |
 | `POST` | `/copilot/chat` | Agentic copilot turn (v2: deterministic guardrail → `create_agent` loop → grounded reply); text-only |
+| `POST` | `/copilot/chat/stream` | Stream an agentic copilot turn via Server-Sent Events (`token` + `done` events) |
 | `GET` | `/copilot/tools` | The 7 deterministic tool names the v2 copilot can call |
 | `GET` | `/copilot/threads/{thread_id}` | Replay a conversation thread's display messages (may be empty) |
 | `DELETE` | `/copilot/threads/{thread_id}` | Reset a conversation (delete all persisted checkpointer state) → `204` |
@@ -161,7 +162,7 @@ api/
 │   ├── reviews.py            # GET /products/{id}/reviews, /reviews/{asin}
 │   ├── events.py             # POST /events, GET /events/summary (incl. copilot block)
 │   ├── checkout.py           # POST /checkout/confirm, GET /orders/{token}
-│   └── copilot.py            # POST /copilot/chat, GET /copilot/tools, GET/DELETE /copilot/threads/{id}
+│   └── copilot.py            # POST /copilot/chat, POST /copilot/chat/stream, GET /copilot/tools, GET/DELETE /copilot/threads/{id}
 ├── search.py                 # BM25 index, embeddings, RRF, CLIP encoders (ONNX)
 ├── reranker.py               # Stage-2 ONNX cross-encoder (ms-marco-MiniLM-L-6-v2)
 ├── guardrail.py              # deterministic pre-agent guardrail (greeting/off-topic/injection, zero LLM)

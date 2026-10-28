@@ -64,9 +64,10 @@ shield, because a false "down" is worse than a heavier probe.
   carry `aria-label`s.
 - **Text-only & streaming (v2).** The chat streams a single `message` plus a browser `thread_id` to
   `POST /copilot/chat/stream` (SSE `token` + `done` events), showing a pulsing `"Sedang berpikir..."`
-  indicator while waiting for the first token and rendering Markdown via `react-markdown`. Conversation
-  history lives server-side in the LangGraph checkpointer, not in the request. **There is no image upload**
-  — photo search is a separate storefront feature (see Catalog, below).
+  indicator while waiting for the first token and rendering GitHub Flavored Markdown (including tables)
+  via `react-markdown` and `remark-gfm`. Conversation history lives server-side in the LangGraph
+  checkpointer, not in the request. **There is no image upload** — photo search is a separate storefront
+  feature (see Catalog, below).
 - **Starter chips only on a new conversation** (`messages.length === 0`), dynamically adapting between
   store-wide prompts, single-product prompts, and multi-product comparison prompts.
 - **Paperclip product search & attach (`📎`)** lets shoppers search the catalog inside the chat bar and
