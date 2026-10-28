@@ -40,6 +40,7 @@ ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store stylist 
 VOICE
 - Warm, polite, consultative. Mirror the shopper's language: reply in Indonesian to Indonesian, English to English. Indonesian e-commerce tone ("Halo kak!", "mimin").
 - Enthusiastically highlight craftsmanship, durability, and value in Rupiah. Never badmouth a product. Gently guide toward styling and checkout.
+- Format responses using clean, concise Markdown (short bullet points, **bold** product names and prices) so they are easy to scan in a compact chat bubble.
 
 TOOLS (call them — don't guess)
 - Product availability / style / outfit / budget → search_catalog.
@@ -51,7 +52,7 @@ TOOLS (call them — don't guess)
 - Shopper confirms they want an item → add_to_cart (server validates price; it returns a cart action).
 
 REFERENCE RESOLUTION
-- The context block lists the products shown so far as "[1] …", "[2] …" and the product the shopper is viewing. Resolve "yang kedua / nomor 2 / yang Dickies / itu / produk ini" to the matching ASIN from that block or the page product. If genuinely ambiguous, ask ONE short clarifying question.
+- The context block lists the products shown so far as "[1] …", "[2] …", the product the shopper is viewing, and any attached products ("[Produk yang dirujuk]"). Resolve "yang kedua / nomor 2 / yang Dickies / itu / produk ini" or attached products to the matching ASIN(s) from that block. If genuinely ambiguous, ask ONE short clarifying question.
 
 SEARCH LANGUAGE
 - The catalog and embeddings are English. Write tool queries in ENGLISH catalog vocabulary even when the shopper writes Indonesian (e.g. "jaket hujan" → "waterproof rain jacket"). Reply in the shopper's language.
@@ -104,25 +105,26 @@ def _browsing_context(cur, session_id: str | None) -> str:
 def build_context_block(ctx: ToolContext, session_id: str | None) -> str:
     """Assemble the authoritative context string injected before the model call."""
     parts: list[str] = []
-    with psycopg.connect(ctx.db_url) as conn:
-        with conn.cursor() as cur:
-            if ctx.page_asin:
-                blk = _read_product_block(cur, ctx.page_asin, "[Produk yang sedang dilihat]")
-                if blk:
-                    parts.append(blk)
-            for a in ctx.referenced_asins[:3]:
-                blk = _read_product_block(cur, a, "[Produk yang dirujuk]")
-                if blk:
-                    parts.append(blk)
-            if ctx.registry:
-                reg_lines = [_REGISTRY_HEADER]
-                for ref in sorted(ctx.registry):
-                    p = ctx.registry[ref]
-                    reg_lines.append(f"[{ref}] {p.get('title','')} — {p.get('brand') or ''} (ASIN {p.get('asin')}, Rp {p.get('priceIdr',0):,})")
-                parts.append("\n".join(reg_lines))
-            browse = _browsing_context(cur, session_id)
-            if browse:
-                parts.append(browse)
+    if ctx.page_asin or ctx.referenced_asins or session_id:
+        with psycopg.connect(ctx.db_url) as conn:
+            with conn.cursor() as cur:
+                if ctx.page_asin:
+                    blk = _read_product_block(cur, ctx.page_asin, "[Produk yang sedang dilihat]")
+                    if blk:
+                        parts.append(blk)
+                for a in ctx.referenced_asins[:3]:
+                    blk = _read_product_block(cur, a, "[Produk yang dirujuk]")
+                    if blk:
+                        parts.append(blk)
+                browse = _browsing_context(cur, session_id)
+                if browse:
+                    parts.append(browse)
+    if ctx.registry:
+        reg_lines = [_REGISTRY_HEADER]
+        for ref in sorted(ctx.registry):
+            p = ctx.registry[ref]
+            reg_lines.append(f"[{ref}] {p.get('title','')} — {p.get('brand') or ''} (ASIN {p.get('asin')}, Rp {p.get('priceIdr',0):,})")
+        parts.append("\n".join(reg_lines))
     return "\n\n".join(parts)
 
 
@@ -337,7 +339,7 @@ async def run_turn(
         "reply": reply,
         "products": products,
         "citations": [],
-        "suggestions": _suggestions_from_tools(tool_calls),
+        "suggestions": [],
         "ui_actions": ctx.ui_actions,
         "tool_calls": tool_calls,
         "guardrail": None,
@@ -345,17 +347,170 @@ async def run_turn(
     }
 
 
-def _suggestions_from_tools(tool_calls: list[dict]) -> list[dict]:
-    """Deterministic follow-up chips based on which tools ran (design §UX 7)."""
-    names = {tc["name"] for tc in tool_calls}
-    out: list[dict] = []
-    if "search_catalog" in names or "build_outfit" in names:
-        out.append({"label": "Yang mirip tapi lebih murah", "prompt": "Ada yang mirip tapi lebih murah?"})
-    if "get_product_details" in names or "search_catalog" in names:
-        out.append({"label": "Cocok dipadukan dengan apa?", "prompt": "Ini cocok dipadukan dengan apa?"})
-    if "recommend_size" not in names:
-        out.append({"label": "Ukuran saya pas yang mana?", "prompt": "Ukuran saya pas yang mana? TB 170 BB 65"})
-    return out[:3]
+def _chunk_text(msg: Any) -> str:
+    content = getattr(msg, "content", "")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(p if isinstance(p, str) else p.get("text", "") for p in content)
+    return ""
+
+
+async def stream_turn(
+    message: str,
+    *,
+    db_url: str,
+    session_id: str | None = None,
+    page_asin: str | None = None,
+    referenced_asins: list[str] | None = None,
+    history: list[dict[str, str]] | None = None,
+    fake: bool | None = None,
+    checkpointer=None,
+    thread_id: str | None = None,
+):
+    """Stream one copilot v2 turn as event dicts (`token` and `done`)."""
+    import asyncio
+    import threading
+
+    started = time.perf_counter()
+
+    label, canned = classify(message)
+    if label is not None:
+        yield {"type": "token", "content": canned}
+        yield {
+            "type": "done",
+            "reply": canned,
+            "thread_id": thread_id,
+            "products": [],
+            "citations": [],
+            "suggestions": [],
+            "ui_actions": [],
+            "tool_calls": [],
+            "guardrail": label,
+            "took_ms": round((time.perf_counter() - started) * 1000, 2),
+        }
+        return
+
+    ctx = ToolContext(
+        db_url=db_url,
+        page_asin=page_asin,
+        referenced_asins=referenced_asins or [],
+    )
+    agent = build_agent(ctx, session_id, fake=fake, checkpointer=checkpointer)
+    if agent is None:
+        from fastapi import HTTPException
+        raise HTTPException(
+            status_code=503,
+            detail="Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti.",
+        )
+
+    input_messages: list[Any] = []
+    if checkpointer is None and history:
+        for h in history[-6:]:
+            if h["role"] == "user":
+                input_messages.append(HumanMessage(content=h["content"]))
+            elif h["role"] == "assistant":
+                input_messages.append(AIMessage(content=h["content"]))
+    input_messages.append(HumanMessage(content=message))
+
+    invoke_cfg = {"configurable": {"thread_id": thread_id}} if (checkpointer and thread_id) else {}
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
+
+    def _worker():
+        try:
+            for mode, chunk in agent.stream(
+                {"messages": input_messages},
+                config=invoke_cfg,
+                stream_mode=["messages", "values"],
+            ):
+                loop.call_soon_threadsafe(queue.put_nowait, (mode, chunk))
+            loop.call_soon_threadsafe(queue.put_nowait, ("__eof__", None))
+        except Exception as exc:
+            loop.call_soon_threadsafe(queue.put_nowait, ("__err__", exc))
+
+    threading.Thread(target=_worker, daemon=True).start()
+
+    final_result: dict[str, Any] = {}
+    streamed_parts: list[str] = []
+
+    while True:
+        mode, payload = await queue.get()
+        if mode == "__eof__":
+            break
+        if mode == "__err__":
+            logger.error("copilot stream error: %s", payload)
+            fallback_err = "Maaf kak, asisten AI lagi ada kendala koneksi. Boleh coba kirim lagi ya!"
+            if not streamed_parts:
+                yield {"type": "token", "content": fallback_err}
+            yield {
+                "type": "done",
+                "reply": "".join(streamed_parts) or fallback_err,
+                "thread_id": thread_id,
+                "products": [],
+                "citations": [],
+                "suggestions": [],
+                "ui_actions": [],
+                "tool_calls": [],
+                "guardrail": None,
+                "took_ms": round((time.perf_counter() - started) * 1000, 2),
+            }
+            return
+        if mode == "messages":
+            msg_chunk, meta = payload
+            if (
+                isinstance(msg_chunk, AIMessage)
+                and (meta or {}).get("langgraph_node") == "model"
+                and not getattr(msg_chunk, "tool_calls", None)
+                and not getattr(msg_chunk, "tool_call_chunks", None)
+            ):
+                txt = _chunk_text(msg_chunk)
+                if txt:
+                    streamed_parts.append(txt)
+                    yield {"type": "token", "content": txt}
+        elif mode == "values" and isinstance(payload, dict):
+            final_result = payload
+
+    reply = (
+        _extract_reply(final_result)
+        or "".join(streamed_parts)
+        or "Maaf kak, mimin belum nemu jawabannya. Boleh ulangi ya?"
+    )
+    if not streamed_parts and reply:
+        yield {"type": "token", "content": reply}
+
+    if checkpointer is not None and thread_id:
+        try:
+            from copilot_memory import touch_thread
+            touch_thread(thread_id, db_url=db_url)
+        except Exception:
+            pass
+
+    tool_calls = []
+    for m in final_result.get("messages", []):
+        for tc in getattr(m, "tool_calls", None) or []:
+            tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
+
+    products = []
+    for ref in sorted(ctx.registry):
+        p = ctx.registry[ref]
+        products.append({"ref": ref, **p})
+    products = products[:6]
+
+    took_ms = round((time.perf_counter() - started) * 1000, 2)
+    yield {
+        "type": "done",
+        "reply": reply,
+        "thread_id": thread_id,
+        "products": products,
+        "citations": [],
+        "suggestions": [],
+        "ui_actions": ctx.ui_actions,
+        "tool_calls": tool_calls,
+        "guardrail": None,
+        "took_ms": took_ms,
+    }
 
 
 def is_llm_available() -> bool:

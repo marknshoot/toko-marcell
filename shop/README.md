@@ -62,18 +62,20 @@ shield, because a false "down" is worse than a heavier probe.
 - A chat panel mounted globally in `layout.js`, loaded with `dynamic(..., { ssr: false })` so it never
   costs first paint. A floating **"Tanya Admin"** button opens it; **Escape** closes it, and controls
   carry `aria-label`s.
-- **Text-only (v2).** The chat sends a single `message` plus a browser `thread_id` to
-  `POST /copilot/chat`; conversation history lives server-side in the LangGraph checkpointer, not in
-  the request. **There is no image upload** — photo search is a separate storefront feature (see
-  Catalog, below).
-- **Page-aware starter chips** differ between the home page and a product page.
+- **Text-only & streaming (v2).** The chat streams a single `message` plus a browser `thread_id` to
+  `POST /copilot/chat/stream` (SSE `token` + `done` events), showing a pulsing `"Sedang berpikir..."`
+  indicator while waiting for the first token and rendering Markdown via `react-markdown`. Conversation
+  history lives server-side in the LangGraph checkpointer, not in the request. **There is no image upload**
+  — photo search is a separate storefront feature (see Catalog, below).
+- **Starter chips only on a new conversation** (`messages.length === 0`), dynamically adapting between
+  store-wide prompts, single-product prompts, and multi-product comparison prompts.
+- **Paperclip product search & attach (`📎`)** lets shoppers search the catalog inside the chat bar and
+  attach up to 3 products (`context.referenced_asins`), replacing the old separate compare tray.
 - Replies render **numbered product cards** (`[1]`, `[2]`), each exposing
-  **Tanya**, **Bandingkan** (compare tray, max 3), **Ukuran?** and **+ Keranjang** actions.
-- An inline **TB/BB size form** (triggered by a `size_form` ui_action), **follow-up suggestion chips**,
-  and an **add-to-cart confirmation with a "Batalkan" undo**.
+  **📎 Lampirkan** and **+ Keranjang** actions, plus an **add-to-cart confirmation with a "Batalkan" undo**.
 - Agent `add_to_cart` ui_actions are executed through `CartProvider`, so a chat-driven add updates
   `localStorage`, the header count and the cart page — the server never tries to write the cart itself.
-- A **pinned product chip** shows which product the conversation is anchored to, and a **reset button**
+- **Attached product chips** show which products the conversation is anchored to, and a **reset button**
   clears the thread (`DELETE /copilot/threads/{id}` + wipes the local copy).
 
 ### 3b. Product-page copilot entry (`components/ProductCopilotEntry.js`)
@@ -199,7 +201,7 @@ src/
 │   ├── RecommendationsRail.js    # session recommendations + load more
 │   ├── TrackView.js              # fires view_product once per ASIN
 │   ├── ServerWakeup.js           # cold-start health ping + overlay
-│   ├── CopilotChat.js            # v2 copilot panel (text-only; numbered cards, compare tray, size form, undo)
+│   ├── CopilotChat.js            # v2 copilot panel (streaming SSE, react-markdown, paperclip product search/attach, undo)
 │   ├── ProductCopilotEntry.js    # "Tanya soal produk ini" button on the PDP; opens the floating copilot pinned to the product (copilot:open event)
 │   └── FloatingCopilot.js        # lazy, client-only mount for the copilot
 └── lib/
@@ -240,14 +242,14 @@ sequenceDiagram
 npm test
 ```
 
-**21 tests across 5 suites**:
+**23 tests across 5 suites**:
 
 | Suite | Tests | Covers |
 |---|:---:|---|
 | `components/__tests__/CartProvider.test.jsx` | 7 | empty cart, add, duplicate merge, quantity, remove-at-zero, clear, multi-item subtotal |
 | `components/__tests__/AddToCartButton.test.jsx` | 3 | add with quantity, navigate home, existing-quantity display |
 | `components/__tests__/ServerWakeup.test.jsx` | 2 | ready indicator on healthy check, spinner while waiting |
-| `components/__tests__/CopilotChat.test.jsx` | 7 | no image-upload control (text-only), home vs product starter chips, `copilot:open` event opens the panel pinned to a product, v2 single-message turn + guardrail, numbered product cards, reset deletes the thread |
+| `components/__tests__/CopilotChat.test.jsx` | 9 | no image-upload or TB/BB form, starter chips only when empty, product-page chips, `copilot:open` event attaches product, paperclip search & attach, pulsing `"Sedang berpikir..."` + streaming markdown, `add_to_cart` ui_action, numbered product cards, reset deletes thread |
 | `lib/__tests__/session.test.js` | 2 | id persists in `sessionStorage`, stable across calls |
 
 CI also runs `npm run lint` and `npm run build` so the Next build cannot regress silently.

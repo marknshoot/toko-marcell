@@ -1,11 +1,12 @@
 """Copilot endpoints: v2 chat (text-only), tool listing, thread memory."""
 
+import json
 import logging
 import os
 
 from config import get_settings
-from fastapi import APIRouter, Request
-from fastapi.responses import JSONResponse
+from fastapi import APIRouter, HTTPException, Request
+from fastapi.responses import JSONResponse, StreamingResponse
 from rate_limiter import check_copilot_rate_limit
 from schemas import CopilotChatV2In
 
@@ -73,6 +74,59 @@ async def copilot_chat(payload: CopilotChatV2In, request: Request):
     )
     result["thread_id"] = payload.thread_id
     return result
+
+
+@router.post("/copilot/chat/stream")
+async def copilot_chat_stream(payload: CopilotChatV2In, request: Request):
+    """Stream a copilot v2 turn as Server-Sent Events (`token` and `done`)."""
+    client_ip = _get_client_ip(request)
+    allowed, retry_after, which = check_copilot_rate_limit(client_ip)
+    if not allowed:
+        msg = (
+            "Kak, mimin butuh istirahat sebentar ya 😊 "
+            "Terlalu banyak permintaan dalam waktu singkat. "
+            "Silakan coba lagi nanti!"
+        )
+        return JSONResponse(
+            status_code=429,
+            content={"detail": msg, "limit": which},
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    from copilot_agent import is_llm_available, stream_turn
+    from copilot_memory import get_checkpointer
+    from guardrail import classify
+
+    settings = get_settings()
+    ctx = payload.context
+    fake = os.environ.get("COPILOT_FAKE_LLM") == "1"
+    label, _ = classify(payload.message)
+    if label is None and not fake and not is_llm_available():
+        raise HTTPException(
+            status_code=503,
+            detail="Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti.",
+        )
+
+    checkpointer = None if fake else get_checkpointer()
+
+    async def event_generator():
+        async for evt in stream_turn(
+            payload.message,
+            db_url=settings.DATABASE_URL,
+            session_id=payload.session_id,
+            page_asin=ctx.page_asin if ctx else None,
+            referenced_asins=ctx.referenced_asins if ctx else [],
+            thread_id=payload.thread_id,
+            checkpointer=checkpointer,
+            fake=fake,
+        ):
+            yield f"data: {json.dumps(evt)}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.get("/copilot/tools")
