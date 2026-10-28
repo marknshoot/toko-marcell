@@ -352,7 +352,7 @@ def _chunk_text(msg: Any) -> str:
     if isinstance(content, str):
         return content
     if isinstance(content, list):
-        return "".join(p if isinstance(p, str) else p.get("text", "") for p in content if isinstance(p, (str, dict)))
+        return "".join(p if isinstance(p, str) else p.get("text", "") for p in content)
     return ""
 
 
