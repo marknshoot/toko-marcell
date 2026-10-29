@@ -89,7 +89,7 @@ class CopilotChatV2In(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     session_id: str | None = Field(default=None, max_length=64)
-    thread_id: str = Field(min_length=1, max_length=64)
+    thread_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
     message: str = Field(min_length=1, max_length=2000)
     context: CopilotContextV2 | None = None
 
