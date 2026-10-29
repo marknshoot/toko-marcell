@@ -20,6 +20,7 @@ from typing import Any
 
 import psycopg
 from PIL import Image
+from psycopg import sql
 from reranker import rerank
 from search import (
     embed_image_bytes,
@@ -247,22 +248,30 @@ def search_catalog(
             vector_ranked = []
             q_vec = embed_query(query)
             if q_vec is not None:
+                try:
+                    from config import get_settings
+                    embed_col = get_settings().TEXT_EMBED_COLUMN
+                except Exception:
+                    embed_col = os.environ.get("TEXT_EMBED_COLUMN", "embedding_ml")
                 vec_str = "[" + ",".join(f"{x:.6f}" for x in q_vec) + "]"
-                vec_where = ["embedding IS NOT NULL"]
-                vec_params = [vec_str]
+                vec_where: list[sql.Composable] = [
+                    sql.SQL("{} IS NOT NULL").format(sql.Identifier(embed_col))
+                ]
+                vec_params: list[Any] = [vec_str]
                 if allowed_ids:
-                    vec_where.append("id = ANY(%s)")
+                    vec_where.append(sql.SQL("id = ANY(%s)"))
                     vec_params.append(list(allowed_ids))
                 vec_params.append(vec_str)
 
                 cur.execute(
-                    f"""
-                    SELECT id, 1 - (embedding <=> %s::vector) AS similarity
-                    FROM products
-                    WHERE {' AND '.join(vec_where)}
-                    ORDER BY embedding <=> %s::vector ASC
-                    LIMIT 40
-                    """,
+                    sql.SQL(
+                        "SELECT id, 1 - ({col} <=> %s::vector) AS similarity"
+                        " FROM products WHERE "
+                    ).format(col=sql.Identifier(embed_col))
+                    + sql.SQL(" AND ").join(vec_where)
+                    + sql.SQL(" ORDER BY {col} <=> %s::vector ASC LIMIT 40").format(
+                        col=sql.Identifier(embed_col)
+                    ),
                     vec_params,
                 )
                 vector_ranked = [(row[0], float(row[1])) for row in cur.fetchall()]
@@ -479,12 +488,57 @@ def search_by_image(
     return items
 
 
+_POLICY_STOPWORDS = frozenset(
+    "a an and are at be by do does for from how in is it of on or the to what when where "
+    "ada aja apa apakah atau bagaimana berapa bisa buat dalam dan dari dengan di dong "
+    "gak gimana itu jadi kalau kak ke lagi mau memang mending min nggak nya pada pakai "
+    "sama saya sih soal sudah tapi tentang untuk ya yang".split()
+)
+
+
+def score_policy_chunks_lexical(
+    query: str,
+    chunks: list[tuple[int, str, str, str]],
+) -> list[tuple[int, float]]:
+    """IDF-weighted lexical keyword ranker for bilingual (ID/EN) store policy & sizing chunks."""
+    import math
+
+    tokens = list(dict.fromkeys(
+        t for t in re.findall(r"[a-z0-9]+", (query or "").lower())
+        if len(t) >= 2 and t not in _POLICY_STOPWORDS
+    ))
+    if not tokens or not chunks:
+        return []
+
+    n_docs = len(chunks)
+    prepared = [
+        (cid, f"{category or ''} {title or ''}".lower(), (content or "").lower())
+        for cid, category, title, content in chunks
+    ]
+    idf = {
+        tok: math.log(1.0 + n_docs / max(1, sum(1 for _, h, b in prepared if tok in h or tok in b)))
+        for tok in tokens
+    }
+
+    scored: list[tuple[int, float]] = []
+    for cid, head_blob, body_blob in prepared:
+        score = 0.0
+        for tok in tokens:
+            w = idf[tok]
+            if tok in head_blob:
+                score += 2.5 * w
+            if tok in body_blob:
+                score += 1.0 * w
+        if score > 0:
+            scored.append((cid, score))
+    return sorted(scored, key=lambda item: (-item[1], item[0]))
+
+
 def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -> list[dict[str, Any]]:
     """Retrieve store operations, QRIS demo rules, shipping, returns, and master size charts.
 
-    Hypothetical-question RAG (design §6): match the query against the per-chunk
-    hypothetical questions when that table exists, then return the parent chunks
-    (deduped). Falls back to direct chunk-embedding search otherwise.
+    Uses Bilingual Hybrid RAG: fuses hypothetical-question vector similarity,
+    direct chunk vector similarity, and lexical keyword matching via RRF.
     """
     q_vec = embed_query(query)
     if q_vec is None:
@@ -493,9 +547,11 @@ def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -
     vec_str = "[" + ",".join(f"{x:.6f}" for x in q_vec) + "]"
     with _connect(db_url) as conn:
         with conn.cursor() as cur:
-            rows = []
+            chunk_by_id: dict[int, tuple[str, str, str, float]] = {}
+            hyp_ranked: list[tuple[int, float]] = []
+            direct_ranked: list[tuple[int, float]] = []
+
             try:
-                # Pull extra question matches, then dedupe to parent chunks.
                 cur.execute(
                     """
                     SELECT k.category, k.title, k.content,
@@ -507,44 +563,61 @@ def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -
                     ORDER BY q.embedding <=> %s::vector ASC
                     LIMIT %s
                     """,
-                    (vec_str, vec_str, limit * 4),
+                    (vec_str, vec_str, limit * 5),
                 )
-                seen = set()
+                seen_hyp: set[int] = set()
                 for r in cur.fetchall():
-                    cid = r[4]
-                    if cid in seen:
+                    cid = int(r[4]) if len(r) > 4 else len(seen_hyp) + 1
+                    if cid in seen_hyp:
                         continue
-                    seen.add(cid)
-                    rows.append(r[:4])
-                    if len(rows) >= limit:
-                        break
+                    seen_hyp.add(cid)
+                    sim = float(r[3]) if r[3] is not None else 0.0
+                    hyp_ranked.append((cid, sim))
+                    chunk_by_id[cid] = (r[0], r[1], r[2], sim)
             except Exception:
                 conn.rollback()
-                rows = []
 
-            if not rows:
+            try:
                 cur.execute(
                     """
                     SELECT category, title, content,
-                           ROUND((1 - (embedding <=> %s::vector))::numeric, 4) AS score
+                           ROUND((1 - (embedding <=> %s::vector))::numeric, 4) AS score,
+                           id
                     FROM store_knowledge
                     WHERE embedding IS NOT NULL
                     ORDER BY embedding <=> %s::vector ASC
-                    LIMIT %s
                     """,
-                    (vec_str, vec_str, limit),
+                    (vec_str, vec_str),
                 )
-                rows = cur.fetchall()
+                for idx, r in enumerate(cur.fetchall(), 1):
+                    cid = int(r[4]) if len(r) > 4 else idx
+                    sim = float(r[3]) if r[3] is not None else 0.0
+                    direct_ranked.append((cid, sim))
+                    if cid not in chunk_by_id or sim > chunk_by_id[cid][3]:
+                        chunk_by_id[cid] = (r[0], r[1], r[2], sim)
+            except Exception:
+                conn.rollback()
 
-    return [
-        {
-            "category": r[0],
-            "title": r[1],
-            "content": r[2],
-            "similarity": float(r[3]) if r[3] is not None else 0.0,
-        }
-        for r in rows
-    ]
+    lexical_ranked = score_policy_chunks_lexical(
+        query,
+        [(cid, v[0], v[1], v[2]) for cid, v in chunk_by_id.items()],
+    )
+    rankings = [r for r in (hyp_ranked, direct_ranked, lexical_ranked) if r]
+    if not rankings:
+        return []
+
+    fused = reciprocal_rank_fusion(rankings, k=60)
+    results = []
+    for cid, rrf_score in fused[:limit]:
+        if cid in chunk_by_id:
+            cat, title, content, vec_sim = chunk_by_id[cid]
+            results.append({
+                "category": cat,
+                "title": title,
+                "content": content,
+                "similarity": round(max(vec_sim, rrf_score), 4),
+            })
+    return results
 
 
 # ---------------------------------------------------------------------------

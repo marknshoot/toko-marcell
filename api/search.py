@@ -298,7 +298,7 @@ def get_embed_model():
     """Load the fastembed sentence transformer lazily.
 
     The model is selected by the ``TEXT_EMBED_MODEL`` env var / config setting.
-    Defaults to ``sentence-transformers/all-MiniLM-L6-v2``.
+    Defaults to ``sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2``.
     """
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
@@ -311,7 +311,7 @@ def get_embed_model():
                     default_model = s.TEXT_EMBED_MODEL
                     default_cache = s.FASTEMBED_CACHE_DIR
                 except Exception:
-                    default_model = "sentence-transformers/all-MiniLM-L6-v2"
+                    default_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
                     default_cache = "/tmp/fastembed_cache"
                 model_name = os.environ.get("TEXT_EMBED_MODEL", default_model)
                 cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", default_cache)

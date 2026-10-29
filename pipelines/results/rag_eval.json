@@ -1,91 +1,288 @@
 {
-  "timestamp": "2026-10-05T02:13:54.195864+00:00",
-  "git_commit": "unknown",
-  "embedding_model": "sentence-transformers/all-MiniLM-L6-v2",
+  "timestamp": "2026-10-29T12:56:02.992693+00:00",
+  "git_commit": "8a29cee",
+  "framework": "ragas",
+  "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "k": 3,
   "query_count": 12,
+  "strategies": {
+    "direct_chunk": {
+      "id_based_context_precision": 0.25,
+      "id_based_context_recall": 0.75,
+      "non_llm_context_precision_with_reference": 0.4722,
+      "non_llm_context_recall": 0.75
+    },
+    "hypothetical_question": {
+      "id_based_context_precision": 0.25,
+      "id_based_context_recall": 0.75,
+      "non_llm_context_precision_with_reference": 0.6944,
+      "non_llm_context_recall": 0.75
+    },
+    "hybrid_rrf": {
+      "id_based_context_precision": 0.3333,
+      "id_based_context_recall": 1.0,
+      "non_llm_context_precision_with_reference": 0.9167,
+      "non_llm_context_recall": 1.0
+    }
+  },
   "direct_chunk": {
-    "hr@1": 0.25,
-    "hr@3": 0.3333,
-    "mrr@3": 0.2917
+    "id_based_context_precision": 0.25,
+    "id_based_context_recall": 0.75,
+    "non_llm_context_precision_with_reference": 0.4722,
+    "non_llm_context_recall": 0.75
   },
   "hypothetical_question": {
-    "hr@1": 0.75,
-    "hr@3": 0.9167,
-    "mrr@3": 0.8194
+    "id_based_context_precision": 0.25,
+    "id_based_context_recall": 0.75,
+    "non_llm_context_precision_with_reference": 0.6944,
+    "non_llm_context_recall": 0.75
+  },
+  "hybrid_rrf": {
+    "id_based_context_precision": 0.3333,
+    "id_based_context_recall": 1.0,
+    "non_llm_context_precision_with_reference": 0.9167,
+    "non_llm_context_recall": 1.0
   },
   "per_query": [
     {
       "query": "ongkir ke surabaya berapa lama",
       "expected": "shipping",
-      "direct_rank": 0,
-      "hyp_rank": 1
+      "reference_chunk_id": 18,
+      "direct_top_ids": [
+        22,
+        19,
+        23
+      ],
+      "hyp_top_ids": [
+        19,
+        16,
+        18
+      ],
+      "hybrid_top_ids": [
+        18,
+        21,
+        19
+      ]
     },
     {
       "query": "gratis ongkir mulai berapa",
       "expected": "shipping",
-      "direct_rank": 0,
-      "hyp_rank": 1
+      "reference_chunk_id": 18,
+      "direct_top_ids": [
+        22,
+        20,
+        13
+      ],
+      "hyp_top_ids": [
+        18,
+        17,
+        7
+      ],
+      "hybrid_top_ids": [
+        18,
+        22,
+        17
+      ]
     },
     {
       "query": "kalau ukuran salah bisa tukar?",
       "expected": "return",
-      "direct_rank": 0,
-      "hyp_rank": 2
+      "reference_chunk_id": 19,
+      "direct_top_ids": [
+        10,
+        9,
+        13
+      ],
+      "hyp_top_ids": [
+        19,
+        16,
+        7
+      ],
+      "hybrid_top_ids": [
+        19,
+        4,
+        3
+      ]
     },
     {
       "query": "berapa lama batas retur barang",
       "expected": "return",
-      "direct_rank": 0,
-      "hyp_rank": 1
+      "reference_chunk_id": 19,
+      "direct_top_ids": [
+        19,
+        22,
+        13
+      ],
+      "hyp_top_ids": [
+        19,
+        16,
+        18
+      ],
+      "hybrid_top_ids": [
+        19,
+        23,
+        22
+      ]
     },
     {
       "query": "cara bayarnya gimana ya",
       "expected": "payment",
-      "direct_rank": 0,
-      "hyp_rank": 1
+      "reference_chunk_id": 17,
+      "direct_top_ids": [
+        22,
+        17,
+        19
+      ],
+      "hyp_top_ids": [
+        17,
+        18,
+        16
+      ],
+      "hybrid_top_ids": [
+        17,
+        21,
+        19
+      ]
     },
     {
       "query": "apakah pembayaran cuma simulasi",
       "expected": "payment",
-      "direct_rank": 0,
-      "hyp_rank": 1
+      "reference_chunk_id": 17,
+      "direct_top_ids": [
+        17,
+        20,
+        22
+      ],
+      "hyp_top_ids": [
+        17,
+        16,
+        19
+      ],
+      "hybrid_top_ids": [
+        17,
+        20,
+        19
+      ]
     },
     {
       "query": "dickies 874 ambil ukuran berapa",
       "expected": "dickies",
-      "direct_rank": 1,
-      "hyp_rank": 1
+      "reference_chunk_id": 7,
+      "direct_top_ids": [
+        13,
+        7,
+        8
+      ],
+      "hyp_top_ids": [
+        7,
+        13,
+        9
+      ],
+      "hybrid_top_ids": [
+        13,
+        7,
+        19
+      ]
     },
     {
       "query": "does champion run large or small",
       "expected": "champion",
-      "direct_rank": 1,
-      "hyp_rank": 1
+      "reference_chunk_id": 10,
+      "direct_top_ids": [
+        10,
+        9,
+        14
+      ],
+      "hyp_top_ids": [
+        10,
+        11,
+        9
+      ],
+      "hybrid_top_ids": [
+        10,
+        9,
+        7
+      ]
     },
     {
       "query": "levis 501 sama 505 beda apa",
       "expected": "levi",
-      "direct_rank": 1,
-      "hyp_rank": 1
+      "reference_chunk_id": 8,
+      "direct_top_ids": [
+        14,
+        8,
+        2
+      ],
+      "hyp_top_ids": [
+        14,
+        13,
+        4
+      ],
+      "hybrid_top_ids": [
+        14,
+        8,
+        13
+      ]
     },
     {
       "query": "birkenstock mending naik atau turun size",
       "expected": "birkenstock",
-      "direct_rank": 2,
-      "hyp_rank": 0
+      "reference_chunk_id": 11,
+      "direct_top_ids": [
+        9,
+        11,
+        10
+      ],
+      "hyp_top_ids": [
+        11,
+        7,
+        9
+      ],
+      "hybrid_top_ids": [
+        11,
+        9,
+        7
+      ]
     },
     {
       "query": "tinggi 170 berat 65 ukuran apa",
       "expected": "tops",
-      "direct_rank": 0,
-      "hyp_rank": 1
+      "reference_chunk_id": 3,
+      "direct_top_ids": [
+        4,
+        13,
+        3
+      ],
+      "hyp_top_ids": [
+        6,
+        1,
+        2
+      ],
+      "hybrid_top_ids": [
+        3,
+        4,
+        5
+      ]
     },
     {
       "query": "tabel ukuran celana berdasarkan pinggang",
       "expected": "bottoms",
-      "direct_rank": 0,
-      "hyp_rank": 3
+      "reference_chunk_id": 4,
+      "direct_top_ids": [
+        8,
+        7,
+        4
+      ],
+      "hyp_top_ids": [
+        6,
+        3,
+        2
+      ],
+      "hybrid_top_ids": [
+        4,
+        3,
+        5
+      ]
     }
   ]
 }

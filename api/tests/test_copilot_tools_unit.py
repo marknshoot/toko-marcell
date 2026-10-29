@@ -174,3 +174,56 @@ class TestSqlAndPoolHardening:
         # 2nd query is the topic-filtered SELECT: asin + (5 keywords * 2) + limit = 12 params max
         _, params = executed[1]
         assert len(params) == 12
+
+    def test_score_policy_chunks_lexical_ranks_bilingual_keywords(self):
+        import agent_tools
+
+        chunks = [
+            (1, "shipping", "3. Shipping & Delivery Guidelines (Pengiriman & Ongkir)", "Gratis ongkir Rp 300.000"),
+            (2, "brand_sizing", "4. Birkenstock (Contoured Footwear)", "EU 41 cork footbed"),
+        ]
+        ranked = agent_tools.score_policy_chunks_lexical("birkenstock mending naik atau turun size", chunks)
+        assert ranked and ranked[0][0] == 2
+
+    def test_hypothetical_questions_strips_brand_section_number(self):
+        from knowledge_seed import _hypothetical_questions
+
+        chunk = {
+            "category": "brand_sizing",
+            "title": "4. Birkenstock (Contoured Footwear — e.g. Arizona, Boston)",
+            "content": "x",
+        }
+        qs = _hypothetical_questions(chunk)
+        assert 1 <= len(qs) <= 5
+        assert any(q.startswith("Birkenstock") for q, _ in qs)
+
+    def test_ragas_id_based_context_metrics(self):
+        import sys
+        import types
+
+        for mod_name, cls_name in [
+            ("langchain_community.chat_models.vertexai", "ChatVertexAI"),
+            ("langchain_community.llms", "VertexAI"),
+        ]:
+            mod = sys.modules.get(mod_name) or types.ModuleType(mod_name)
+            if not hasattr(mod, cls_name):
+                setattr(mod, cls_name, type(cls_name, (), {}))
+            sys.modules[mod_name] = mod
+
+        from ragas import EvaluationDataset, SingleTurnSample, evaluate
+        from ragas.metrics import IDBasedContextPrecision, IDBasedContextRecall
+
+        sample = SingleTurnSample(
+            user_input="ongkir ke surabaya berapa lama",
+            retrieved_contexts=["Shipping & Delivery Guidelines"],
+            reference_contexts=["Shipping & Delivery Guidelines"],
+            retrieved_context_ids=["3"],
+            reference_context_ids=["3"],
+        )
+        res = evaluate(
+            dataset=EvaluationDataset(samples=[sample]),
+            metrics=[IDBasedContextPrecision(), IDBasedContextRecall()],
+            show_progress=False,
+        )
+        assert res.scores[0]["id_based_context_precision"] == 1.0
+        assert res.scores[0]["id_based_context_recall"] == 1.0
