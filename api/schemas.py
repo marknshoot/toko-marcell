@@ -94,6 +94,21 @@ class CopilotChatV2In(BaseModel):
     context: CopilotContextV2 | None = None
 
 
+class CopilotFeedbackIn(BaseModel):
+    """One thumbs up/down vote for a copilot reply.
+
+    ``thread_id`` mirrors the chat contract; ``thread_id`` is required so a vote
+    can be attributed to a conversation even when the browser has rotated its
+    anonymous session id. ``extra="forbid"`` keeps the write surface narrow.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    thread_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    session_id: str | None = Field(default=None, max_length=64)
+    rating: Literal[-1, 1]
+
+
 class CopilotProductV2(BaseModel):
     """A product card in the v2 response. ``ref`` is the stable number shown in
     the chat ("[1]", "[2]") so follow-ups can say "yang kedua"."""

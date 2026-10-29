@@ -1,6 +1,7 @@
 import json
 import urllib.error
 import urllib.request
+import uuid
 
 BASE_URL = "http://localhost:8001"
 VALID_SESSION = "sess-test12345"
@@ -124,6 +125,121 @@ def test_events_summary_parameter_validation():
     # since_days > 365
     status, _ = api_request("GET", "/events/summary?since_days=366")
     assert status == 422
+
+
+def test_events_summary_phase9_blocks():
+    """Phase 9 adds revenue, cohorts and copilot_quality without removing keys."""
+    status, body = api_request("GET", "/events/summary?since_days=1")
+    assert status == 200
+
+    for key in ("revenue", "cohorts", "copilot_quality"):
+        assert key in body
+
+    revenue = body["revenue"]
+    for key in ("order_count", "revenue_idr", "aov_idr"):
+        assert key in revenue
+    assert isinstance(revenue["order_count"], int)
+    assert isinstance(revenue["revenue_idr"], int)
+    assert revenue["aov_idr"] is None or revenue["aov_idr"] >= 0
+
+    cohorts = body["cohorts"]
+    assert {"copilot", "non_copilot", "purchase_source", "caveat"} <= set(cohorts)
+    for cohort in ("copilot", "non_copilot"):
+        c = cohorts[cohort]
+        for key in (
+            "sessions",
+            "sessions_with_add_to_cart",
+            "add_to_cart_rate",
+            "purchase_sessions",
+            "purchase_rate",
+        ):
+            assert key in c
+        assert 0.0 <= (c["add_to_cart_rate"] or 0.0) <= 1.0
+    assert "correlational" in cohorts["caveat"].lower()
+    assert "self-selected" in cohorts["caveat"].lower()
+
+    quality = body["copilot_quality"]
+    for key in (
+        "turns",
+        "unanswered_rate",
+        "guardrail_rate",
+        "avg_latency_ms",
+        "p50_latency_ms",
+        "p95_latency_ms",
+        "thumbs_up",
+        "thumbs_down",
+        "thumbs_up_rate",
+    ):
+        assert key in quality
+    assert quality["turns"] >= 0
+
+
+def test_events_summary_revenue_ignores_purchase_mock_events():
+    """Revenue/AOV are order-derived; a forged browser purchase event must not count."""
+    before_status, before = api_request("GET", "/events/summary?since_days=1")
+    assert before_status == 200
+
+    payload = {
+        "event_type": "purchase_mock",
+        "session_id": f"forged-{uuid.uuid4().hex[:12]}",
+        "qty": 1,
+        "price_idr": 999_999_999,
+    }
+    status, _ = api_request("POST", "/events", payload)
+    assert status == 201
+
+    after_status, after = api_request("GET", "/events/summary?since_days=1")
+    assert after_status == 200
+    assert after["revenue"]["order_count"] == before["revenue"]["order_count"]
+    assert after["revenue"]["revenue_idr"] == before["revenue"]["revenue_idr"]
+    assert after["revenue"]["aov_idr"] == before["revenue"]["aov_idr"]
+
+
+def test_events_summary_cohorts_and_copilot_quality():
+    """A copilot message creates a copilot cohort and a real turn; orders join by session."""
+    copilot_sid = f"cohort-copilot-{uuid.uuid4().hex[:10]}"
+    other_sid = f"cohort-other-{uuid.uuid4().hex[:10]}"
+    thread_id = f"phase9-{uuid.uuid4().hex[:10]}"
+
+    api_request("POST", "/events", {"event_type": "copilot_message", "session_id": copilot_sid, "query": "halo"})
+    api_request("POST", "/events", {"event_type": "add_to_cart", "session_id": copilot_sid, "asin": "B000YXC2LI", "qty": 1, "price_idr": 494700})
+    api_request("POST", "/events", {"event_type": "add_to_cart", "session_id": other_sid, "asin": "B000YXC2LI", "qty": 1, "price_idr": 494700})
+
+    # Greeting path is deterministic (no LLM) and still logs a copilot turn.
+    status, chat = api_request(
+        "POST", "/copilot/chat",
+        {"thread_id": thread_id, "session_id": copilot_sid, "message": "Halo kak"},
+    )
+    assert status == 200
+    assert chat["guardrail"] == "greeting"
+
+    # Server-confirmed order in the copilot session, so cohort purchase join has data.
+    status, order = api_request(
+        "POST", "/checkout/confirm",
+        {"session_id": copilot_sid, "items": [{"asin": "B000YXC2LI", "qty": 1}]},
+    )
+    assert status == 201
+    assert order["status"] == "paid"
+
+    status, body = api_request("GET", "/events/summary?since_days=1")
+    assert status == 200
+
+    copilot = body["cohorts"]["copilot"]
+    non_copilot = body["cohorts"]["non_copilot"]
+    assert body["cohorts"]["purchase_source"] == "orders"
+    assert copilot["sessions"] >= 1
+    assert copilot["sessions_with_add_to_cart"] >= 1
+    assert copilot["purchase_sessions"] >= 1
+    assert non_copilot["sessions"] >= 1
+    assert copilot["add_to_cart_rate"] is not None
+    assert non_copilot["add_to_cart_rate"] is not None
+
+    quality = body["copilot_quality"]
+    assert quality["turns"] >= 1
+    assert quality["guardrail_rate"] is not None
+    assert quality["avg_latency_ms"] is not None
+    assert quality["p50_latency_ms"] is not None
+    assert quality["p95_latency_ms"] is not None
 
 
 # ── Checkout Confirm & Orders (B5) ──────────────────────────────────────────

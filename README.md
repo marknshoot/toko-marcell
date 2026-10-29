@@ -38,19 +38,20 @@ spend.
 
 **North star:** **conversion and AOV of sessions that use an AI/search/rec surface** — reported as two
 metrics, never blended into one score. **Guardrail:** **cost per assisted order**. Recommendation-rail
-impressions are not instrumented yet, so today's definition covers search and copilot sessions; AOV
-moves to server-confirmed `orders` in phase 9.
+impressions are not instrumented yet, so today's definition covers search and copilot sessions. AOV,
+revenue and copilot-vs-non-copilot cohorts are now computed from server-confirmed `orders` (phase 9).
 
 | # | Problem | Feature | KPI it moves | Measured impact (committed artifact) |
 |---|---|---|---|---|
 | 1 | Mixed Indonesian/English or casual queries return nothing or the wrong products | Tri-modal bilingual retrieval: BM25 + multilingual MiniLM + CLIP → RRF, optional reranker | **zero-result rate ↓**, **search-to-PDP ↑** | **Offline:** overall nDCG@10 **0.794 → 0.894**, Indonesian nDCG@10 **0.334 → 0.765**, HR@10 **100%** ([multilingual eval](./pipelines/results/search_eval_multilingual.json)) |
-| 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic `recommend_size` (category-aware in phase 10b) + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.9167** ([RAG eval](./pipelines/results/rag_eval.json)); sizing has no fit-accuracy benchmark yet |
-| 3 | Repetitive shipping/returns/payment questions consume the owner's time | `lookup_store_policy`: hypothetical-question + chunk + IDF lexical RRF | **deflection ↑**, **unanswered rate ↓** | Same RAGAS artifact for retrieval; deflection is planned (phase 12) and there is no human handoff, so it means resolved in-copilot vs an honest “can't answer” |
-| 4 | One-item baskets | Session-aware item-to-item CF + `build_outfit` with `total ≤ budget` enforced in code | **AOV ↑**, **copilot assisted-add rate ↑** | **Offline:** HR@10 **7.96% vs 0.18%** for popularity — **+4,322% relative** ([recommendation eval](./pipelines/results/recs_eval.json)); AOV from orders is planned (phase 9) |
-| 5 | Ungrounded AI answers and token-cost exposure | Guardrail short-circuit, rate limits, 6-tool whitelist, server-validated cart actions | **cost per conversation ↓**, **cost per assisted order ↓** | Guardrail/tool behaviour is unit-tested in CI; **no cost figure is claimed** — tokens are logged in phase 9, unit economics in phase 13 |
+| 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic `recommend_size` (category-aware in phase 10b) + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.9167** ([RAG eval](./pipelines/results/rag_eval.json)); assisted-add and copilot quality are live (phase 9); sizing has no fit-accuracy benchmark yet |
+| 3 | Repetitive shipping/returns/payment questions consume the owner's time | `lookup_store_policy`: hypothetical-question + chunk + IDF lexical RRF | **deflection ↑**, **unanswered rate ↓** | Same RAGAS artifact for retrieval; unanswered logging is live (phase 10), deflection is planned (phase 12), and there is no human handoff, so it means resolved in-copilot vs an honest “can't answer” |
+| 4 | One-item baskets | Session-aware item-to-item CF + `build_outfit` with `total ≤ budget` enforced in code | **AOV ↑**, **copilot assisted-add rate ↑** | **Offline:** HR@10 **7.96% vs 0.18%** for popularity — **+4,322% relative** ([recommendation eval](./pipelines/results/recs_eval.json)); AOV from server-confirmed orders is live (phase 9) |
+| 5 | Ungrounded AI answers and token-cost exposure | Guardrail short-circuit, rate limits, 7-tool whitelist, server-validated cart actions | **cost per conversation ↓**, **cost per assisted order ↓** | Guardrail/tool behaviour is unit-tested in CI; **no cost figure is claimed** — tokens are logged in phase 9, unit economics in phase 13 |
 
 Offline nDCG/RAGAS/HR numbers are proxies on small evaluation sets; they justify shipping a feature,
-not a revenue claim. The live funnel endpoint reports its own caveats, and AOV is not exposed yet.
+not a revenue claim. The live funnel endpoint reports its own caveats; AOV and cohorts are now
+order-derived (phase 9), but the orders are still simulation rows.
 
 **Full business case** — personas, five falsifiable hypotheses, KPI tree, non-goals and honest
 limitations: **[docs/BUSINESS_CASE.md](./docs/BUSINESS_CASE.md)**. Every metric with its definition,
@@ -73,7 +74,7 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 |---|---|---|---|
 | 1 | **Bilingual hybrid retrieval** — BM25 + multilingual MiniLM (`paraphrase-multilingual-MiniLM-L12-v2`, 384-d) + pre-trained CLIP (`fastembed`, 512-d) → RRF (`k=60`) + optional ONNX cross-encoder reranker | lifts overall hybrid **nDCG@10 0.794 → 0.894** (`100%` HR@10) and Indonesian **nDCG@10 0.334 → 0.765** | [API internals](./api/README.md#search--how-it-ranks) |
 | 2 | **RAGAS-evaluated store policy & sizing RAG** — hypothetical-question vectors + direct-chunk vectors + IDF-weighted bilingual lexical RRF | **1.0000 Context Recall** & **0.9167 Context Precision** on 12 bilingual ID+EN queries (`ragas.evaluate`) | [`pipelines/eval_rag.py`](./pipelines/eval_rag.py) |
-| 3 | **Hardened agentic copilot** — LangChain v1 `create_agent` + OpenRouter, LLM guardrail with 3-turn history window (3 user + 3 assistant), `<store_context>` indirect prompt-injection defense, 6 tools, LangGraph Postgres memory | answers only from tool evidence; blocks off-topic and multi-turn injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
+| 3 | **Hardened agentic copilot** — LangChain v1 `create_agent` + OpenRouter, LLM guardrail with 3-turn history window (3 user + 3 assistant), `<store_context>` indirect prompt-injection defense, 7 tools, LangGraph Postgres memory | answers only from tool evidence; blocks off-topic and multi-turn injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
 | 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe (**+4,322% HR@10** vs popularity) | [recommendation engine](./README.md#-recommendation-engine) |
 | 5 | **Raw `psycopg` v3 backend engineering** — connection pooling (`psycopg_pool`), zero ORM, 100% parameterized SQL (`psycopg.sql.Identifier`), bounded sliding-window rate limiting, and non-blocking async I/O | zero SQL injection vectors, bounded memory under IP churn, non-blocking ONNX inference | [backend security](./README.md#-production-reliability-caching--defensive-security) |
 
@@ -156,7 +157,7 @@ It exists to demonstrate four things a hiring manager can verify rather than tak
    standard RAGAS context precision and recall metrics.
 3. **Hardened agentic LLM engineering** — a LangChain v1 `create_agent` loop that can only speak
    from tool results, fronted by an LLM guardrail with a 3-turn history window (3 user + 3 assistant),
-   indirect prompt-injection isolation (`<store_context>` tags + header sanitization), a 6-tool
+   indirect prompt-injection isolation (`<store_context>` tags + header sanitization), a 7-tool
    whitelist, and token/call-count safeguards.
 4. **Backend systems that survive production constraints** — raw `psycopg` v3 connection pooling
    without ORM bloat, 100% parameterized SQL, bounded sliding-window rate limiting, non-blocking
@@ -498,7 +499,7 @@ sequenceDiagram
     participant API as /copilot/chat
     participant G as Guardrail (deterministic, 0 LLM)
     participant A as create_agent loop (≤ 3 model calls)
-    participant T as 6 tools
+    participant T as 7 tools
     participant D as Postgres + pgvector (incl. checkpointer)
     S->>API: {thread_id, message, context?}
     API->>G: classify
@@ -532,7 +533,7 @@ sequenceDiagram
 
 ### The tool layer
 
-Six tools are bound to the agent (`GET /copilot/tools` lists them):
+Seven tools are bound to the agent (`GET /copilot/tools` lists them):
 
 | Tool | Reads from | Answers |
 |---|---|---|
@@ -542,10 +543,13 @@ Six tools are bound to the agent (`GET /copilot/tools` lists them):
 | `build_outfit` | catalog search; total summed and verified ≤ budget **in code** | top + bottom + shoes within budget |
 | `lookup_store_policy` | `store_knowledge` / `store_knowledge_questions` (hypothetical-question RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
 | `add_to_cart` | re-reads the price from the DB, returns a `ui_action` the browser executes through `CartProvider` (localStorage) | "add this to my cart" |
+| `flag_unanswered` | no catalog read; sets `ToolContext.unanswered`, so the turn recorder logs the truncated question with `outcome=unanswered` | honest "I'm not sure" fallback instead of guessing |
 
-Tool *results* are compacted before they re-enter the prompt — a token-budget safeguard that also
-keeps answers focused. There is deliberately **no order-status tool**, because checkout is a demo
-simulation with no fulfillment to look up.
+The prompt is deliberately scoped to three jobs — **sizing**, **store policy / QRIS / returns**, and
+**outfit under a budget**. Product discovery still works, but replies stay short and point shoppers
+to the store search bar for full-catalog browsing. Tool *results* are compacted before they re-enter
+the prompt — a token-budget safeguard that also keeps answers focused. There is deliberately **no
+order-status tool**, because checkout is a demo simulation with no fulfillment to look up.
 
 ### Grounding rules baked into the prompt
 
@@ -559,6 +563,8 @@ simulation with no fulfillment to look up.
   [`api/knowledge/size_chart.json`](./api/knowledge/size_chart.json), not hallucinated and not mined
   per product.
 - Outfit recommendations must sum to a total inside the shopper's stated budget.
+- When tool evidence cannot answer, the model must call `flag_unanswered` and say it is unsure rather
+  than guess; the question is logged (truncated to 300 characters) for later review.
 - Off-topic requests are politely refused and redirected to fashion.
 
 ### Memory and session context
@@ -588,7 +594,7 @@ exercises the full agent and tool path **without ever calling a real LLM**.
 referenced_asins[≤3]}}` with `extra="forbid"`. The turn payload contains `{reply, thread_id, products[≤6] (each
 with a `ref`), ui_actions (`add_to_cart`), tool_calls, guardrail, took_ms}`.
 In the storefront (`CopilotChat.js`), shoppers can search and attach up to 3 products via the paperclip (`📎`) menu (`referenced_asins`), see a pulsing `"Sedang berpikir..."` indicator while waiting for the first token, and view streamed replies rendered as GitHub Flavored Markdown (`react-markdown` + `remark-gfm`). Errors are `422` (validation), `429` (rate limit),
-`503` (no LLM key) and `502` (upstream failure). `GET /copilot/tools` returns the 6 tool names.
+`503` (no LLM key) and `502` (upstream failure). `GET /copilot/tools` returns the 7 tool names.
 
 ### Knowledge base (RAG)
 

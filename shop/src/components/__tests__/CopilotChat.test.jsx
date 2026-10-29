@@ -46,7 +46,9 @@ describe("CopilotChat v2", () => {
     );
     openPanel(container);
     expect(getByText("Ukuran saya TB 170 BB 65")).toBeTruthy();
-    expect(getByText("Info bayar QRIS & retur")).toBeTruthy();
+    expect(getByText("Info QRIS, ongkir & retur")).toBeTruthy();
+    expect(getByText("Outfit kondangan < Rp500rb")).toBeTruthy();
+    expect(queryByText("Jaket buat hujan")).toBeNull();
 
     const input = getByLabelText("Ketik pesan untuk Admin Toko Marcell");
     fireEvent.change(input, { target: { value: "Halo" } });
@@ -63,7 +65,9 @@ describe("CopilotChat v2", () => {
         <CopilotChat embedded pageAsin="B01" pageTitle="Chino Pant" />
       </CartProvider>
     );
-    expect(getByText("Bahannya panas nggak?")).toBeTruthy();
+    expect(getByText("Ukuran saya pas yang mana?")).toBeTruthy();
+    expect(getByText("Info QRIS, ongkir & retur")).toBeTruthy();
+    expect(getByText("Outfit dengan produk ini < Rp1jt")).toBeTruthy();
   });
 
   it("opens the floating panel with product attached on a copilot:open event", async () => {
@@ -82,7 +86,7 @@ describe("CopilotChat v2", () => {
 
     expect(await findByText(/Dickies 874/)).toBeTruthy();
     expect(container.querySelector('[role="dialog"]')).toBeTruthy();
-    expect(await findByText("Bahannya panas nggak?")).toBeTruthy();
+    expect(await findByText("Ukuran saya pas yang mana?")).toBeTruthy();
   });
 
   it("allows searching and attaching products via the paperclip menu", async () => {
@@ -257,6 +261,42 @@ describe("CopilotChat v2", () => {
     expect(getByText("📎 Lampirkan")).toBeTruthy();
     expect(queryByText("Bandingkan")).toBeNull();
     expect(queryByText("Ukuran?")).toBeNull();
+  });
+
+  it("posts thumbs up and down feedback under an assistant message", async () => {
+    vi.spyOn(api, "streamCopilotMessage").mockResolvedValue({
+      reply: "Halo kak!",
+      thread_id: "t1",
+      products: [],
+      ui_actions: [],
+      guardrail: "greeting",
+      took_ms: 10,
+    });
+    const feedbackSpy = vi.spyOn(api, "postCopilotFeedback").mockResolvedValue({ id: 1 });
+
+    const { container, getByLabelText, getByText } = render(
+      <CartProvider>
+        <CopilotChat />
+      </CartProvider>
+    );
+    openPanel(container);
+    const input = getByLabelText("Ketik pesan untuk Admin Toko Marcell");
+    fireEvent.change(input, { target: { value: "Halo" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(getByText("Halo kak!")).toBeTruthy());
+
+    const up = getByLabelText("Jawaban membantu");
+    fireEvent.click(up);
+    await waitFor(() => expect(feedbackSpy).toHaveBeenCalledTimes(1));
+    expect(feedbackSpy.mock.calls[0][0]).toMatchObject({ rating: 1 });
+    expect(up.getAttribute("aria-pressed")).toBe("true");
+
+    const down = getByLabelText("Jawaban tidak membantu");
+    fireEvent.click(down);
+    await waitFor(() => expect(feedbackSpy).toHaveBeenCalledTimes(2));
+    expect(feedbackSpy.mock.calls[1][0]).toMatchObject({ rating: -1 });
+    expect(down.getAttribute("aria-pressed")).toBe("true");
   });
 
   it("reset calls deleteCopilotThread and clears messages", async () => {

@@ -51,6 +51,9 @@ class ToolContext:
     db_url: str
     page_asin: str | None = None
     referenced_asins: list[str] = field(default_factory=list)
+    # Set by flag_unanswered when the tool evidence cannot answer honestly.
+    unanswered: bool = False
+    unanswered_question: str | None = None
     # registry: ref(int) -> product dict (title, asin, priceIdr, ...)
     registry: dict[int, dict] = field(default_factory=dict)
     # refs shown during the *current* turn (what the response cards should show)
@@ -243,6 +246,19 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         ctx.ui_actions.append(action)
         return {"ok": True, "ui_action": action}
 
+    @tool
+    def flag_unanswered(question: str, reason: str) -> dict:
+        """Call this when the available tool evidence cannot answer the shopper's
+        question. `question` is the shopper's question as asked; `reason` is a
+        short internal note. The turn is logged as unanswered, and the reply must
+        say you are unsure and suggest rephrasing or checking the product page or
+        store policy. Never guess to fill the gap."""
+        ctx.unanswered = True
+        cleaned = (question or "").strip()
+        ctx.unanswered_question = cleaned[:300] or None
+        logger.info("[copilot] unanswered turn flagged: %s", (reason or "").strip()[:160])
+        return {"ok": True}
+
     return [
         search_catalog,
         get_product_details,
@@ -250,6 +266,7 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         build_outfit,
         lookup_store_policy,
         add_to_cart,
+        flag_unanswered,
     ]
 
 

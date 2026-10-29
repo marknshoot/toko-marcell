@@ -137,6 +137,55 @@ class TestAddToCartAction:
         assert ctx.ui_actions == [action]
 
 
+class TestFlagUnanswered:
+    def test_sets_context_and_truncates_question(self):
+        ctx = _ctx()
+        flag = next(t for t in build_tools(ctx) if t.name == "flag_unanswered")
+
+        result = flag.invoke({"question": "  " + "x" * 350 + "  ", "reason": "no evidence"})
+
+        assert result == {"ok": True}
+        assert ctx.unanswered is True
+        assert ctx.unanswered_question == "x" * 300
+
+    def test_blank_question_still_marks_the_turn(self):
+        ctx = _ctx()
+        flag = next(t for t in build_tools(ctx) if t.name == "flag_unanswered")
+
+        assert flag.invoke({"question": "   ", "reason": "no evidence"}) == {"ok": True}
+        assert ctx.unanswered is True
+        assert ctx.unanswered_question is None
+
+    def test_public_tool_names_match_build_tools(self):
+        from routers.copilot import V2_TOOL_NAMES
+
+        names = [t.name for t in build_tools(_ctx())]
+        assert len(names) == 7
+        assert "flag_unanswered" in names
+        assert names == V2_TOOL_NAMES
+
+
+class TestPromptScope:
+    def test_prompt_covers_three_jobs_and_has_no_handoff_language(self):
+        from copilot_agent import ADMIN_SYSTEM_PROMPT
+
+        prompt = ADMIN_SYSTEM_PROMPT
+        lowered = prompt.lower()
+
+        assert "JOB 1 — SIZING" in prompt
+        assert "JOB 2 — STORE POLICY" in prompt
+        assert "JOB 3 — OUTFIT UNDER BUDGET" in prompt
+        assert "recommend_size" in prompt
+        assert "lookup_store_policy" in prompt
+        assert "build_outfit" in prompt
+        assert "search bar" in lowered
+        assert "GROUNDING" in prompt
+        assert "SECURITY" in prompt
+
+        for forbidden in ("whatsapp", "review", "handoff", "human-agent", "human agent"):
+            assert forbidden not in lowered
+
+
 class TestCheckpointSeeding:
     class _FakeCheckpointer:
         def __init__(self, messages):

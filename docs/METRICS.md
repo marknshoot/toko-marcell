@@ -38,16 +38,16 @@ the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`
 | Metric | Status | Primary source |
 |---|---|---|
 | [Conversion rates](#conversion-rates) | Live | `events` → `GET /events/summary` |
-| [AOV](#aov) | Planned (phase 9) | `orders` |
+| [AOV](#aov) | Live (phase 9) | `orders` → `GET /events/summary.revenue` |
 | [Zero-result rate](#zero-result-rate) | Live | `events` (`search`) → `GET /events/summary` |
 | [Search-to-PDP](#search-to-pdp) | Live (proxy) | `events` → `GET /events/summary`; by mode planned (phase 11) |
 | [Copilot assisted-add rate](#copilot-assisted-add-rate) | Live (proxy) | `events` → `GET /events/summary` |
-| [Deflection](#deflection) | Planned (phase 12) | `copilot_turns` (phase 9), `/admin/kpi` (phase 12) |
-| [Unanswered rate](#unanswered-rate) | Planned (phase 10 logging, phase 12 surface) | `copilot_turns.outcome` |
-| [Thumbs-up rate](#thumbs-up-rate) | Planned (phase 9) | `copilot_feedback`, `POST /copilot/feedback` |
+| [Deflection](#deflection) | Planned (phase 12) | `copilot_turns` (outcomes + fallback live in phase 10), `/admin/kpi` (phase 12) |
+| [Unanswered rate](#unanswered-rate) | Live (phase 10) | `copilot_turns.outcome` + `unanswered_question` → `GET /events/summary.copilot_quality` |
+| [Thumbs-up rate](#thumbs-up-rate) | Live (phase 9) | `copilot_feedback` → `GET /events/summary.copilot_quality` |
 | [Cost per conversation](#cost-per-conversation) | Planned (phase 13) | `copilot_turns` tokens × configured prices |
 | [Cost per assisted order](#cost-per-assisted-order) | Planned (phase 13) | `copilot_turns` + `orders` |
-| [Latency p50 and p95](#latency-p50-and-p95) | Planned (phase 9 logging, phase 12 surface) | `copilot_turns.latency_ms` |
+| [Latency p50 and p95](#latency-p50-and-p95) | Live (phase 9); dashboard surface phase 12 | `copilot_turns.latency_ms` → `GET /events/summary.copilot_quality` |
 
 ---
 
@@ -78,7 +78,8 @@ user-level or order-level conversion rates, and they are not a strict first-touc
 - **Event loss biases downward.** The frontend posts fire-and-forget (`keepalive: true`, errors
   swallowed), so lost events are invisible.
 - **`purchase_mock` is client-assertable.** Checkout confirm writes it today, but `POST /events`
-  accepts it from any client. Use `orders` for revenue-grade metrics; phase 9 exposes AOV and cohorts.
+  accepts it from any client. Revenue, AOV and cohorts are now exposed from `orders` by
+  `GET /events/summary` (phase 9); the event conversion rates remain directional proxies.
 - **Session boundary bias.** A cart created in one tab and purchased in another is two sessions;
   a session that starts before the window and purchases inside it is missing its earlier step.
 - **No bot or test-traffic filtering.** Rate limits bound abuse but do not remove it.
@@ -88,8 +89,8 @@ user-level or order-level conversion rates, and they are not a strict first-touc
 
 ## AOV
 
-**Status:** Planned (phase 9). The `orders` table already exists and is server-computed; the endpoint
-does not expose AOV yet.
+**Status:** Live (phase 9). Returned by `GET /events/summary` in the `revenue` block, alongside
+`order_count` and `revenue_idr`.
 
 **Definition:** Average value of server-confirmed orders created in the window, in IDR.
 
@@ -103,9 +104,10 @@ WHERE created_at > now() - make_interval(days => :since_days)
 ```
 
 **Source:** `orders.total_idr`, `orders.created_at`, `orders.status`; line-level detail in
-`order_items`. Checkout computes the total server-side from `products.price_idr`; the client sends
-only `{asin, qty}` and cannot set a price (`ConfirmIn` forbids extra fields). Planned exposure:
-`GET /events/summary` (phase 9).
+`order_items`; exposed by [`api/routers/events.py`](../api/routers/events.py) as
+`revenue.aov_idr`, `revenue.revenue_idr` and `revenue.order_count`. Checkout computes the total
+server-side from `products.price_idr`; the client sends only `{asin, qty}` and cannot set a price
+(`ConfirmIn` forbids extra fields).
 
 **Caveats:**
 
@@ -214,8 +216,8 @@ aggregated in [`api/routers/events.py`](../api/routers/events.py). Phase 9 adds
 - **Event counts, not sessions or orders.** One engaged user can add many times.
 - **Selection bias.** Shoppers who open the copilot are more engaged than those who do not; there is
   no control group. Never call the rate "lift".
-- **No order linkage in the current metric.** Phase 9 can join `session_id` to `orders` for cohort
-  analysis.
+- **No order linkage in the rate itself.** Phase 9 joins `session_id` to `orders` for the
+  `GET /events/summary.cohorts` blocks; the `copilot_add_to_cart` rate remains an event-count share.
 - **Spoofable.** Any client can post either event type.
 - **Null when there are no add-to-cart events.**
 
@@ -223,8 +225,8 @@ aggregated in [`api/routers/events.py`](../api/routers/events.py). Phase 9 adds
 
 ## Deflection
 
-**Status:** Planned (phase 12). Outcome fields are logged in phase 9; honest "can't answer" is added
-in phase 10. Surfaced by `GET /admin/kpi` in phase 12.
+**Status:** Planned (phase 12). Outcomes and the honest fallback are logged now (phase 10); the
+conversation-level deflection view is surfaced by `GET /admin/kpi` in phase 12.
 
 **Definition:** Share of copilot conversations resolved inside the copilot with a grounded answer,
 rather than ending in an explicit "I can't answer that" turn.
@@ -241,8 +243,8 @@ deflection = COUNT(deflected) / COUNT(eligible)
 ```
 
 **Source:** `copilot_turns` (`thread_id`, `session_id`, `outcome`, `created_at` — phase 9);
-`flag_unanswered` sets `outcome='unanswered'` (phase 10); aggregated by `/admin/kpi` (phase 12).
-If the final schema names differ, this formula is the intended contract.
+`flag_unanswered` sets `outcome='unanswered'` (live in phase 10); aggregated by `/admin/kpi`
+(phase 12). The committed schema uses the column names above.
 
 **Caveats:**
 
@@ -261,58 +263,60 @@ If the final schema names differ, this formula is the intended contract.
 
 ## Unanswered rate
 
-**Status:** Planned (phase 10 logging, phase 12 surface). The `flag_unanswered` tool marks a turn
-`outcome='unanswered'`; the dashboard aggregates it in phase 12.
+**Status:** Live (phase 10). `GET /events/summary` returns `copilot_quality.unanswered_rate`.
 
-**Definition:** Share of eligible copilot turns where the assistant explicitly could not ground an
-answer in store evidence.
+**Definition:** Share of logged copilot turns where the model called `flag_unanswered` because it
+could not answer from tool evidence, and did not complete a cart action.
 
 **Formula:**
 
 ```
-eligible   = turns with outcome IN ('answered', 'unanswered')
-unanswered = turns with outcome = 'unanswered'
-unanswered_rate = unanswered / eligible
+unanswered_rate = COUNT(outcome = 'unanswered') / COUNT(*)
 ```
 
-Guardrail-blocked turns, provider errors and empty turns are excluded from both numerator and
-denominator.
+`derive_outcome` precedence is `error → guardrail → cart → unanswered → answered`. A turn that both
+calls `add_to_cart` and flags a fallback is counted as `cart`, because the shopper still received a
+concrete server-validated outcome.
 
-**Source:** `copilot_turns.outcome` (phase 9 schema, phase 10 values); `flag_unanswered` tool
-(phase 10); `GET /admin/kpi` (phase 12).
+**Source:** `copilot_turns.outcome`; the tool's `question` argument is stored in
+`copilot_turns.unanswered_question` (trimmed to 300 characters) for audit and future query analysis;
+`GET /events/summary.copilot_quality`; dashboard in phase 12.
 
 **Caveats:**
 
 - **Measures self-declared inability, not all errors.** A confidently wrong answer is not counted;
   groundedness needs an audit sample or the phase-14 golden set.
+- **The denominator includes guardrail blocks and provider errors.** That is a true share of all
+  turns, but it conflates off-topic/abuse with knowledge gaps. A future knowledge-gap variant should
+  filter to `outcome IN ('answered', 'unanswered')`; state the denominator explicitly.
 - **Depends on the model actually calling `flag_unanswered`.** Prompt/tool compliance is part of the
-  metric's validity.
+  metric's validity; the prompt requires the tool before an honest fallback, but the model can still
+  answer weakly without it.
+- **Raw shopper text is stored.** `unanswered_question` holds the first 300 characters of the user
+  question; there is no PII scrub or retention policy yet. Treat it as user content and restrict
+  access.
 - **Turn-level weights chatty conversations.** Report a conversation-level companion (share of
   threads with any unanswered turn) beside it.
-- **Denominator choice matters.** Including guardrail blocks would conflate abuse/off-topic with
-  knowledge gaps.
 - **No human handoff.** An unanswered turn ends the interaction; it does not escalate.
 
 ---
 
 ## Thumbs-up rate
 
-**Status:** Planned (phase 9). `POST /copilot/feedback` plus thumbs UI and a `copilot_feedback`
-table.
+**Status:** Live (phase 9). `POST /copilot/feedback` writes a `copilot_feedback` row; the aggregate is
+in `GET /events/summary.copilot_quality`.
 
 **Definition:** Share of explicit copilot feedback votes that are positive.
 
 **Formula:**
 
 ```
-thumbs_up_rate = COUNT(rating='up') / COUNT(rating IN ('up', 'down'))
+thumbs_up_rate = COUNT(rating=1) / COUNT(rating IN (-1, 1))
 ```
 
-If multiple votes per turn are allowed, deduplicate to the latest vote per `(thread_id, turn_id)`
-before aggregating; document the dedupe rule with the implementation.
-
-**Source:** `copilot_feedback` table; `POST /copilot/feedback`; thumbs UI (phase 9). Unique-key and
-column names are defined by the phase-9 migration.
+**Source:** `copilot_feedback` table (`thread_id`, optional `session_id`, `rating` ∈ {-1, 1});
+`POST /copilot/feedback`; thumbs UI in `shop/src/components/CopilotChat.js`; exposed in
+`copilot_quality.thumbs_up`, `.thumbs_down`, `.thumbs_up_rate`.
 
 **Caveats:**
 
@@ -320,7 +324,13 @@ column names are defined by the phase-9 migration.
   representative of all conversations.
 - **No neutral option.** A thumbs-down can mean a wrong answer, a correct-but-unhelpful answer, tone,
   latency, or a UI mistake.
-- **Per-turn vs per-conversation.** Pick one and state it; mixing levels changes the denominator.
+- **Per-turn vs per-conversation.** The phase-9 endpoint stores a raw vote row per click; it is
+  conversation-level feedback in practice. The UI prevents re-clicking the same rating but does not
+  deduplicate votes across reloads, so repeated votes inflate the raw share.
+- **No turn_id.** Feedback is linked to `thread_id`, not to one specific assistant message; a
+  multi-turn conversation's vote cannot be attributed to a single answer.
+- **Thread ids are not validated against turns.** The endpoint accepts any well-formed `thread_id`
+  (rate-limited, but not authenticated), so the raw vote count is spoofable.
 - **Can be gamed or accidentally clicked**, and a thumbs-up does not prove factual correctness.
 - **Not comparable across releases** without controlling prompt, model and UI changes.
 
@@ -336,14 +346,16 @@ price-per-1k-token and the cost calculation land in phase 13.
 **Formula:**
 
 ```
-turn_cost = tokens_in / 1000 * price_per_1k_input
-          + tokens_out / 1000 * price_per_1k_output
+turn_cost = input_tokens / 1000 * price_per_1k_input
+          + output_tokens / 1000 * price_per_1k_output
 
 cost_per_conversation = SUM(turn_cost) / COUNT(DISTINCT thread_id)
 ```
 
-**Source:** `copilot_turns` (`thread_id`, `tokens_in`, `tokens_out`, `model`, `created_at` — phase 9);
-configured input/output prices (phase 13); `GET /admin/kpi` (phase 12/13).
+**Source:** `copilot_turns` (`thread_id`, `input_tokens`, `output_tokens`, `model`, `created_at` —
+phase 9); configured input/output prices (phase 13); `GET /admin/kpi` (phase 12/13). `tokens_in` /
+`tokens_out` were the old draft names; the committed columns are `input_tokens` / `output_tokens`.
+`cost_usd` is reserved and stays `NULL` until phase 13 writes the price table.
 
 **Caveats:**
 
@@ -402,22 +414,24 @@ phase 13; `GET /admin/kpi` (phase 12/13). Orders remain the only revenue-grade s
 
 ## Latency p50 and p95
 
-**Status:** Planned (phase 9 logging; phase 12 surface). `copilot_turns.latency_ms` is written per
-turn; `/admin/kpi` exposes p50/p95.
+**Status:** Live (phase 9). `copilot_turns.latency_ms` is written per turn; `GET /events/summary`
+returns `copilot_quality.avg_latency_ms`, `p50_latency_ms` and `p95_latency_ms`. The phase-12
+dashboard reuses the same aggregation.
 
-**Definition:** Median and 95th-percentile server-side wall-clock duration of a copilot turn.
+**Definition:** Mean, median and 95th-percentile server-side wall-clock duration of a copilot turn.
 
 **Formula:**
 
 ```sql
-SELECT percentile_cont(0.5)  WITHIN GROUP (ORDER BY latency_ms) AS p50,
-       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95
+SELECT AVG(latency_ms) AS avg_latency_ms,
+       percentile_cont(0.5)  WITHIN GROUP (ORDER BY latency_ms) AS p50_latency_ms,
+       percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_latency_ms
 FROM copilot_turns
 WHERE created_at > now() - make_interval(days => :since_days);
 ```
 
-**Source:** `copilot_turns.latency_ms` (phase 9); `GET /admin/kpi` (phase 12); SLO targets and alert
-thresholds are documented in phase 13.
+**Source:** `copilot_turns.latency_ms` (phase 9); `GET /events/summary.copilot_quality` (phase 9);
+`GET /admin/kpi` (phase 12); SLO targets and alert thresholds are documented in phase 13.
 
 **Caveats:**
 
@@ -438,8 +452,8 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 
 | Metric | Status | Definition / formula | Source | Caveat |
 |---|---|---|---|---|
-| Guardrail block rate | Planned (phase 9) | `turns with a blocking guardrail label / all copilot turns` | `copilot_turns.guardrail_label` | A block is not automatically correct; false positives need the phase-14 golden set. |
-| Items per order | Planned (phase 9) | `SUM(orders.item_count) / COUNT(orders)` or `SUM(order_items.qty) / COUNT(DISTINCT order_id)` | `orders.item_count`, `order_items.qty` | Same simulation caveats as AOV; no cancellation model. |
+| Guardrail short-circuit rate | Live (phase 9) | `turns with outcome='guardrail' / all copilot turns` | `copilot_turns.outcome` → `copilot_quality.guardrail_rate` | Counts every deterministic label, including greetings; it is not only unsafe blocks. False positives need the phase-14 golden set. |
+| Items per order | Computable now, not exposed | `SUM(orders.item_count) / COUNT(orders)` or `SUM(order_items.qty) / COUNT(DISTINCT order_id)` | `orders.item_count`, `order_items.qty` | Same simulation caveats as AOV; no cancellation model. |
 | Offline retrieval quality | Live (offline) | nDCG@10, MRR@10, HR@10, P@10 over a fixed query set | [`search_eval_multilingual.json`](../pipelines/results/search_eval_multilingual.json), [`search_eval.json`](../pipelines/results/search_eval.json) | 32 queries, authored relevance labels; a proxy, not online behaviour. |
 | Offline policy/size-guide RAG | Live (offline) | RAGAS Context Precision / Recall at k=3 | [`rag_eval.json`](../pipelines/results/rag_eval.json) | 12 bilingual queries; measures retrieval, not answer correctness or fit accuracy. |
 | Offline recommendation ranking | Live (offline) | Sequential leave-one-out HR@10 / HR@5 / MRR@10 / nDCG@10 | [`recs_eval.json`](../pipelines/results/recs_eval.json) | 5,000 sampled active users, seed 42; offline holdout, not online CTR. |
@@ -450,9 +464,9 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 
 | Phase | What becomes available |
 |---|---|
-| 8 (this phase) | Dictionary and business framing only; no new metric is computed. |
-| 9 | AOV from `orders`; copilot turn logging (latency, tools, guardrail, outcome, tokens); `copilot_feedback` and thumbs UI; copilot-user vs non-user cohorts (descriptive); zero-result rate already live. |
-| 10 | `outcome='unanswered'` logging through `flag_unanswered`; copilot refocused on sizing, policy and outfit jobs. |
+| 8 | Dictionary and business framing only; no new metric is computed. |
+| 9 (shipped) | AOV/revenue from `orders`; `copilot_turns` logging (latency, tools, guardrail, outcome, tokens); `copilot_feedback` + thumbs UI; copilot-user vs non-user cohorts (descriptive); `copilot_quality` aggregate (unanswered/guardrail/latency/thumbs). |
+| 10 (shipped) | `outcome='unanswered'` logging through `flag_unanswered` (question stored, 300-char cap); copilot refocused on sizing, policy and outfit jobs. |
 | 11 | `GET /search/insights`: top zero-result queries and search-to-PDP by mode; ID→EN rewrite fallback. |
 | 12 | `GET /admin/kpi`: funnel, cohorts, deflection, unanswered, search health, cost, p50/p95; `synthetic` badge. |
 | 13 | Cost per turn, cost per conversation, cost per resolved conversation and cost per assisted order; SLOs and cache. |
