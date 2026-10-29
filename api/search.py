@@ -201,9 +201,27 @@ _INDEX_LOCK = threading.Lock()
 
 def build_search_index(db_url: str | None = None) -> BM25Index:
     """Read the catalog from PostgreSQL and build the in-process BM25 index."""
+    import contextlib
+
     import psycopg
-    url = db_url or os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
-    with psycopg.connect(url) as conn:
+
+    def _conn_cm():
+        if not db_url:
+            try:
+                from db import get_conn
+                return get_conn()
+            except Exception:
+                pass
+        url = db_url
+        if not url:
+            try:
+                from config import get_settings
+                url = get_settings().DATABASE_URL
+            except Exception:
+                url = os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
+        return contextlib.contextmanager(lambda: (yield psycopg.connect(url)))()
+
+    with _conn_cm() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -287,11 +305,16 @@ def get_embed_model():
         with _EMBED_LOCK:
             if _EMBED_MODEL is None:
                 from fastembed import TextEmbedding
-                model_name = os.environ.get(
-                    "TEXT_EMBED_MODEL",
-                    "sentence-transformers/all-MiniLM-L6-v2",
-                )
-                cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", "/tmp/fastembed_cache")
+                try:
+                    from config import get_settings
+                    s = get_settings()
+                    default_model = s.TEXT_EMBED_MODEL
+                    default_cache = s.FASTEMBED_CACHE_DIR
+                except Exception:
+                    default_model = "sentence-transformers/all-MiniLM-L6-v2"
+                    default_cache = "/tmp/fastembed_cache"
+                model_name = os.environ.get("TEXT_EMBED_MODEL", default_model)
+                cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", default_cache)
                 _EMBED_MODEL = TextEmbedding(
                     model_name=model_name,
                     cache_dir=cache_dir,

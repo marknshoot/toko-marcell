@@ -4,8 +4,11 @@ import logging
 import secrets
 
 from db import get_conn
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from rate_limiter import check_write_rate_limit
 from schemas import ConfirmIn
+
+from routers.copilot import _get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -13,8 +16,15 @@ router = APIRouter()
 
 
 @router.post("/checkout/confirm", status_code=201)
-def confirm_checkout(payload: ConfirmIn):
+def confirm_checkout(payload: ConfirmIn, request: Request):
     """Turn a cart into a paid order — the authoritative step."""
+    allowed, retry_after = check_write_rate_limit(_get_client_ip(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many checkout requests. Please try again shortly.",
+            headers={"Retry-After": str(retry_after)},
+        )
     wanted: dict[str, int] = {}
     for item in payload.items:
         wanted[item.asin] = wanted.get(item.asin, 0) + item.qty

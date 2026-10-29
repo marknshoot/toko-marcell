@@ -3,8 +3,11 @@
 import logging
 
 from db import get_conn
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, HTTPException, Query, Request
+from rate_limiter import check_write_rate_limit
 from schemas import EventIn
+
+from routers.copilot import _get_client_ip
 
 logger = logging.getLogger(__name__)
 
@@ -19,7 +22,14 @@ def rate(numerator, denominator):
 
 
 @router.post("/events", status_code=201)
-def create_event(event: EventIn):
+def create_event(event: EventIn, request: Request):
+    allowed, retry_after = check_write_rate_limit(_get_client_ip(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many events. Please slow down.",
+            headers={"Retry-After": str(retry_after)},
+        )
     with get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
