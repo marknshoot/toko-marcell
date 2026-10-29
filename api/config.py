@@ -62,11 +62,6 @@ class Settings(BaseSettings):
     # ── Model paths / caches ────────────────────────────────────────────────
     FASTEMBED_CACHE_DIR: str = "/tmp/fastembed_cache"
     HF_HUB_CACHE: str = "/tmp/hf_cache"
-    HF_MODEL_REPO: str = "Marcell-Kristianto/toko-marcell-clip"
-    CLIP_MODEL_DIR: str = ""
-    CLIP_VISION_ONNX_PATH: str = ""
-    CLIP_VISION_ONNX_PREFER: str = "int8"
-    CLIP_TEXT_ONNX_PATH: str = ""
 
     # ── Image fetch (SSRF protection) ───────────────────────────────────────
     IMAGE_FETCH_ALLOWED_HOSTS: str = (

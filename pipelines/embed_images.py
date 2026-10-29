@@ -81,6 +81,7 @@ def main():
     parser.add_argument("--batch-size", type=int, default=BATCH_SIZE)
     parser.add_argument("--download-workers", type=int, default=DOWNLOAD_WORKERS)
     parser.add_argument("--limit", type=int, default=0, help="Optional limit for dry runs")
+    parser.add_argument("--overwrite", action="store_true", help="Re-embed all rows even if image_embedding is already set")
     args = parser.parse_args()
 
     IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
@@ -94,10 +95,11 @@ def main():
             )
             conn.commit()
 
-            query = """
+            where_clause = "WHERE image_url IS NOT NULL" if args.overwrite else "WHERE image_url IS NOT NULL AND image_embedding IS NULL"
+            query = f"""
                 SELECT id, asin, image_url
                 FROM products
-                WHERE image_url IS NOT NULL AND image_embedding IS NULL
+                {where_clause}
                 ORDER BY id ASC
             """
             if args.limit > 0:
@@ -132,7 +134,11 @@ def main():
     log(f"Loading CLIP model {MODEL_NAME} via fastembed...")
     t_model = time.perf_counter()
     model_path = os.path.expanduser("~/.cache/fastembed/models--Qdrant--clip-ViT-B-32-vision")
-    embed_model = ImageEmbedding(model_name=MODEL_NAME, specific_model_path=model_path)
+    embed_model = (
+        ImageEmbedding(model_name=MODEL_NAME, specific_model_path=model_path)
+        if os.path.isdir(model_path)
+        else ImageEmbedding(model_name=MODEL_NAME)
+    )
     log(f"Model loaded in {time.perf_counter() - t_model:.1f}s.")
 
     valid_items = [(pid, asin, downloaded_paths[pid]) for pid, asin, _ in targets if pid in downloaded_paths]

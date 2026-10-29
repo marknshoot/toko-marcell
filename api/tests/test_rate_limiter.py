@@ -16,7 +16,7 @@ import pytest
 API_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API_DIR))
 
-from rate_limiter import SlidingWindowLimiter
+from rate_limiter import MAX_TRACKED_KEYS, SlidingWindowLimiter, check_write_rate_limit, reset_limiters
 
 BASE_URL = "http://localhost:8001"
 
@@ -39,6 +39,30 @@ def test_sliding_window_isolates_keys():
     assert lim.is_allowed("ip1")[0] is True
     assert lim.is_allowed("ip2")[0] is True
     assert lim.is_allowed("ip1")[0] is False  # ip1 already hit limit
+
+
+def test_sliding_window_sweeps_expired_buckets():
+    lim = SlidingWindowLimiter(window_seconds=1, max_requests=2)
+    for i in range(MAX_TRACKED_KEYS):
+        lim._buckets[f"stale-{i}"] = [0.0]  # expired timestamp
+    assert len(lim._buckets) == MAX_TRACKED_KEYS
+    allowed, _, _ = lim.is_allowed("fresh-ip")
+    assert allowed is True
+    assert len(lim._buckets) == 1
+    assert "fresh-ip" in lim._buckets
+
+
+def test_write_rate_limit_enforces_cap(monkeypatch):
+    monkeypatch.setenv("WRITE_RATE_LIMIT_PER_MIN", "2")
+    reset_limiters()
+    try:
+        assert check_write_rate_limit("writer-ip")[0] is True
+        assert check_write_rate_limit("writer-ip")[0] is True
+        allowed, retry = check_write_rate_limit("writer-ip")
+        assert allowed is False
+        assert retry >= 1
+    finally:
+        reset_limiters()
 
 
 # ── Integration test (needs running API) ─────────────────────────────────────

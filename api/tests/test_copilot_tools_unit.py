@@ -101,3 +101,76 @@ class TestAddToCartAction:
         assert action["priceIdr"] == 495800
         assert action["imageUrl"] == "https://example.com/chino.jpg"
         assert ctx.ui_actions == [action]
+
+
+class TestSqlAndPoolHardening:
+    def test_catalog_categories_uses_ttl_cache(self, monkeypatch):
+        import contextlib
+
+        import copilot_agent
+
+        calls = []
+
+        class _FakeCur:
+            def execute(self, q):
+                calls.append(q)
+
+            def fetchall(self):
+                return [("Pants",), ("Shirts",)]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+        class _FakeConn:
+            def cursor(self):
+                return _FakeCur()
+
+        @contextlib.contextmanager
+        def _fake_connect(_url):
+            yield _FakeConn()
+
+        copilot_agent._CATEGORIES_CACHE.clear()
+        monkeypatch.setattr(copilot_agent, "_connect", _fake_connect)
+        c1 = copilot_agent._catalog_categories("postgresql://cache-test")
+        c2 = copilot_agent._catalog_categories("postgresql://cache-test")
+        assert c1 == ["Pants", "Shirts"]
+        assert c2 == ["Pants", "Shirts"]
+        assert len(calls) == 1
+
+    def test_get_product_reviews_caps_topic_keywords_at_5(self, monkeypatch):
+        import contextlib
+
+        executed = []
+
+        class _FakeCur:
+            def execute(self, sql, params=None):
+                executed.append((sql, params))
+
+            def fetchone(self):
+                return (3, 4.5, 2, 1, 0, 0, 0)
+
+            def fetchall(self):
+                return [(1, 5.0, "Great", "Comfortable fit", "Buyer", True, "2025-01-01")]
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *a):
+                pass
+
+        class _FakeConn:
+            def cursor(self):
+                return _FakeCur()
+
+        @contextlib.contextmanager
+        def _fake_connect(_url):
+            yield _FakeConn()
+
+        monkeypatch.setattr(agent_tools, "_connect", _fake_connect)
+        agent_tools.get_product_reviews("B01", topic="one two three four five six seven eight nine")
+        # 2nd query is the topic-filtered SELECT: asin + (5 keywords * 2) + limit = 12 params max
+        _, params = executed[1]
+        assert len(params) == 12
