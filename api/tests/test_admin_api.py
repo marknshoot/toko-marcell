@@ -71,6 +71,7 @@ def test_admin_kpi_full_schema(monkeypatch):
         "revenue",
         "funnel",
         "cohorts",
+        "unit_economics",
         "search_health",
         "copilot_quality",
     }
@@ -144,6 +145,18 @@ def test_admin_kpi_full_schema(monkeypatch):
             block["conversion_rate"], int | float
         )
         assert block["aov_idr"] is None or isinstance(block["aov_idr"], int | float)
+
+    economics = body["unit_economics"]
+    assert set(economics) == {
+        "total_cost_usd",
+        "avg_cost_per_turn_usd",
+        "cost_per_conversation_usd",
+        "cost_per_resolved_conversation_usd",
+        "cost_per_assisted_order_usd",
+    }
+    for value in economics.values():
+        assert value is None or isinstance(value, int | float)
+        assert value is None or value >= 0
 
     search_health = body["search_health"]
     assert set(search_health) == {

@@ -221,7 +221,14 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
                 "Seeded %d knowledge chunks and %d hypothetical questions.",
                 inserted, total_questions,
             )
-            return inserted
+
+    # Cached policy chunks are now stale; drop them outside the DB transaction.
+    try:
+        from agent_tools import clear_policy_cache
+        clear_policy_cache()
+    except Exception as exc:
+        logger.warning("Could not clear policy cache after seeding: %s", exc)
+    return inserted
 
 
 if __name__ == "__main__":

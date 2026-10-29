@@ -8,18 +8,45 @@ are logged and swallowed.
 
 The token extractor reads LangChain's standard ``AIMessage.usage_metadata``
 (``input_tokens`` / ``output_tokens``). Providers that do not return usage simply
-produce ``None``; phase 13 can refine cost estimates when billing data is wired.
+produce ``None``. Phase 13 turns reported tokens into a configured per-million
+price estimate (not a provider invoice) and exposes the aggregates as
+``unit_economics``.
 """
 
 import logging
 from collections.abc import Iterable, Sequence
 from typing import Any
 
+from config import get_settings
 from langchain_core.messages import AIMessage
 
 logger = logging.getLogger(__name__)
 
 OUTCOMES = {"answered", "guardrail", "unanswered", "cart", "error"}
+
+
+def estimate_cost_usd(
+    input_tokens: int | None,
+    output_tokens: int | None,
+    model: str | None = None,
+) -> float | None:
+    """Estimate one turn's model spend from configured per-million token prices.
+
+    ``model`` is accepted for future per-model pricing; today the deployment
+    price is global. Returns ``None`` when the provider reported neither token
+    count, because an unknown cost is not the same as a free turn. The
+    pre-agent guardrail runs outside the agent result, so its tokens are not
+    included in this estimate.
+    """
+    if input_tokens is None and output_tokens is None:
+        return None
+
+    settings = get_settings()
+    cost = (
+        (input_tokens or 0) * float(settings.LLM_INPUT_COST_PER_MILLION)
+        + (output_tokens or 0) * float(settings.LLM_OUTPUT_COST_PER_MILLION)
+    ) / 1_000_000
+    return round(cost, 8)
 
 
 def derive_outcome(
@@ -96,12 +123,14 @@ def record_turn(
     cost_usd: float | None = None,
     unanswered_question: str | None = None,
 ) -> None:
-    """Insert one turn row. Never raises: telemetry must not break chat."""
+    """Insert one turn row, estimating `cost_usd` when omitted. Never raises."""
     if outcome not in OUTCOMES:
         logger.warning("[copilot_metrics] ignoring invalid outcome %r", outcome)
         return
 
     question = (unanswered_question or "").strip()[:300] or None
+    if cost_usd is None:
+        cost_usd = estimate_cost_usd(input_tokens, output_tokens, model)
 
     try:
         with _connect(db_url) as conn:

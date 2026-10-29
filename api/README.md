@@ -62,6 +62,9 @@ life of the process and would otherwise serve a stale catalog.
 | `LLM_BASE_URL` | | `https://openrouter.ai/api/v1` | OpenAI-compatible endpoint |
 | `LLM_FALLBACK_MODELS` | | *(empty)* | Optional comma-separated fallbacks passed via OpenRouter `models`; tried when the primary returns 429/503. Unnecessary with `openrouter/free` |
 | `LLM_FALLBACK_BASE_URL` / `LLM_FALLBACK_API_KEY` / `LLM_FALLBACK_MODEL` | | — | Optional **generic OpenAI-compatible** provider inserted into the copilot's `.with_fallbacks` chain between OpenRouter and Gemini |
+| `LLM_INPUT_COST_PER_MILLION` | | `0.15` | USD per 1M input tokens used by `estimate_cost_usd()`; a planning estimate, not an invoice |
+| `LLM_OUTPUT_COST_PER_MILLION` | | `0.60` | USD per 1M output tokens used by `estimate_cost_usd()` |
+| `GUARDRAIL_LLM_MODE` | | `always` | `always` calls the LLM guardrail for every non-injection message; `ambiguous` short-circuits decisive regex labels and only sends ambiguous messages to the LLM |
 | `COPILOT_FAKE_LLM` | | *(unset)* | `1` swaps in a deterministic in-process fake tool-calling model (no network, no key) so CI/tests never hit a real provider |
 | `GEMINI_API_KEY` | fallback | — | Google AI Studio key; the final link in the provider chain, used only when the others are absent |
 | `GEMINI_MODEL` | | `gemini-3.5-flash-lite` (code) / `gemini-2.5-flash` (compose) | Any Gemini chat model (fallback path) |
@@ -100,15 +103,15 @@ from booting, and catalog browsing never pays for a search model it does not use
 | `GET` | `/recs/popular` | Popularity baseline (optionally by `department`) |
 | `GET` | `/recs/item/{asin}` | Item-to-item recommendations with a category-popularity fallback |
 | `GET` | `/recs/session` | Session-based recommendations from the current visit's events; cold → popularity |
-| `POST` | `/copilot/chat` | Agentic copilot turn (v2: deterministic guardrail → `create_agent` loop → grounded reply); text-only |
+| `POST` | `/copilot/chat` | Agentic copilot turn (v2: regex + LLM guardrail → `create_agent` loop → grounded reply); text-only |
 | `POST` | `/copilot/chat/stream` | Stream an agentic copilot turn via Server-Sent Events (`token` + `done` events) |
 | `GET` | `/copilot/tools` | The 7 deterministic tool names the v2 copilot can call |
 | `POST` | `/copilot/feedback` | Record a thumbs up/down vote for a copilot thread → `201` · rate-limited like other writes |
 | `GET` | `/copilot/threads/{thread_id}` | Replay a conversation thread's display messages (may be empty) |
 | `DELETE` | `/copilot/threads/{thread_id}` | Reset a conversation (delete all persisted checkpointer state) → `204` |
 | `POST` | `/events` | Record a funnel event → `201` · `422` on unknown type |
-| `GET` | `/events/summary` | Funnel + order revenue/AOV + copilot cohorts + copilot quality, with explicit caveats |
-| `GET` | `/admin/kpi` | Token-gated synthetic demo dashboard: revenue, funnel, cohorts, search health, copilot quality · `503` when unconfigured, `403` bad/missing token |
+| `GET` | `/events/summary` | Funnel + order revenue/AOV + copilot cohorts + copilot quality + `unit_economics`, with explicit caveats |
+| `GET` | `/admin/kpi` | Token-gated synthetic demo dashboard: revenue, funnel, cohorts, search health, copilot quality, `unit_economics` · `503` when unconfigured, `403` bad/missing token |
 | `POST` | `/checkout/confirm` | Create a paid order from `{items:[{asin,qty}], session_id}` → `201` |
 | `GET` | `/orders/{token}` | Read an order back by its secret token · `404` unknown |
 
@@ -150,6 +153,13 @@ in access logs:
     "non_copilot_sessions": {"sessions": 0, "add_to_cart_rate": null, "conversion_rate": null, "aov_idr": null},
     "caveat": "Observational comparison; copilot usage is self-selected, not a randomized trial."
   },
+  "unit_economics": {
+    "total_cost_usd": null,
+    "avg_cost_per_turn_usd": null,
+    "cost_per_conversation_usd": null,
+    "cost_per_resolved_conversation_usd": null,
+    "cost_per_assisted_order_usd": null
+  },
   "search_health": {
     "total_searches": 0, "zero_result_searches": 0, "zero_result_rate": null,
     "search_to_pdp_rate": null, "top_zero_result_queries": [], "top_queries": []
@@ -168,11 +178,36 @@ in access logs:
 Revenue and `funnel.order_sessions` come only from paid `orders`. Cohort AOV joins paid orders to
 the session cohort; it is observational, not an A/B lift. Deflection is the final-turn share of
 `answered / (answered + unanswered)` conversations, not human-agent deflection. Step session counts
-are independent, so raw funnel ratios can exceed 1 when a session enters mid-funnel. Cost fields are
-intentionally absent until phase 13 wires token prices; the endpoint does not invent them.
+are independent, so raw funnel ratios can exceed 1 when a session enters mid-funnel.
 
 The storefront page at `/admin/kpi` calls this endpoint with the token kept in `sessionStorage` (or
 read once from `?token=` and removed from the URL) and renders the four cards.
+
+### Unit economics & SLOs
+
+`copilot_turns.cost_usd` is estimated per turn from token usage:
+`input_tokens × LLM_INPUT_COST_PER_MILLION / 1e6 + output_tokens × LLM_OUTPUT_COST_PER_MILLION / 1e6`.
+A turn with no reported usage stays `NULL`. The `unit_economics` block is identical on
+`/events/summary` and `/admin/kpi`:
+
+| Field | Denominator |
+|---|---|
+| `total_cost_usd` | priced turns in the window |
+| `avg_cost_per_turn_usd` | all copilot turns |
+| `cost_per_conversation_usd` | distinct `thread_id` |
+| `cost_per_resolved_conversation_usd` | distinct threads with `outcome` `answered` or `cart` |
+| `cost_per_assisted_order_usd` | paid orders whose session has at least one copilot turn |
+
+Divisions return `null` without a denominator or known cost. The committed budgets are **<
+$0.005/conversation** and **< $0.02/assisted order**; latency, availability, error-budget, fallback
+and alert policy live in [`docs/SLOS.md`](../docs/SLOS.md). Cost is a configured estimate, not a
+provider invoice; the guardrail classifier's tokens are outside the recorded agent usage, so this is
+a lower bound when the guardrail runs. No SLO-attainment percentage is claimed for metrics that are
+not yet timed in the database.
+
+`GUARDRAIL_LLM_MODE=ambiguous` reduces guardrail tokens by returning decisive regex labels before an
+LLM call; `always` is the contextual default. `lookup_store_policy` uses a 10-minute, 256-entry
+per-process TTL cache keyed by normalized query + limit and cleared after knowledge re-seeding.
 
 ### Response envelopes, never bare arrays
 
@@ -408,7 +443,7 @@ field and no image tool). Photo search still exists as a first-class storefront 
 ### Execution model
 
 ```text
-Guardrail (deterministic, 0 LLM calls)  ─ greeting / off-topic / injection → canned reply
+Guardrail (regex fast-path + LLM classifier)  ─ greeting / off-topic / injection → canned reply
       │ (anything else)
       ▼
 create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply + cards
@@ -419,7 +454,9 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
    LLM classifier (with deterministic regex fast-path for pure greetings/injections and full offline
    fallback when `COPILOT_FAKE_LLM=1`). Greetings, off-topic requests (code, SQL, math, politics,
    medical/legal, creative) and prompt-injection attempts receive a canned "Admin Toko Marcell" reply
-   tagged with `guardrail` (`greeting` | `off_topic` | `injection`).
+   tagged with `guardrail` (`greeting` | `off_topic` | `injection`). With
+   `GUARDRAIL_LLM_MODE=ambiguous`, decisive regex labels skip the LLM entirely; only ambiguous
+   messages are sent to the classifier.
 2. **`create_agent` loop (`copilot_agent.py`).** The LLM plans and calls tools, iterating until it
    has an answer. A `ModelCallLimitMiddleware` caps it at **3 model calls per turn** so a free-tier
    quota can't be drained by a loop. User messages are sanitized against spoofed context headers, and
@@ -435,7 +472,7 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
 | `recommend_size` | `sizing.py` (`size_kind` dispatch: TB/BB, foot length, waist, or head circumference) + demo brand cut rules | advisory sizing; unsupported categories return `applicable=false` instead of a guessed S/M/L |
 | `build_outfit` | catalog search for top + bottom + shoes | the total is **summed and verified ≤ budget in code**, not by the LLM |
-| `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` + IDF-weighted lexical RRF | bilingual sizing (category-aware), shipping, returns, QRIS demo |
+| `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` + IDF-weighted lexical RRF, 10-min/256-entry TTL cache | bilingual sizing (category-aware), shipping, returns, QRIS demo |
 | `add_to_cart` | re-reads `products.price_idr` server-side | returns a `ui_action` the browser executes |
 | `flag_unanswered` | no DB read; sets `ToolContext.unanswered` so the turn recorder logs the truncated question | honest fallback when tool evidence cannot answer; never guess |
 
@@ -515,7 +552,8 @@ in `copilot_quality`.
   from that knowledge base — no per-product or review-derived signal.
 - Outfit budgets are summed and verified in code, not by the LLM.
 - Off-topic, coding, SQL, academic, medical/legal and prompt-injection requests are stopped by the
-  deterministic guardrail with **zero LLM calls**.
+  pre-agent guardrail. A regex fast-path catches explicit injections; the default mode also asks an
+  LLM classifier, while `GUARDRAIL_LLM_MODE=ambiguous` returns decisive regex labels without it.
 
 **Knowledge ingestion & RAGAS evaluation.** `knowledge_seed.py` splits `knowledge/*.md` by section header,
 embeds each chunk with `TEXT_EMBED_MODEL` (`paraphrase-multilingual-MiniLM-L12-v2`) into `store_knowledge`
@@ -566,11 +604,12 @@ point is cheaper than breaking a purchase.
 | `revenue` | `order_count`, `revenue_idr`, `aov_idr` (`null` without a denominator) | `orders` only — never browser events |
 | `cohorts` | `copilot` vs `non_copilot`: `sessions`, `sessions_with_add_to_cart`, `add_to_cart_rate`, `purchase_sessions`, `purchase_rate`; `purchase_source`; `caveat` | `events` + `orders` (joined on `session_id`) |
 | `copilot_quality` | `turns`, `unanswered_rate`, `guardrail_rate`, `avg_latency_ms`, `p50_latency_ms`, `p95_latency_ms`, `thumbs_up`, `thumbs_down`, `thumbs_up_rate` | `copilot_turns` + `copilot_feedback` |
+| `unit_economics` | `total_cost_usd`, `avg_cost_per_turn_usd`, `cost_per_conversation_usd`, `cost_per_resolved_conversation_usd`, `cost_per_assisted_order_usd` | `copilot_turns.cost_usd` + `orders` and distinct `thread_id` |
 
 The cohort caveat says plainly that the comparison is **correlational and self-selected** — there is
 no holdout. `copilot_quality.turns` counts all logged turns, so `unanswered_rate` and
-`guardrail_rate` share that denominator. `guardrail_rate` counts every deterministic guardrail
-label, including greetings, not only unsafe blocks. The raw question behind an `unanswered` turn is
+`guardrail_rate` share that denominator. `guardrail_rate` counts every guardrail label (regex or LLM),
+including greetings, not only unsafe blocks. The raw question behind an `unanswered` turn is
 stored in `copilot_turns.unanswered_question` (first 300 chars) for review; the public summary only
 exposes aggregate rates. `copilot` also keeps `messages`, `product_clicks`, `add_to_cart`,
 `total_add_to_cart` and `assisted_add_to_cart_rate` (= `copilot_add_to_cart` / all `add_to_cart`,
@@ -722,7 +761,7 @@ python3 -m pytest tests/test_search_unit.py
 COPILOT_FAKE_LLM=1 python3 -m pytest tests/
 ```
 
-The API suite is **173 passed + 4 skipped**. The skips are environment-gated (image/trimodal
+The API suite is **292 passed + 4 skipped**. The skips are environment-gated (image/trimodal
 encoders, a rate-limit integration test, and an LLM-key case); the pipeline suite is **6**
 (pipeline-math only, no DB). The suites,
 grouped by concern:
@@ -731,10 +770,13 @@ grouped by concern:
 |---|---|
 | `test_search_unit.py` | stemmer, tokenizer, BM25 scoring, dedupe, facet filtering |
 | `test_search_api.py` | modes, semantic/SKU queries, plural equivalence, filters, reindex |
+| `test_copilot_metrics_unit.py` | per-million cost formula, null-usage handling, automatic `record_turn` cost |
+| `test_guardrail_unit.py` | `always`/`ambiguous` guardrail modes, regex short-circuit, LLM fallback |
+| `test_copilot_tools_unit.py` | tool schemas, SQL/pool hardening, policy-cache hits/expiry/clear/bound |
 | `test_admin_api.py` | KPI auth (`503` unset, `403` missing/wrong), query-token auth, full dashboard schema |
 | `test_catalog_api.py` | health, facets, pagination boundaries, detail 404/422 |
 | `test_checkout_and_events_api.py` | valid/invalid events (incl. copilot types), **price-tampering rejection**, duplicate-ASIN aggregation, order lookup |
-| `test_copilot_api.py` | tool registry (6 names), guardrails, thread memory, the v2 shopping/ops use cases (fake LLM) |
+| `test_copilot_api.py` | tool registry (7 names), guardrails, thread memory, the v2 shopping/ops use cases (fake LLM) |
 | `test_recs_api.py` | popular, department filter, item CF + fallback, session cold vs warm |
 | `test_reviews_api.py` | review aggregates, limits, 404s |
 | `test_search_image_api.py` | valid image, department filter, bad MIME, tiny file |

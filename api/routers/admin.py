@@ -45,6 +45,13 @@ def _require_admin(request: Request, token: str | None) -> None:
         raise HTTPException(status_code=403, detail="Invalid admin token.")
 
 
+def _cost_rate(total_cost_usd: float | None, denominator: int) -> float | None:
+    """Money-safe division with unknown cost kept as ``None``."""
+    if total_cost_usd is None or not denominator:
+        return None
+    return round(float(total_cost_usd) / denominator, 8)
+
+
 def _cohort_block(
     sessions: int,
     add_sessions: int,
@@ -253,7 +260,12 @@ def admin_kpi(
                     COUNT(*) FILTER (WHERE outcome = 'guardrail') AS guardrail_turns,
                     COUNT(*) FILTER (WHERE outcome = 'unanswered') AS unanswered_turns,
                     percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) AS p50_latency,
-                    percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_latency
+                    percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_latency,
+                    SUM(cost_usd) AS total_cost_usd,
+                    COUNT(DISTINCT thread_id) AS conversations,
+                    COUNT(DISTINCT thread_id) FILTER (
+                        WHERE outcome IN ('answered', 'cart')
+                    ) AS resolved_conversations
                 FROM copilot_turns WHERE {window}
                 """,
                 (since_days,),
@@ -265,7 +277,26 @@ def admin_kpi(
                 unanswered_turns,
                 p50_latency,
                 p95_latency,
+                total_cost,
+                conversations,
+                resolved_conversations,
             ) = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM orders o
+                WHERE o.status = 'paid'
+                  AND o.session_id IS NOT NULL
+                  AND o.created_at > now() - make_interval(days => %s)
+                  AND EXISTS (
+                      SELECT 1 FROM copilot_turns ct
+                      WHERE ct.session_id = o.session_id
+                        AND ct.created_at > now() - make_interval(days => %s)
+                  )
+                """,
+                (since_days, since_days),
+            )
+            assisted_orders = cur.fetchone()[0]
 
             cur.execute(
                 f"""
@@ -350,6 +381,15 @@ def admin_kpi(
             },
         },
         "cohorts": cohorts,
+        "unit_economics": {
+            "total_cost_usd": round(float(total_cost), 8) if total_cost is not None else None,
+            "avg_cost_per_turn_usd": _cost_rate(total_cost, total_turns),
+            "cost_per_conversation_usd": _cost_rate(total_cost, conversations),
+            "cost_per_resolved_conversation_usd": _cost_rate(
+                total_cost, resolved_conversations
+            ),
+            "cost_per_assisted_order_usd": _cost_rate(total_cost, assisted_orders),
+        },
         "search_health": {
             "total_searches": int(searches),
             "zero_result_searches": int(zero_result),

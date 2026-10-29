@@ -132,7 +132,7 @@ def test_events_summary_phase9_blocks():
     status, body = api_request("GET", "/events/summary?since_days=1")
     assert status == 200
 
-    for key in ("revenue", "cohorts", "copilot_quality"):
+    for key in ("revenue", "cohorts", "copilot_quality", "unit_economics"):
         assert key in body
 
     revenue = body["revenue"]
@@ -172,6 +172,17 @@ def test_events_summary_phase9_blocks():
     ):
         assert key in quality
     assert quality["turns"] >= 0
+
+    economics = body["unit_economics"]
+    for key in (
+        "total_cost_usd",
+        "avg_cost_per_turn_usd",
+        "cost_per_conversation_usd",
+        "cost_per_resolved_conversation_usd",
+        "cost_per_assisted_order_usd",
+    ):
+        assert key in economics
+        assert economics[key] is None or economics[key] >= 0
 
 
 def test_events_summary_revenue_ignores_purchase_mock_events():

@@ -47,7 +47,7 @@ revenue and copilot-vs-non-copilot cohorts are now computed from server-confirme
 | 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic category-aware `recommend_size` + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.8750** ([RAG eval](./pipelines/results/rag_eval.json)); assisted-add and copilot quality are live (phase 9); sizing has no fit-accuracy benchmark yet |
 | 3 | Repetitive shipping/returns/payment questions consume the owner's time | `lookup_store_policy`: hypothetical-question + chunk + IDF lexical RRF | **deflection ↑**, **unanswered rate ↓** | Same RAGAS artifact for retrieval; unanswered logging is live (phase 10) and conversation-level deflection is live in `GET /admin/kpi` (phase 12). There is no human handoff, so deflection means resolved in-copilot vs an honest “can't answer” |
 | 4 | One-item baskets | Session-aware item-to-item CF + `build_outfit` with `total ≤ budget` enforced in code | **AOV ↑**, **copilot assisted-add rate ↑** | **Offline:** HR@10 **7.96% vs 0.18%** for popularity — **+4,322% relative** ([recommendation eval](./pipelines/results/recs_eval.json)); AOV from server-confirmed orders is live (phase 9) |
-| 5 | Ungrounded AI answers and token-cost exposure | Guardrail short-circuit, rate limits, 7-tool whitelist, server-validated cart actions | **cost per conversation ↓**, **cost per assisted order ↓** | Guardrail/tool behaviour is unit-tested in CI; **no cost figure is claimed** — tokens are logged in phase 9, unit economics in phase 13 |
+| 5 | Ungrounded AI answers and token-cost exposure | Guardrail short-circuit, rate limits, 7-tool whitelist, server-validated cart actions | **cost per conversation ↓**, **cost per assisted order ↓** | Guardrail/tool behaviour is unit-tested in CI; per-turn token cost, cost per conversation and cost per assisted order are live estimates (phase 13), governed by the budgets in [`docs/SLOS.md`](./docs/SLOS.md). No invoice or ROI claim |
 
 Offline nDCG/RAGAS/HR numbers are proxies on small evaluation sets; they justify shipping a feature,
 not a revenue claim. The live funnel endpoint reports its own caveats; AOV and cohorts are now
@@ -57,9 +57,9 @@ order-derived (phase 9), but the orders are still simulation rows.
 limitations: **[docs/BUSINESS_CASE.md](./docs/BUSINESS_CASE.md)**. Every metric with its definition,
 formula, source table and caveats: **[docs/METRICS.md](./docs/METRICS.md)**.
 
-**What is not claimed:** revenue, profit or ROI. Checkout is a simulation, there is no inventory or
-margin data, cohort comparison is correlational (no live A/B), and brand size rules are authored demo
-data. See [Honest limitations](#-honest-limitations--what-is-not-built).
+**What is not claimed:** revenue, profit, ROI, provider-invoice cost or measured SLO attainment.
+Checkout is a simulation, there is no inventory or margin data, cohort comparison is correlational (no
+live A/B), cost is a configured estimate, and brand size rules are authored demo data. See [Honest limitations](#-honest-limitations--what-is-not-built).
 
 ---
 
@@ -181,6 +181,7 @@ Nothing is invented. Where something is simplified or unfinished, it is written 
 - [Cold-start UX](#-cold-start-ux-turning-a-free-tier-constraint-into-a-feature)
 - [Production reliability, caching & defensive security](#-production-reliability-caching--defensive-security)
 - [Operations KPI dashboard](#-operations-kpi-dashboard)
+- [Unit economics & SLOs](#-unit-economics--slos)
 - [The data behind it](#-the-data-behind-it)
 - [Quickstart — one command](#-quickstart--one-command)
 - [Repository map](#-repository-map)
@@ -679,13 +680,14 @@ because a false "down" is worse than a slightly heavier probe.
 
 Built to be fast and honest on free infrastructure (Vercel + Render + Neon).
 
-### Caching (three layers, each with a reason)
+### Caching (four layers, each with a reason)
 
 | Layer | Where | Setting | Why |
 |---|---|---|---|
 | Edge ISR | `app/product/[id]/page.js` | `revalidate = 300` | Product pages are read-heavy and change rarely; stale-while-revalidate removes origin latency on repeat visits |
 | HTTP | Catalog endpoints | `public, max-age=60, s-maxage=300, stale-while-revalidate=60` | Lets any CDN/proxy cache; short browser TTL keeps the demo fresh |
 | In-memory TTL | `/categories` facets | 300 s dict cache | Replaces a `GROUP BY` aggregate scan on every page load (~60 ms → ~2 ms) |
+| Policy RAG TTL | `lookup_store_policy` | 600 s, 256 entries | Repeated shipping/returns/QRIS questions skip embedding + pgvector; cleared after a knowledge re-seed |
 
 `POST /search/reindex` rebuilds the BM25 index **and** invalidates the facet cache, because after a
 reseed the old index is silently stale and "why are my new products not searchable" is otherwise a
@@ -752,9 +754,46 @@ Four cards cover the operational questions:
 
 Every response carries `metadata.synthetic=true`, `environment='demo'` and the caveat
 *"All metrics are derived from seeded/simulated demo data; not real customer revenue."* The UI repeats
-that as a prominent **SYNTHETIC / DEMO DATA** badge. Cost is deliberately absent: token logging exists
-but unit prices and SLOs are phase 13, so no cost figure is fabricated here. API details and the full
-response shape are in [`api/README.md`](./api/README.md#admin-kpi-dashboard-get-adminkpi).
+that as a prominent **SYNTHETIC / DEMO DATA** badge. The API also returns a `unit_economics` block
+with estimated cost per turn/conversation/assisted order; the four cards above do not render it yet.
+Cost is an estimate from configured token prices, not an invoice. API details and the full response
+shape are in [`api/README.md`](./api/README.md#admin-kpi-dashboard-get-adminkpi).
+
+---
+
+## 💵 Unit economics & SLOs
+
+Cost starts as a per-turn estimate, not an invoice. `api/copilot_metrics.estimate_cost_usd()` uses
+two configurable per-million-token prices — `LLM_INPUT_COST_PER_MILLION=0.15` and
+`LLM_OUTPUT_COST_PER_MILLION=0.60` by default — and writes `copilot_turns.cost_usd` whenever the
+provider reports token usage. A turn with no reported usage stays `NULL`, not `$0`. The pre-agent
+guardrail's own LLM tokens are not part of the agent usage, so the estimate is a lower bound when
+the guardrail runs.
+
+Both measurement endpoints return the same `unit_economics` block:
+
+| Field | Denominator | Why it matters |
+|---|---|---|
+| `total_cost_usd` | priced turns in the window | the numerator for every ratio |
+| `avg_cost_per_turn_usd` | all copilot turns | includes zero-token guardrail turns |
+| `cost_per_conversation_usd` | distinct `thread_id` | cost of one copilot conversation |
+| `cost_per_resolved_conversation_usd` | threads with ≥1 `answered`/`cart` turn | cost of a resolved self-service conversation |
+| `cost_per_assisted_order_usd` | paid orders whose session has a copilot turn | the north-star cost guardrail |
+
+**Budgets:** **< $0.005 per conversation** and **< $0.02 per assisted order**. They are targets, not
+measured historical results. The full latency, availability, error-budget, fallback and alert policy
+is in [`docs/SLOS.md`](./docs/SLOS.md). Copilot total-turn p50/p95 latency is live; text/image search,
+sizing and TTFT timing still need instrumentation, so no SLO-attainment percentage is claimed.
+
+Two cost controls are implemented alongside the model:
+
+- **`GUARDRAIL_LLM_MODE=ambiguous`** runs the deterministic regex guardrail first and skips the LLM
+  classifier on decisive greeting/off-topic/injection labels. The default `always` keeps contextual
+  LLM classification for every non-injection message. This is a cost/latency trade-off, not a
+  security upgrade.
+- **Policy RAG cache:** `lookup_store_policy` caches normalized `(query, limit)` results for 10
+  minutes with a 256-entry bound, so repeated shipping/returns/QRIS questions skip embedding and
+  pgvector. `clear_policy_cache()` runs after a knowledge re-seed.
 
 ---
 
@@ -973,7 +1012,8 @@ manual/
 │   └── tests/                    #   pytest suite (unit + RAGAS + live API, fake-LLM copilot)
 ├── docs/                         # business framing, no code
 │   ├── BUSINESS_CASE.md          #   personas, problems → features → KPIs, hypotheses, KPI tree
-│   └── METRICS.md                #   KPI definitions, formulas, sources, caveats, phase status
+│   ├── METRICS.md                #   KPI definitions, formulas, sources, caveats, phase status
+│   └── SLOS.md                   #   latency/availability SLOs, cost budgets, fallback policy
 ├── shop/                         # Next.js 16 storefront
 │   └── src/{app,components,lib}  #   routes (incl. /admin/kpi), UI, API client, session & cart state
 ├── pipelines/                    # offline data & retrieval engineering
@@ -1106,6 +1146,13 @@ This section exists because a portfolio that hides its edges is less useful than
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA
   traffic.
+- **SLO targets are policy, not measured attainment.** [`docs/SLOS.md`](./docs/SLOS.md) commits
+  latency, availability and cost budgets, but text/image search, sizing and copilot TTFT are not
+  timed in the database yet. Copilot total-turn p50/p95 and the `unit_economics` cost estimates are
+  live; a target is never presented as a passed SLO.
+- **Cost is an estimate.** A turn with no provider token usage stays `NULL` and understates the
+  aggregate; configured prices can differ from the provider invoice. No SLO attainment percentage is
+  claimed from null cost rows.
 
 ---
 
@@ -1121,6 +1168,8 @@ Ordered by value to the product, not by ease:
 4. Add a scheduled reindex.
 5. Publish a reproducible eval report artifact per CI run so benchmark numbers can be re-generated
    with one command.
+6. Persist search/image/sizing/copilot-TTFT timing and compute real SLO attainment and error-budget
+   burn from [`docs/SLOS.md`](./docs/SLOS.md).
 
 ---
 

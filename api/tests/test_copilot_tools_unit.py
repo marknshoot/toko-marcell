@@ -326,3 +326,78 @@ class TestSqlAndPoolHardening:
         )
         assert res.scores[0]["id_based_context_precision"] == 1.0
         assert res.scores[0]["id_based_context_recall"] == 1.0
+
+
+class TestPolicyCache:
+    def setup_method(self):
+        agent_tools.clear_policy_cache()
+
+    def teardown_method(self):
+        agent_tools.clear_policy_cache()
+
+    def _fake_lookup(self, monkeypatch):
+        calls = []
+
+        def fake(query, limit=3, db_url=None):
+            calls.append((query, limit))
+            return [{"category": "policy", "title": "Shipping", "content": "2-4 days"}]
+
+        monkeypatch.setattr(agent_tools, "_lookup_store_policy_uncached", fake)
+        return calls
+
+    def test_cache_policy_is_ten_minutes_and_256_entries(self):
+        assert agent_tools.POLICY_CACHE_TTL_SECONDS == 600
+        assert agent_tools.POLICY_CACHE_MAX_ITEMS == 256
+
+    def test_normalized_query_hits_cache(self, monkeypatch):
+        calls = self._fake_lookup(monkeypatch)
+
+        first = agent_tools.lookup_store_policy("  Ongkir   ke Surabaya ", limit=3)
+        second = agent_tools.lookup_store_policy("ongkir ke surabaya", limit=3)
+
+        assert first == second
+        assert calls == [("  Ongkir   ke Surabaya ", 3)]
+        assert not agent_tools._policy_cache_get(("missing", 3))
+
+    def test_cached_values_are_copies(self, monkeypatch):
+        self._fake_lookup(monkeypatch)
+
+        first = agent_tools.lookup_store_policy("retur", limit=3)
+        first[0]["title"] = "mutated"
+        second = agent_tools.lookup_store_policy("retur", limit=3)
+
+        assert second[0]["title"] == "Shipping"
+
+    def test_different_limit_is_a_separate_entry(self, monkeypatch):
+        calls = self._fake_lookup(monkeypatch)
+
+        agent_tools.lookup_store_policy("qris", limit=2)
+        agent_tools.lookup_store_policy("qris", limit=3)
+
+        assert calls == [("qris", 2), ("qris", 3)]
+
+    def test_expired_entry_is_refetched(self, monkeypatch):
+        calls = self._fake_lookup(monkeypatch)
+        monkeypatch.setattr(agent_tools, "POLICY_CACHE_TTL_SECONDS", -1)
+
+        agent_tools.lookup_store_policy("pengiriman", limit=3)
+        agent_tools.lookup_store_policy("pengiriman", limit=3)
+
+        assert len(calls) == 2
+
+    def test_clear_policy_cache_forces_refetch(self, monkeypatch):
+        calls = self._fake_lookup(monkeypatch)
+
+        agent_tools.lookup_store_policy("ukuran sepatu", limit=3)
+        agent_tools.clear_policy_cache()
+        agent_tools.lookup_store_policy("ukuran sepatu", limit=3)
+
+        assert len(calls) == 2
+
+    def test_cache_is_bounded(self, monkeypatch):
+        self._fake_lookup(monkeypatch)
+
+        for i in range(agent_tools.POLICY_CACHE_MAX_ITEMS + 5):
+            agent_tools.lookup_store_policy(f"query {i}", limit=3)
+
+        assert len(agent_tools._policy_cache) == agent_tools.POLICY_CACHE_MAX_ITEMS

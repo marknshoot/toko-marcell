@@ -10,8 +10,12 @@ Runs BEFORE the main tool-calling agent. Classifies the shopper's latest message
 When a real LLM provider is configured (or a model is passed explicitly),
 ``classify`` uses ``classify_with_llm`` with up to the last 3 user and 3 assistant
 messages (`trim_guardrail_history`) so multi-turn follow-ups and subtle injections
-are judged in context. When running offline in CI (``COPILOT_FAKE_LLM=1`` or no API
-key) or if the provider errors out, it falls back to the deterministic regex rules.
+are judged in context. In the default ``GUARDRAIL_LLM_MODE=always`` mode that LLM
+call happens for every non-injection message. In ``ambiguous`` mode the
+deterministic regex runs first and a decisive greeting/off-topic/injection label
+short-circuits the LLM; only genuinely ambiguous messages reach the model. When
+running offline in CI (``COPILOT_FAKE_LLM=1`` or no API key) or if the provider
+errors out, it falls back to the deterministic regex rules.
 """
 
 import logging
@@ -19,6 +23,8 @@ import os
 import re
 import unicodedata
 from typing import Any
+
+from config import get_settings
 
 logger = logging.getLogger(__name__)
 
@@ -294,6 +300,15 @@ def classify_with_llm(
     return None
 
 
+def _guardrail_llm_mode() -> str:
+    """Return a supported guardrail mode, defaulting closed to ``always``."""
+    mode = (get_settings().GUARDRAIL_LLM_MODE or "always").strip().lower()
+    if mode not in {"always", "ambiguous"}:
+        logger.warning("[guardrail] unknown GUARDRAIL_LLM_MODE=%r; using always", mode)
+        return "always"
+    return mode
+
+
 def classify(
     message: str,
     history: list[dict[str, str]] | None = None,
@@ -303,25 +318,39 @@ def classify(
 ) -> GuardrailResult:
     """Classify a message. Returns (label, canned_reply) or (None, None).
 
-    1. Fast regex block for explicit injection patterns.
-    2. LLM-based classification with 3 user + 3 assistant history turns (when
-       ``use_llm=True`` and a real or injected ``model`` is available).
-    3. Deterministic regex fallback (for offline CI, ``COPILOT_FAKE_LLM=1``, or
-       provider errors).
+    In ``GUARDRAIL_LLM_MODE=ambiguous``, a decisive regex label returns before
+    any LLM call; only regex-ambiguous messages reach the LLM. The default
+    ``always`` mode keeps the original order: explicit injection regex, then
+    LLM classification, then the deterministic fallback.
     """
     norm = _normalize(message)
     if not norm:
         return (None, None)
 
-    # 1. Explicit injection regex always wins immediately (zero LLM cost).
+    mode = _guardrail_llm_mode()
+
+    if mode == "ambiguous":
+        # 1. Deterministic labels are decisive and free.
+        regex_res = _classify_regex(norm)
+        if regex_res[0] is not None:
+            return regex_res
+
+        # 2. Only ambiguous messages pay for the LLM classifier.
+        if use_llm:
+            llm_res = classify_with_llm(message, history=history, model=model)
+            if llm_res is not None:
+                return llm_res
+        return (None, None)
+
+    # Default mode: explicit injection regex always wins immediately (zero LLM cost).
     if _INJECTION_RE.search(norm):
         return ("injection", _INJECTION_REPLY)
 
-    # 2. LLM-based guardrail with 3 user + 3 assistant history context.
+    # LLM-based guardrail with 3 user + 3 assistant history context.
     if use_llm:
         llm_res = classify_with_llm(message, history=history, model=model)
         if llm_res is not None:
             return llm_res
 
-    # 3. Deterministic fallback.
+    # Deterministic fallback.
     return _classify_regex(norm)
