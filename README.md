@@ -21,6 +21,7 @@
 | ⚡ **Live API / interactive docs** | [https://toko-marcell-api.onrender.com/docs](https://toko-marcell-api.onrender.com/docs) |
 | 📊 **IR & Multilingual benchmarks** | [`pipelines/results/search_eval_multilingual.json`](./pipelines/results/search_eval_multilingual.json) |
 | 🧪 **RAGAS evaluation results** | [`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json) |
+| 🧭 **Copilot business-scenario benchmark** | [`pipelines/results/copilot_eval.json`](./pipelines/results/copilot_eval.json) |
 | 🧾 **Benchmark source ledger** | [`pipelines/BENCHMARKS.md`](./pipelines/BENCHMARKS.md) — what each number is and how to reproduce it |
 
 > **Note on the live API:** the backend runs on Render's free tier, so it sleeps after 15 minutes of
@@ -103,6 +104,14 @@ embeddings (`store_knowledge`), and IDF-weighted lexical keyword matching via Re
 achieves **1.0000 Context Recall** and **0.8750 Context Precision** in RAGAS evaluation
 (artifacts: [`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json),
 [`pipelines/eval_rag.py`](./pipelines/eval_rag.py)).
+
+**Copilot business scenarios (54 authored cases, CI-gated)** — the benchmark checks the four jobs,
+not just retrieval. Guardrails: **18/18 (100%)** with per-label precision/recall; sizing:
+**18/18 exact** contracts including brand offsets and honest unsupported/luggage/kids paths; outfit
+budgets: **0 invariant violations** across 500k, 1M, 1.5M and 2.5M IDR; policy RAG: **10/10** expected
+chunk titles in the top-3. The CI job fails below 95% guardrail accuracy, 100% sizing accuracy, any
+outfit budget violation, or 90% policy recall. Artifact:
+[`pipelines/results/copilot_eval.json`](./pipelines/results/copilot_eval.json).
 
 **Stack:** Next.js 16 · React 19 · FastAPI · PostgreSQL 16 + pgvector (`psycopg` v3 + `psycopg_pool`) ·
 `fastembed` (Multilingual MiniLM + CLIP ViT-B/32) · LangChain/LangGraph + OpenRouter (Gemini fallback) ·
@@ -383,6 +392,11 @@ captures relevance a bi-encoder cannot — the standard two-stage retrieve-then-
    questions (`store_knowledge_questions`), direct chunks (`store_knowledge`), and IDF-weighted
    bilingual lexical keywords via RRF (`hybrid_rrf`) lifts Context Precision from **0.5417 → 0.8750**
    and Context Recall from **0.6667 → 1.0000** (`12/12` queries).
+3. **Copilot business scenarios (`pipelines/eval_copilot.py`)**: Runs **54 authored cases** from
+   [`pipelines/golden/copilot.json`](./pipelines/golden/copilot.json) against the real guardrail,
+   sizing, outfit and policy functions. The JSON artifact records per-case expected/actual values and
+   hard CI gates: guardrail accuracy ≥95%, sizing accuracy 100%, zero outfit-budget violations, and
+   policy top-3 recall ≥90% ([`pipelines/results/copilot_eval.json`](./pipelines/results/copilot_eval.json)).
 
 ---
 
@@ -645,7 +659,7 @@ In the storefront (`CopilotChat.js`), shoppers can search and attach up to 3 pro
 `api/knowledge_seed.py` chunks the two hand-written markdown sources
 ([`size_charts.md`](./api/knowledge/size_charts.md),
 [`store_policies.md`](./api/knowledge/store_policies.md)) by section header, embeds each chunk with
-MiniLM, and upserts them into `store_knowledge` (**34 chunks** in the seed). It also generates **120
+MiniLM, and upserts them into `store_knowledge` (**34 chunks** after the startup knowledge seed). It also generates **120
 hypothetical questions** (3–5 ID+EN per chunk) into `store_knowledge_questions` and indexes those —
 embedding questions a shopper would actually ask rather than the raw policy text improves retrieval
 quality on the committed [RAGAS evaluation](./pipelines/results/rag_eval.json). Nothing here is
@@ -830,8 +844,8 @@ Full provenance, quirks and filters: [`pipelines/README.md`](./pipelines/README.
 | Reviews | 46,700 | **46,700** |
 | Interactions | 3,363,680 | (offline signal) |
 | Distinct users | 972,184 | — |
-| Knowledge chunks | — | 23 |
-| Hypothetical questions | — | 82 |
+| Knowledge chunks | — | 34 live · 23 in seed |
+| Hypothetical questions | — | 120 live · 82 in seed |
 
 Why 4,670 and not 6,000: after the catalog is built, `pipelines/cleanup_catalog.py` deletes products
 whose image CDN link is dead (`image_embedding IS NULL`) and collapses duplicate title variants to the
@@ -954,9 +968,10 @@ message instead of crashing, and the copilot panel simply can't produce answers.
 
 > **How the auto-seed works.** The Postgres container mounts `data/seed/init.sql.gz` (~33 MB) into
 > `/docker-entrypoint-initdb.d/`, so the official image restores the complete schema, 4,670 products,
-> HNSW indexes, 46,700 reviews, 34 knowledge chunks (plus 120 hypothetical questions),
-> recommendations and a small demo funnel
-> (~357 events, ~106 orders) in seconds on first boot. The ephemeral LangGraph checkpoint tables are
+> HNSW indexes, 46,700 reviews, 23 legacy knowledge chunks (plus 82 questions), recommendations and
+> a small demo funnel (~357 events, ~106 orders) in seconds on first boot. On API startup,
+> `knowledge_seed` detects the legacy rows (no `sizing_example` category) and reseeds the current
+> 34 chunks / 120 questions from the authored markdown. The ephemeral LangGraph checkpoint tables are
 > excluded from the dump and recreated at startup.
 
 ### Running the pieces separately
@@ -1026,6 +1041,8 @@ manual/
 │   ├── extract_reviews.py        #   top reviews per ASIN → reviews table
 │   ├── eval_search.py            #   32-query 5-mode BM25 / vector / hybrid / rerank / trimodal IR harness
 │   ├── eval_rag.py               #   RAGAS evaluation harness (direct_chunk vs hypothetical_question vs hybrid_rrf)
+│   ├── eval_copilot.py           #   54-scenario guardrail/sizing/outfit/policy CI benchmark
+│   ├── golden/copilot.json       #   authored business-scenario contracts
 │   ├── eval_recs.py              #   leave-one-out HR@K / MRR / nDCG harness
 │   ├── eda_interactions.py       #   sparsity, long tail, rating distribution
 │   └── migrate_to_neon.py        #   local → Neon serverless migration
@@ -1050,12 +1067,14 @@ manual/
 ## 🧪 Testing & CI
 
 ```bash
-# Frontend: 23 tests across 5 files (components, cart, copilot, cold-start, session)
+# Frontend: 36 tests across 7 files (components, cart, copilot, cold-start, admin, sizing)
 cd shop && npm test
 
 # Backend + pipelines
-cd api && python3 -m pytest tests/          # 175 passed, 4 env-gated skips (needs a live DB)
+cd api && python3 -m pytest tests/          # 292 passed, 4 env-gated skips (needs a live DB)
 python3 -m pytest pipelines/tests/          #   6 tests (pipeline maths, no DB)
+# Run after the API/docker stack has seeded the RAG knowledge base:
+python pipelines/eval_copilot.py --out pipelines/results/copilot_eval.json  # 54 scenarios
 ```
 
 Every push and PR runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
@@ -1063,7 +1082,7 @@ Every push and PR runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
 | Job | Steps |
 |---|---|
 | **Frontend** (Node 22) | `npm ci` → `npm run lint` → `npm run test` → `npm run build` |
-| **Backend & pipelines** (Python 3.12) | Ruff → full API suite against a Postgres service restored from the seed, with `COPILOT_FAKE_LLM=1` → pipeline tests |
+| **Backend & pipelines** (Python 3.12) | Ruff → full API suite against a Postgres service restored from the seed, with `COPILOT_FAKE_LLM=1` → pipeline tests → 54-scenario copilot business benchmark |
 | **Render Deploy Status** (`main` push) | Triggers and polls the Render deployment until `live` when `RENDER_API_KEY` and `RENDER_SERVICE_ID` secrets are configured |
 
 CI runs **Ruff + the full API suite** against a Postgres service restored from the committed seed,

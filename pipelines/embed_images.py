@@ -12,7 +12,6 @@ Run:
 """
 
 import argparse
-import io
 import os
 import sys
 import time
@@ -22,7 +21,6 @@ from pathlib import Path
 
 import psycopg
 from fastembed import ImageEmbedding
-from PIL import Image
 
 DEFAULT_DATABASE_URL = os.environ.get(
     "DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko"
@@ -157,7 +155,7 @@ def main():
 
                 vecs = list(embed_model.embed(batch_paths, batch_size=len(batch)))
 
-                updates = [(format_vector(v), pid) for pid, v in zip(batch_pids, vecs)]
+                updates = [(format_vector(v), pid) for pid, v in zip(batch_pids, vecs, strict=False)]
                 cur.executemany(
                     "UPDATE products SET image_embedding = %s::vector WHERE id = %s",
                     updates,

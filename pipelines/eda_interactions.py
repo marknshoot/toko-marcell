@@ -16,10 +16,9 @@ import argparse
 import csv
 import gzip
 import json
-import os
 import sys
 import time
-from collections import Counter, defaultdict
+from collections import Counter
 from pathlib import Path
 
 DEFAULT_INTERACTIONS = Path(__file__).resolve().parent.parent / "data" / "processed" / "interactions.csv.gz"
@@ -47,18 +46,17 @@ def main():
     user_counts = Counter()
     item_counts = Counter()
     rating_counts = Counter()
-    timestamps = []
 
     total_rows = 0
 
     with gzip.open(input_path, mode="rt", encoding="utf-8") as f:
         reader = csv.reader(f)
-        header = next(reader)  # user_id,asin,rating,timestamp
+        next(reader)  # user_id,asin,rating,timestamp
 
         for row in reader:
             if not row or len(row) < 4:
                 continue
-            u, asin, r_str, ts_str = row[0], row[1], row[2], row[3]
+            u, asin, r_str, _ts_str = row[0], row[1], row[2], row[3]
             user_counts[u] += 1
             item_counts[asin] += 1
             rating_counts[r_str] += 1
@@ -93,7 +91,6 @@ def main():
     top_20_vol = sum(c for _, c in sorted_items[:top_20_pct_count])
 
     item_vols = sorted(item_counts.values())
-    p25 = item_vols[int(0.25 * len(item_vols))]
     p50 = item_vols[int(0.50 * len(item_vols))]
     p75 = item_vols[int(0.75 * len(item_vols))]
     p90 = item_vols[int(0.90 * len(item_vols))]

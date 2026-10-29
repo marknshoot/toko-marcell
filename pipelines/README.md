@@ -203,11 +203,14 @@ catalog ASIN** (rating, summary, comment, verified flag, date), writing them to 
 |---|---|---|
 | `eval_search.py` | 32 queries in 4 groups (brand/SKU, category+features, semantic, Indonesian/casual), 5 modes | HitRate@10, Precision@10, MRR@10, nDCG@10 |
 | `eval_rag.py` | 12 bilingual (ID+EN) policy & sizing queries evaluated with **RAGAS** (`direct_chunk` vs `hypothetical_question` vs `hybrid_rrf`) | `id_based_context_precision`, `id_based_context_recall`, `non_llm_context_precision_with_reference`, `non_llm_context_recall` |
+| `eval_copilot.py` | 54 authored business scenarios in [`golden/copilot.json`](./golden/copilot.json): guardrails, category-aware sizing, outfit budgets, policy retrieval | guardrail accuracy + per-label precision/recall, sizing exact-match accuracy, outfit budget violations, policy recall@3; hard CI gates |
 | `eval_recs.py` | sequential leave-one-out, ≥5 interactions/user, random + popularity baselines | HR@10, HR@5, MRR@10, nDCG@10 |
 | `eda_interactions.py` | interaction EDA | volume, coverage, sparsity, long tail, rating distribution, temporal span |
 | `tests/test_pipeline_math.py` | unit tests for pipeline maths (no DB) | — |
 
 All harnesses print human-readable tables and write machine-readable JSON artifacts to `pipelines/results/`.
+Authored scenario fixtures live in `pipelines/golden/`; `eval_copilot.py` uses them as executable
+contracts and fails CI when a gate is breached.
 
 ---
 
@@ -227,6 +230,7 @@ All harnesses print human-readable tables and write machine-readable JSON artifa
 | `eda_interactions.py` | interaction EDA |
 | `eval_search.py` | 5-mode BM25 / vector / hybrid / rerank / trimodal IR harness |
 | `eval_rag.py` | RAGAS evaluation harness for store policy & sizing RAG |
+| `eval_copilot.py` | deterministic 54-scenario copilot business benchmark with CI gates |
 | `eval_recs.py` | recommendation HR/nDCG harness |
 | `migrate_to_neon.py` | local → Neon serverless migration (schema, catalog, embeddings, indexes) |
 

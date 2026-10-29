@@ -48,7 +48,7 @@ def main():
     t_start = time.perf_counter()
     log("Loading catalog ASINs...")
 
-    with open(args.products_file, "r", encoding="utf-8") as f:
+    with open(args.products_file, encoding="utf-8") as f:
         catalog_asins = {json.loads(line)["asin"] for line in f}
 
     log(f"Catalog has {len(catalog_asins):,} target ASINs.")

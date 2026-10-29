@@ -57,14 +57,13 @@ def main():
     log("Loading products metadata...")
 
     products_by_asin = {}
-    title_to_asin = {}
     asin_to_title = {}
     asin_to_dept = {}
     asin_to_cat = {}
     asin_to_also_buy = {}
     asin_to_also_view = {}
 
-    with open(args.products_file, "r", encoding="utf-8") as f:
+    with open(args.products_file, encoding="utf-8") as f:
         for line in f:
             p = json.loads(line)
             asin = p["asin"]
@@ -102,7 +101,7 @@ def main():
     global_popular = []
     global_seen_titles = set()
 
-    for bayesian_score, rating_count, asin, dept, cat in scored_items:
+    for _bayesian_score, _rating_count, asin, dept, _cat in scored_items:
         title_key = asin_to_title[asin].lower()
         if title_key not in global_seen_titles and len(global_popular) < 50:
             global_popular.append(asin)
@@ -128,7 +127,7 @@ def main():
 
     with gzip.open(args.interactions_file, mode="rt", encoding="utf-8") as f:
         reader = csv.reader(f)
-        header = next(reader)
+        next(reader)
         for row in reader:
             if not row or len(row) < 4:
                 continue
@@ -193,7 +192,7 @@ def main():
         selected = []
         seen_titles = {asin_to_title[asin].lower()}
 
-        for cand_asin, score in sorted_candidates:
+        for cand_asin, _score in sorted_candidates:
             cand_title = asin_to_title.get(cand_asin, "").lower()
             if cand_title in seen_titles:
                 continue

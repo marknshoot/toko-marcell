@@ -53,6 +53,7 @@ the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`
 | [Cost per assisted order](#cost-per-assisted-order) | Live (phase 13) | `copilot_turns` + `orders` → `unit_economics` |
 | [Latency p50 and p95](#latency-p50-and-p95) | Live (phase 9; dashboard phase 12) | `copilot_turns.latency_ms` → `GET /events/summary`, `GET /admin/kpi` |
 | [SLOs](#service-level-objectives) | Live (policy, phase 13) | [`SLOS.md`](./SLOS.md); search/image/sizing/TTFT timing not yet persisted |
+| [Copilot business scenario benchmark](#copilot-business-scenario-benchmark) | Live (CI, phase 14) | [`pipelines/results/copilot_eval.json`](../pipelines/results/copilot_eval.json) |
 
 ---
 
@@ -276,7 +277,7 @@ counts eligible final outcomes.
 - **No human queue exists.** Do not translate deflection into "support tickets avoided" or "support
   cost saved" without a support-cost baseline.
 - **"Answered" means tool-grounded, not correct or satisfying.** Pair it with the thumbs rate and a
-  human audit sample (phase 14 golden set).
+  human audit sample. The phase-14 golden set checks deterministic sizing/guardrail/policy contracts, not answer correctness.
 - **Final-turn heuristic.** A conversation can contain both unanswered and answered turns; only the
   last one decides. Thread rotation creates a new conversation.
 - **Guardrail-blocked-only threads are excluded.** Off-topic/injection blocks are a separate signal.
@@ -311,7 +312,7 @@ concrete server-validated outcome.
 **Caveats:**
 
 - **Measures self-declared inability, not all errors.** A confidently wrong answer is not counted;
-  groundedness needs an audit sample or the phase-14 golden set.
+  groundedness needs a human audit; the phase-14 golden set evaluates retrieval and scenario contracts, not prose groundedness.
 - **The denominator includes guardrail blocks and provider errors.** That is a true share of all
   turns, but it conflates off-topic/abuse with knowledge gaps. A future knowledge-gap variant should
   filter to `outcome IN ('answered', 'unanswered')`; state the denominator explicitly.
@@ -529,13 +530,49 @@ policy-cache trade-offs are detailed in [`SLOS.md`](./SLOS.md).
 
 ---
 
+## Copilot business scenario benchmark
+
+**Status:** Live (CI, phase 14). `pipelines/eval_copilot.py` runs **54 authored scenarios** from
+[`pipelines/golden/copilot.json`](../pipelines/golden/copilot.json) and writes
+[`pipelines/results/copilot_eval.json`](../pipelines/results/copilot_eval.json). It is an offline
+contract gate, not a live-traffic or human-quality metric.
+
+| Suite | Cases | What is checked | Hard gate |
+|---|---:|---|---|
+| `guardrails` | 18 | ID/EN greetings, off-topic coding/math/politics, injections/jailbreaks, and valid shopping queries that must pass through (`None`) | accuracy ≥ 95% (current 18/18) |
+| `sizing` | 18 | Exact `size_kind`, `applicable`, suggested size/waist/conversion, source/confidence, brand offsets, disclaimer; unsupported lingerie/luggage/kids must not guess | accuracy = 100% (current 18/18) |
+| `budget_outfits` | 8 | `within_budget is True` and `total_idr <= budget_idr` at 500k, 1M, 1.5M and 2.5M IDR | invariant violations = 0 |
+| `policy_rag` | 10 | Expected authored policy/sizing chunk title is in the top-3 retrieved chunks | recall ≥ 90% (current 10/10) |
+
+The guardrail suite runs `classify(..., use_llm=False)`, so it measures the deterministic regex layer,
+not the live LLM classifier. The sizing suite calls `recommend_size_core()` plus two ASIN-backed
+`recommend_size()` cases against Postgres. The outfit suite uses the seeded catalog. Policy retrieval
+uses `lookup_store_policy(k=3)`.
+
+**Caveats:**
+
+- **Authored scenarios, not a random sample.** The gates catch regressions in known contracts; they do
+  not estimate production accuracy or user satisfaction.
+- **Guardrail coverage is finite.** Eighteen labelled cases do not replace an adversarial corpus or a
+  human false-positive audit.
+- **Sizing exactness is chart conformance**, not fit accuracy; the underlying tops/bottoms/dress charts
+  are authored store estimates, and brand offsets are demo data.
+- **Outfit checks prove the budget invariant**; `item_count` is reported but is not a hard gate. The
+  suite does not measure style relevance, stock, comfort, or whether the shopper likes the combination.
+- **Policy recall checks retrieval only.** The expected chunk title appearing in top-3 does not prove
+  the copilot's final prose is correct or complete.
+- **Catalog-dependent.** Outfit cases can change if the seeded catalog or search ranking changes; a
+  failure there is a product/search regression signal, not a revenue signal.
+
+---
+
 ## Supporting telemetry
 
 These are useful for trust and diagnosis, but they are not north-star or revenue metrics.
 
 | Metric | Status | Definition / formula | Source | Caveat |
 |---|---|---|---|---|
-| Guardrail short-circuit rate | Live (phase 9) | `turns with outcome='guardrail' / all copilot turns` | `copilot_turns.outcome` → `copilot_quality.guardrail_rate`, `/admin/kpi.copilot_quality.guardrail_turns` | Counts every guardrail label (regex or LLM), including greetings; it is not only unsafe blocks. False positives need the phase-14 golden set. |
+| Guardrail short-circuit rate | Live (phase 9) | `turns with outcome='guardrail' / all copilot turns` | `copilot_turns.outcome` → `copilot_quality.guardrail_rate`, `/admin/kpi.copilot_quality.guardrail_turns` | Counts every guardrail label (regex or LLM), including greetings; it is not only unsafe blocks. The phase-14 golden set locks 18 labelled guardrail cases, but broader false positives still need a human audit. |
 | Items per order | Computable now, not exposed | `SUM(orders.item_count) / COUNT(orders)` or `SUM(order_items.qty) / COUNT(DISTINCT order_id)` | `orders.item_count`, `order_items.qty` | Same simulation caveats as AOV; no cancellation model. |
 | Offline retrieval quality | Live (offline) | nDCG@10, MRR@10, HR@10, P@10 over a fixed query set | [`search_eval_multilingual.json`](../pipelines/results/search_eval_multilingual.json), [`search_eval.json`](../pipelines/results/search_eval.json) | 32 queries, authored relevance labels; a proxy, not online behaviour. |
 | Offline policy/size-guide RAG | Live (offline) | RAGAS Context Precision / Recall at k=3 | [`rag_eval.json`](../pipelines/results/rag_eval.json) | 12 bilingual queries; measures retrieval, not answer correctness or fit accuracy. Current committed run: recall 1.0000, context precision 0.8750. |
@@ -555,7 +592,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | 11 (shipped) | `GET /search/insights`: top queries, top zero-result queries, zero-result rate and session-level search-to-PDP; deterministic ID→EN rewrite retry on zero-result `/search` and `search_catalog`. |
 | 12 (shipped) | Token-gated `GET /admin/kpi` and `/admin/kpi` page: confirmed-order revenue/AOV, session funnel, copilot vs non-copilot cohorts, conversation-level deflection, turn outcomes, search health, p50/p95 and a mandatory `synthetic` badge. Cost is added in phase 13. |
 | 13 (shipped) | Per-turn cost from configurable per-million prices; `unit_economics` cost per turn / conversation / resolved conversation / assisted order; `GUARDRAIL_LLM_MODE=ambiguous`; 10-minute bounded policy-RAG cache; [`SLOS.md`](./SLOS.md) latency, availability, cost and fallback targets. Attainment is not yet instrumented for search/image/sizing/TTFT. |
-| 14 | Golden-set evaluation in CI: sizing exact asserts, outfit budget invariant, guardrail labels, policy RAGAS. |
+| 14 (shipped) | Committed 54-scenario business benchmark in CI: guardrail accuracy/per-label precision/recall, exact sizing contracts, outfit budget invariant, policy top-3 recall; hard failure gates. |
 | 15 | Seeded traffic simulator and case study; every simulated metric must carry a `synthetic` label. |
 
 ---

@@ -168,7 +168,8 @@ prices must be reconciled before its spend is treated as equivalent to the prima
 | `ambiguous` | Deterministic regex runs first; a decisive `greeting`, `off_topic` or `injection` label returns immediately. Only regex-ambiguous messages call the LLM. | Lower cost/latency; relies on the authored regex for decisive cases and can miss a subtle attack the regex labels decisively but incorrectly. |
 
 Switching to `ambiguous` is a cost/latency optimisation, not a security upgrade. Measure guardrail
-false positives/negatives on the phase-14 golden set before changing the default.
+false positives/negatives on the 18-case phase-14 guardrail golden set plus a broader audit before
+changing the default.
 
 ## 7. Policy RAG cache
 

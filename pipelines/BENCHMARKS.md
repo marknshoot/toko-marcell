@@ -27,7 +27,7 @@ Three tiers of provenance:
 | Departments / categories / brands | see stats | A | `data/processed/stats.json` |
 | Interaction range per item | min 198 · median 333 · max 19,693 | A | `data/processed/stats.json` → `interactions_per_item` |
 | USD→IDR demo rate | 16,000 | A | `data/processed/stats.json` → `usd_idr_rate_used` |
-| Knowledge chunks / hypothetical questions | 23 / 82 | A | `data/seed/init.sql.gz` → `store_knowledge` + `store_knowledge_questions` COPY blocks |
+| Knowledge chunks / hypothetical questions | 23 / 82 in the seed · 34 / 120 after API startup reseed | A/B | seed COPY blocks; [`api/knowledge_seed.py`](../api/knowledge_seed.py) regenerates from `api/knowledge/*.md` |
 | Demo funnel rows | 357 events · 106 orders | A | `data/seed/init.sql.gz` |
 
 Reproduce the full catalog (needs ~2.8 GB raw download):
@@ -142,6 +142,43 @@ python3 pipelines/eval_rag.py --out pipelines/results/rag_eval.json
 
 ---
 
+## Copilot Business Scenario Benchmark
+
+**Artifact:** [`pipelines/results/copilot_eval.json`](./results/copilot_eval.json) (Tier A).
+`pipelines/eval_copilot.py` runs **54 authored scenarios** across the copilot's four core jobs. This is
+a deterministic contract test, not a claim of live conversational quality:
+
+| Suite | Cases | What is asserted | Gate | Current |
+|---|---:|---|---|---:|
+| `guardrails` | 18 | ID/EN greetings, off-topic coding/math/politics, injections/jailbreaks, and valid shopping queries that must pass through (`None`) | accuracy ≥ 95% | **18/18, 100%** |
+| `sizing` | 18 | Exact `size_kind`, `applicable`, suggested size/waist/standard conversion, source/confidence, brand offsets, and the chart disclaimer; unsupported lingerie/luggage/kids must not guess | accuracy = 100% | **18/18, 100%** |
+| `budget_outfits` | 8 | `within_budget is True` **and** `total_idr <= budget_idr` across 500k, 1M, 1.5M and 2.5M IDR | invariant violations = 0 | **0 violations, 8/8 output-valid** |
+| `policy_rag` | 10 | The expected authored policy/sizing chunk title appears in the top-3 retrieved chunks | recall ≥ 90% | **10/10, 100%** |
+
+The guardrail suite calls `classify(..., use_llm=False)`, so it measures the deterministic regex layer
+that protects CI and offline operation. The sizing suite calls `recommend_size_core()` and, for two
+ASIN cases, `recommend_size()` against Postgres. The outfit suite calls `_build_outfit_impl()` with
+the seeded 4,670-product catalog. The policy suite calls `lookup_store_policy()` with `k=3`.
+
+```bash
+# Reproduce (needs the seeded Postgres from docker compose / CI):
+python pipelines/eval_copilot.py --out pipelines/results/copilot_eval.json
+```
+
+> The committed seed predates the expanded knowledge guide; the API startup reseeds
+> `store_knowledge` (old rows have no `sizing_example` category). If you restore the seed without
+> starting the API, run `cd api && python -m knowledge_seed` once before the benchmark.
+
+Exit code is **1** if any gate fails. The JSON artifact contains per-case expected/actual values,
+guardrail precision/recall per label, outfit totals, and retrieved policy titles.
+
+**Honest limits:** the set is authored, not a random sample; exact chart and title asserts verify
+deterministic contracts, not prose answer correctness; outfit checks prove the budget invariant, not
+style relevance; the guardrail gate covers 18 labelled cases, not an exhaustive adversarial corpus;
+and sizing has no fit-accuracy ground truth.
+
+---
+
 ## Recommendations
 
 **Artifact:** [`pipelines/results/recs_eval.json`](./results/recs_eval.json) (Tier A).
@@ -171,9 +208,10 @@ are read directly from `pipelines/build_recs.py` (Tier A).
 
 | Suite | Count | Tier | Command |
 |---|---:|:---:|---|
-| Offline Unit Tests (guardrail, tools, RAGAS, search, sizing, schemas, rate limiter) | 109 passed + 1 skipped | B | `python3 -m pytest api/tests/test_rate_limiter.py api/tests/test_copilot_tools_unit.py api/tests/test_guardrail_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_search_unit.py api/tests/test_sizing_unit.py pipelines/tests/test_pipeline_math.py` |
-| Full API Integration Suite (needs Postgres; copilot runs on fake LLM) | 180+ passed | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
-| Frontend (Vitest) | 23 (5 files) | B | `cd shop && npm test` |
+| Offline Unit Tests (guardrail, tools, RAGAS, search, sizing, schemas, rate limiter) | 184 passed + 1 skipped | B | `python3 -m pytest api/tests/test_rate_limiter.py api/tests/test_copilot_tools_unit.py api/tests/test_guardrail_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_copilot_metrics_unit.py api/tests/test_search_unit.py api/tests/test_sizing_unit.py pipelines/tests/test_pipeline_math.py` |
+| Full API Integration Suite (needs Postgres; copilot runs on fake LLM) | 292 passed + 4 skipped | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
+| Copilot Business Scenario Benchmark (needs Postgres) | 54 cases, all gates pass | A | `python pipelines/eval_copilot.py --out pipelines/results/copilot_eval.json` |
+| Frontend (Vitest) | 36 (7 files) | B | `cd shop && npm test` |
 
 ---
 

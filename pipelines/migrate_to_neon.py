@@ -11,7 +11,6 @@ Usage:
 import argparse
 import sys
 import time
-from typing import List, Tuple
 
 import psycopg
 from psycopg.rows import dict_row
