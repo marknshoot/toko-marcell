@@ -16,7 +16,7 @@ copilot_agent when a checkpointer is present).
 import logging
 import threading
 
-import psycopg
+from agent_tools import _connect
 from config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ def _db_url() -> str:
 
 
 def ensure_activity_table(db_url: str | None = None) -> None:
-    with psycopg.connect(db_url or _db_url()) as conn:
+    with _connect(db_url or _db_url()) as conn:
         with conn.cursor() as cur:
             cur.execute(_ACTIVITY_DDL)
         conn.commit()
@@ -75,7 +75,7 @@ def touch_thread(thread_id: str, db_url: str | None = None) -> None:
     if not thread_id:
         return
     try:
-        with psycopg.connect(db_url or _db_url()) as conn:
+        with _connect(db_url or _db_url()) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     """
@@ -99,7 +99,7 @@ def cleanup_expired_threads(db_url: str | None = None) -> int:
     url = db_url or _db_url()
     removed = 0
     try:
-        with psycopg.connect(url) as conn:
+        with _connect(url) as conn:
             with conn.cursor() as cur:
                 cur.execute(
                     "SELECT thread_id FROM copilot_thread_activity "
@@ -163,7 +163,7 @@ def delete_thread(thread_id: str, db_url: str | None = None) -> None:
         except Exception as e:
             logger.info("[copilot memory] delete_thread (saver) note: %s", e)
     try:
-        with psycopg.connect(db_url or _db_url()) as conn:
+        with _connect(db_url or _db_url()) as conn:
             with conn.cursor() as cur:
                 cur.execute("DELETE FROM copilot_thread_activity WHERE thread_id = %s", (thread_id,))
             conn.commit()
