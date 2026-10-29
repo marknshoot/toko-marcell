@@ -96,9 +96,10 @@ app.add_middleware(
 
 # ── Include routers ──────────────────────────────────────────────────────────
 
-from routers import catalog, checkout, copilot, events, health, recs, reviews, search, sizing  # noqa: E402
+from routers import admin, catalog, checkout, copilot, events, health, recs, reviews, search, sizing  # noqa: E402
 
 app.include_router(health.router)
+app.include_router(admin.router)
 app.include_router(catalog.router)
 app.include_router(search.router)
 app.include_router(sizing.router)

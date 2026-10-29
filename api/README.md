@@ -68,7 +68,7 @@ life of the process and would otherwise serve a stale catalog.
 | `TEXT_EMBED_MODEL` | | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Multilingual (ID/EN) 384-d dense text embedding model (or `sentence-transformers/all-MiniLM-L6-v2` for English-only low-RAM mode) |
 | `TEXT_EMBED_COLUMN` | | `embedding_ml` | Which 384-d column `/search` and Copilot `search_catalog` query (`embedding_ml` default, or `embedding`) |
 | `CORS_ORIGINS` | | `http://localhost:3000,https://toko-marcell.vercel.app` | Comma-separated allowlist; `*` opens it up |
-| `ADMIN_TOKEN` | for reindex | — | Secret token for `POST /search/reindex`; endpoint returns `503` when unset. Docker Compose defaults to `dev-admin-token`; set a strong value in production |
+| `ADMIN_TOKEN` | for admin | — | Secret token for `POST /search/reindex` and `GET /admin/kpi` (header `X-Admin-Token` or `?token=`); both return `503` when unset. Docker Compose defaults to `dev-admin-token`; set a strong value in production |
 | `TRUST_PROXY` | | `false` | Set `true` on Render (behind their LB) so `X-Forwarded-For` is trusted for rate-limiting |
 | `COPILOT_RATE_LIMIT_PER_MIN` | | `10` | Max copilot requests per client IP per minute |
 | `COPILOT_RATE_LIMIT_PER_DAY` | | `100` | Max copilot requests per client IP per day |
@@ -108,8 +108,71 @@ from booting, and catalog browsing never pays for a search model it does not use
 | `DELETE` | `/copilot/threads/{thread_id}` | Reset a conversation (delete all persisted checkpointer state) → `204` |
 | `POST` | `/events` | Record a funnel event → `201` · `422` on unknown type |
 | `GET` | `/events/summary` | Funnel + order revenue/AOV + copilot cohorts + copilot quality, with explicit caveats |
+| `GET` | `/admin/kpi` | Token-gated synthetic demo dashboard: revenue, funnel, cohorts, search health, copilot quality · `503` when unconfigured, `403` bad/missing token |
 | `POST` | `/checkout/confirm` | Create a paid order from `{items:[{asin,qty}], session_id}` → `201` |
 | `GET` | `/orders/{token}` | Read an order back by its secret token · `404` unknown |
+
+### Admin KPI dashboard (`GET /admin/kpi`)
+
+The operations dashboard is one aggregate read, gated by `ADMIN_TOKEN`. Authentication accepts
+either `X-Admin-Token: <token>` or `?token=<token>`, compared with
+`hmac.compare_digest` in `routers/admin.py`. The header is preferred because query strings can land
+in access logs:
+
+| Condition | Status |
+|---|---|
+| `ADMIN_TOKEN` is empty/unset | `503 Admin dashboard is disabled` |
+| token missing or wrong | `403 Invalid admin token` |
+| valid token | `200` |
+
+`since_days` is bounded to `1–365` (default `30`). The response is explicitly labelled synthetic:
+
+```json
+{
+  "metadata": {
+    "since_days": 30,
+    "generated_at": "2026-01-01T00:00:00+00:00",
+    "synthetic": true,
+    "environment": "demo",
+    "caveat": "All metrics are derived from seeded/simulated demo data; not real customer revenue."
+  },
+  "revenue": {"order_count": 0, "total_revenue_idr": 0, "aov_idr": null},
+  "funnel": {
+    "sessions": 0, "view_product_sessions": 0, "add_to_cart_sessions": 0,
+    "checkout_start_sessions": 0, "order_sessions": 0,
+    "rates": {
+      "view_to_cart": null, "cart_to_checkout": null,
+      "checkout_to_order": null, "overall_conversion": null
+    }
+  },
+  "cohorts": {
+    "copilot_sessions": {"sessions": 0, "add_to_cart_rate": null, "conversion_rate": null, "aov_idr": null},
+    "non_copilot_sessions": {"sessions": 0, "add_to_cart_rate": null, "conversion_rate": null, "aov_idr": null},
+    "caveat": "Observational comparison; copilot usage is self-selected, not a randomized trial."
+  },
+  "search_health": {
+    "total_searches": 0, "zero_result_searches": 0, "zero_result_rate": null,
+    "search_to_pdp_rate": null, "top_zero_result_queries": [], "top_queries": []
+  },
+  "copilot_quality": {
+    "total_turns": 0, "answered_turns": 0, "guardrail_turns": 0,
+    "unanswered_turns": 0, "unanswered_rate": null,
+    "deflection_eligible_conversations": 0,
+    "deflection_answered_conversations": 0, "deflection_rate": null,
+    "latency_p50_ms": null, "latency_p95_ms": null,
+    "thumbs_up": 0, "thumbs_down": 0, "thumbs_up_rate": null
+  }
+}
+```
+
+Revenue and `funnel.order_sessions` come only from paid `orders`. Cohort AOV joins paid orders to
+the session cohort; it is observational, not an A/B lift. Deflection is the final-turn share of
+`answered / (answered + unanswered)` conversations, not human-agent deflection. Step session counts
+are independent, so raw funnel ratios can exceed 1 when a session enters mid-funnel. Cost fields are
+intentionally absent until phase 13 wires token prices; the endpoint does not invent them.
+
+The storefront page at `/admin/kpi` calls this endpoint with the token kept in `sessionStorage` (or
+read once from `?token=` and removed from the URL) and renders the four cards.
 
 ### Response envelopes, never bare arrays
 
@@ -160,6 +223,7 @@ api/
 │   ├── recs.py               # GET /recs/popular, /recs/item/{asin}, /recs/session
 │   ├── reviews.py            # GET /products/{id}/reviews
 │   ├── events.py             # POST /events, GET /events/summary (funnel, revenue, cohorts, quality)
+│   ├── admin.py              # GET /admin/kpi (token-gated synthetic operations dashboard)
 │   ├── checkout.py           # POST /checkout/confirm, GET /orders/{token}
 │   ├── sizing.py             # GET /sizing/{asin}, POST /sizing/recommend (no LLM)
 │   └── copilot.py            # POST /copilot/chat, /chat/stream, /feedback; GET /tools, /threads/{id}
@@ -667,6 +731,7 @@ grouped by concern:
 |---|---|
 | `test_search_unit.py` | stemmer, tokenizer, BM25 scoring, dedupe, facet filtering |
 | `test_search_api.py` | modes, semantic/SKU queries, plural equivalence, filters, reindex |
+| `test_admin_api.py` | KPI auth (`503` unset, `403` missing/wrong), query-token auth, full dashboard schema |
 | `test_catalog_api.py` | health, facets, pagination boundaries, detail 404/422 |
 | `test_checkout_and_events_api.py` | valid/invalid events (incl. copilot types), **price-tampering rejection**, duplicate-ASIN aggregation, order lookup |
 | `test_copilot_api.py` | tool registry (6 names), guardrails, thread memory, the v2 shopping/ops use cases (fake LLM) |

@@ -394,3 +394,24 @@ export async function postSizingRecommend({ asin, heightCm, weightKg, footLength
 
   return response.json();
 }
+
+// ── Admin KPI dashboard ──────────────────────────────────────────────────────
+
+export async function getAdminKpi(token, sinceDays = 30) {
+  const params = new URLSearchParams();
+  params.set("since_days", String(sinceDays));
+
+  const response = await fetch(`${API_URL}/admin/kpi?${params.toString()}`, {
+    headers: { "X-Admin-Token": token },
+    cache: "no-store",
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const error = new Error(err.detail || "Could not load the admin dashboard");
+    error.status = response.status;
+    throw error;
+  }
+
+  return response.json();
+}

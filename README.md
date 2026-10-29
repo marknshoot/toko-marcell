@@ -45,7 +45,7 @@ revenue and copilot-vs-non-copilot cohorts are now computed from server-confirme
 |---|---|---|---|---|
 | 1 | Mixed Indonesian/English or casual queries return nothing or the wrong products | Tri-modal bilingual retrieval: BM25 + multilingual MiniLM + CLIP → RRF, optional reranker, plus a deterministic ID→EN zero-result retry | **zero-result rate ↓**, **search-to-PDP ↑** | **Offline:** overall nDCG@10 **0.794 → 0.894**, Indonesian nDCG@10 **0.334 → 0.765**, HR@10 **100%** ([multilingual eval](./pipelines/results/search_eval_multilingual.json)); live search health is in `GET /search/insights` |
 | 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic category-aware `recommend_size` + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.8750** ([RAG eval](./pipelines/results/rag_eval.json)); assisted-add and copilot quality are live (phase 9); sizing has no fit-accuracy benchmark yet |
-| 3 | Repetitive shipping/returns/payment questions consume the owner's time | `lookup_store_policy`: hypothetical-question + chunk + IDF lexical RRF | **deflection ↑**, **unanswered rate ↓** | Same RAGAS artifact for retrieval; unanswered logging is live (phase 10), deflection is planned (phase 12), and there is no human handoff, so it means resolved in-copilot vs an honest “can't answer” |
+| 3 | Repetitive shipping/returns/payment questions consume the owner's time | `lookup_store_policy`: hypothetical-question + chunk + IDF lexical RRF | **deflection ↑**, **unanswered rate ↓** | Same RAGAS artifact for retrieval; unanswered logging is live (phase 10) and conversation-level deflection is live in `GET /admin/kpi` (phase 12). There is no human handoff, so deflection means resolved in-copilot vs an honest “can't answer” |
 | 4 | One-item baskets | Session-aware item-to-item CF + `build_outfit` with `total ≤ budget` enforced in code | **AOV ↑**, **copilot assisted-add rate ↑** | **Offline:** HR@10 **7.96% vs 0.18%** for popularity — **+4,322% relative** ([recommendation eval](./pipelines/results/recs_eval.json)); AOV from server-confirmed orders is live (phase 9) |
 | 5 | Ungrounded AI answers and token-cost exposure | Guardrail short-circuit, rate limits, 7-tool whitelist, server-validated cart actions | **cost per conversation ↓**, **cost per assisted order ↓** | Guardrail/tool behaviour is unit-tested in CI; **no cost figure is claimed** — tokens are logged in phase 9, unit economics in phase 13 |
 
@@ -180,6 +180,7 @@ Nothing is invented. Where something is simplified or unfinished, it is written 
 - [The agentic copilot](#-the-agentic-copilot-admin-toko-marcell)
 - [Cold-start UX](#-cold-start-ux-turning-a-free-tier-constraint-into-a-feature)
 - [Production reliability, caching & defensive security](#-production-reliability-caching--defensive-security)
+- [Operations KPI dashboard](#-operations-kpi-dashboard)
 - [The data behind it](#-the-data-behind-it)
 - [Quickstart — one command](#-quickstart--one-command)
 - [Repository map](#-repository-map)
@@ -732,6 +733,31 @@ copilot event.
 
 ---
 
+## 📊 Operations KPI dashboard
+
+`GET /admin/kpi` and the token-gated page at `/admin/kpi` turn the measurement tables into one
+operations view. The page is intentionally separate from the storefront: it calls the API with
+`X-Admin-Token`, keeps the token in `sessionStorage` (or accepts it once as `?token=` and removes it
+from the URL), and shows a clean entry form again on `403`. An unset `ADMIN_TOKEN` disables the
+endpoint with `503`; local Docker Compose defaults it to `dev-admin-token` for the demo only.
+
+Four cards cover the operational questions:
+
+| Card | What it shows | Honest boundary |
+|---|---|---|
+| **Executive Revenue & Funnel** | Paid-order count, total IDR, AOV, and view→cart / cart→checkout / checkout→order / overall session rates | Revenue is only `orders.status='paid'`; steps are independent sessions, not a strict first-touch funnel |
+| **Cohort Analysis** | Copilot vs non-copilot sessions, add-to-cart rate, conversion rate and AOV | Observational and self-selected — no randomized holdout, so never call it lift |
+| **Copilot Performance & Safety** | Turn outcomes, final-turn deflection, p50/p95 latency, thumbs up/down | "Answered" is tool-grounded, not audited for correctness; deflection is self-service resolution, not human-agent deflection |
+| **Search Health & Demand Signals** | Search count, zero-result rate, search→PDP, top missed queries | `results_count` is client-supplied; top queries are exact strings, not typo-clustered |
+
+Every response carries `metadata.synthetic=true`, `environment='demo'` and the caveat
+*"All metrics are derived from seeded/simulated demo data; not real customer revenue."* The UI repeats
+that as a prominent **SYNTHETIC / DEMO DATA** badge. Cost is deliberately absent: token logging exists
+but unit prices and SLOs are phase 13, so no cost figure is fabricated here. API details and the full
+response shape are in [`api/README.md`](./api/README.md#admin-kpi-dashboard-get-adminkpi).
+
+---
+
 ## 📦 The data behind it
 
 | | |
@@ -930,6 +956,7 @@ manual/
 │   │   ├── recs.py               #     popular, item-to-item, session recommendations
 │   │   ├── reviews.py            #     product reviews
 │   │   ├── events.py             #     funnel events + summary
+│   │   ├── admin.py              #     token-gated synthetic KPI dashboard
 │   │   ├── checkout.py           #     confirm checkout, order lookup
 │   │   └── copilot.py            #     AI copilot chat + tool listing
 │   ├── search.py                 #   BM25 + embeddings + RRF + CLIP; ID→EN rewriter
@@ -948,7 +975,7 @@ manual/
 │   ├── BUSINESS_CASE.md          #   personas, problems → features → KPIs, hypotheses, KPI tree
 │   └── METRICS.md                #   KPI definitions, formulas, sources, caveats, phase status
 ├── shop/                         # Next.js 16 storefront
-│   └── src/{app,components,lib}  #   routes, UI (CopilotChat + ProductCopilotEntry), API client, session & cart state
+│   └── src/{app,components,lib}  #   routes (incl. /admin/kpi), UI, API client, session & cart state
 ├── pipelines/                    # offline data & retrieval engineering
 │   ├── build_catalog.py          #   raw Amazon data → 6,000-product catalog (3 streaming passes)
 │   ├── seed.py                   #   catalog → Postgres (offline, upsert by asin)
