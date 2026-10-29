@@ -120,7 +120,7 @@ def _iter_product_dicts(value: Any):
             return
         for nested in value.values():
             yield from _iter_product_dicts(nested)
-    elif isinstance(value, (list, tuple)):
+    elif isinstance(value, list | tuple):
         for nested in value:
             yield from _iter_product_dicts(nested)
 
