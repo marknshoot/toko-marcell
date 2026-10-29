@@ -11,7 +11,7 @@
 
 This baseline applies to all standard tops, pants, and footwear in the catalog unless overridden by the **Brand-Specific Deviations** in Section 3.
 
-### A. Tops & Outerwear (Height & Weight Guidelines)
+### A. Tops & Outerwear (Height & Weight Guidelines / Panduan Ukuran Baju Atasan TB & BB)
 
 | Size | Height (TB) | Weight (BB) | Chest Circumference (cm) | Standard Fit Feel |
 | :---: | :---: | :---: | :---: | :--- |
@@ -21,11 +21,11 @@ This baseline applies to all standard tops, pants, and footwear in the catalog u
 | **XL** | 180 – 186 cm | 78 – 88 kg | 108 – 116 cm | Relaxed / Roomy |
 | **XXL** | 185 – 192 cm | 88 – 100 kg | 116 – 124 cm | Oversized / Big & Tall |
 
-*Stylist Rule of Thumb:* If customer height and weight point to two different sizes (e.g. TB 175 cm but BB 55 kg), prioritize chest/shoulder fit (Size M for width, Size S for snugness).
+*Stylist Rule of Thumb:* If customer height (tinggi badan / TB) and weight (berat badan / BB) point to two different sizes (e.g. TB 175 cm but BB 55 kg), prioritize chest/shoulder fit (Size M for width, Size S for snugness).
 
 ---
 
-### B. Standard Bottoms (Waist Sizing: Inches to Centimeters)
+### B. Standard Bottoms (Waist Sizing: Inches to Centimeters / Tabel Ukuran Celana & Lingkar Pinggang)
 
 | Waist Size (US/UK) | Waist Circumference (cm) | Equivalent Asian Size | Recommended Body Weight |
 | :---: | :---: | :---: | :---: |
@@ -38,7 +38,7 @@ This baseline applies to all standard tops, pants, and footwear in the catalog u
 
 ---
 
-### C. Standard Footwear Conversion
+### C. Standard Footwear Conversion (Tabel Ukuran Sepatu & Sandal)
 
 | US Men | US Women | EU Standard | Foot Length (cm) | Indonesian Fit Note |
 | :---: | :---: | :---: | :---: | :--- |

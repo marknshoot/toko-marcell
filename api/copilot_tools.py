@@ -105,9 +105,10 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         cat_hint = " Allowed categories: " + ", ".join(category_enum[:40]) + "."
 
     _search_desc = (
-        "Search the Toko Marcell catalog (hybrid BM25 + dense vector). Write the "
-        "query in ENGLISH catalog vocabulary even if the shopper speaks Indonesian. "
-        "Use for 'do you have…', style, outfit, and budget queries." + cat_hint
+        "Search the Toko Marcell catalog (hybrid BM25 + multilingual ID/EN dense vector). "
+        "Include English catalog terms (or bilingual ID+EN terms) so both lexical BM25 and "
+        "multilingual vector retrieval match. Use for 'do you have…', style, outfit, and budget queries."
+        + cat_hint
     )
 
     @tool(description=_search_desc)

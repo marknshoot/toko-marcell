@@ -47,8 +47,37 @@ def test_policy_retrieval_returns_parent_chunks_deduped():
 
 
 def test_policy_retrieval_brand_question_en():
+    import types
+
+    for mod_name, cls_name in [
+        ("langchain_community.chat_models.vertexai", "ChatVertexAI"),
+        ("langchain_community.llms", "VertexAI"),
+    ]:
+        mod = sys.modules.get(mod_name) or types.ModuleType(mod_name)
+        if not hasattr(mod, cls_name):
+            setattr(mod, cls_name, type(cls_name, (), {}))
+        sys.modules[mod_name] = mod
+
     from agent_tools import lookup_store_policy
+    from ragas import EvaluationDataset, SingleTurnSample, evaluate
+    from ragas.metrics import IDBasedContextRecall, NonLLMContextRecall
 
     hits = lookup_store_policy("does Dickies run small", limit=3, db_url=DB_URL)
     assert hits
-    assert any("dickies" in h["title"].lower() for h in hits)
+    dickies_hit = next((h for h in hits if "dickies" in h["title"].lower()), None)
+    assert dickies_hit is not None
+
+    sample = SingleTurnSample(
+        user_input="does Dickies run small",
+        retrieved_contexts=[h["content"] for h in hits],
+        reference_contexts=[dickies_hit["content"]],
+        retrieved_context_ids=[h["title"] for h in hits],
+        reference_context_ids=[dickies_hit["title"]],
+    )
+    res = evaluate(
+        dataset=EvaluationDataset(samples=[sample]),
+        metrics=[IDBasedContextRecall(), NonLLMContextRecall()],
+        show_progress=False,
+    )
+    assert res.scores[0]["id_based_context_recall"] == 1.0
+    assert res.scores[0]["non_llm_context_recall"] >= 0.99

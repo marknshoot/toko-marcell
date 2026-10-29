@@ -26,43 +26,61 @@ def _hypothetical_questions(chunk: dict) -> list[tuple[str, str]]:
     """
     cat = chunk["category"]
     title = chunk["title"]
+    title_lower = title.lower()
     qs: list[tuple[str, str]] = []
 
     if cat in ("sizing_baseline", "sizing"):
-        qs += [
-            ("Ukuran saya apa kalau tinggi badan 170 berat 65?", "id"),
-            ("Panduan ukuran baju dan celana di toko gimana?", "id"),
-            ("How do I pick the right size by height and weight?", "en"),
-            ("Tabel ukuran untuk atasan dan bawahan ada nggak?", "id"),
-        ]
+        if "bottom" in title_lower or "waist" in title_lower or "celana" in title_lower:
+            qs += [
+                ("Tabel ukuran celana berdasarkan pinggang dan berat badan?", "id"),
+                ("Ukuran celana jeans atau chino kalau lingkar pinggang 80 cm?", "id"),
+                ("What waist size in pants or bottoms should I get?", "en"),
+                ("Konversi ukuran celana US ke cm pinggang?", "id"),
+            ]
+        elif "footwear" in title_lower or "sepatu" in title_lower:
+            qs += [
+                ("Tabel ukuran sepatu sandal konversi US EU panjang kaki cm?", "id"),
+                ("Ukuran sepatu pria wanita kalau panjang kaki 26 cm atau EU 41?", "id"),
+                ("Standard footwear shoe size conversion US to EU and foot length?", "en"),
+                ("Panduan ukuran sepatu di toko gimana?", "id"),
+            ]
+        else:
+            qs += [
+                ("Ukuran saya apa kalau tinggi badan 170 berat 65?", "id"),
+                ("Panduan ukuran baju atasan kaos jaket berdasarkan TB dan BB?", "id"),
+                ("How do I pick the right top size by height and weight?", "en"),
+                ("Tabel ukuran untuk atasan dan lingkar dada ada nggak?", "id"),
+            ]
     elif cat == "brand_sizing":
-        brand = title.split("(")[0].strip()
+        raw_brand = title.split("(")[0].strip()
+        brand = re.sub(r"^\d+[a-z]?\.\s*", "", raw_brand).strip() or raw_brand
         qs += [
-            (f"Ukuran {brand} apakah pas atau perlu naik/turun size?", "id"),
-            (f"Apakah {brand} runs small atau large?", "id"),
-            (f"Does {brand} run true to size?", "en"),
-            (f"Saran ukuran untuk {brand} gimana kak?", "id"),
+            (f"{brand} mending naik atau turun size? Ambil ukuran berapa?", "id"),
+            (f"Ukuran {brand} apakah pas, kekecilan, atau kebesaran?", "id"),
+            (f"Does {brand} run large, small, or true to size?", "en"),
+            (f"Saran ukuran dan beda model {brand} gimana kak?", "id"),
+            (f"How does {brand} sizing fit compared to standard size?", "en"),
         ]
     elif cat in ("payment_qris", "payment"):
         qs += [
-            ("Cara bayar pakai QRIS gimana?", "id"),
-            ("Apakah pembayaran QRIS ini sungguhan atau simulasi?", "id"),
-            ("How does the QRIS payment work?", "en"),
-            ("Metode pembayaran apa saja yang tersedia?", "id"),
+            ("Cara bayarnya gimana ya pakai QRIS?", "id"),
+            ("Apakah pembayaran QRIS ini cuma simulasi atau beneran?", "id"),
+            ("How does the QRIS payment and checkout simulation work?", "en"),
+            ("Metode pembayaran apa saja yang tersedia di toko?", "id"),
         ]
     elif cat == "shipping":
         qs += [
-            ("Ongkir ke kota saya berapa dan berapa lama?", "id"),
-            ("Estimasi pengiriman berapa hari?", "id"),
-            ("How long does shipping take and is it free?", "en"),
-            ("Ada gratis ongkir nggak?", "id"),
+            ("Ongkir ke kota saya berapa dan berapa lama sampai?", "id"),
+            ("Gratis ongkir mulai belanja berapa rupiah?", "id"),
+            ("How long does shipping take and when is shipping free?", "en"),
+            ("Estimasi pengiriman JNE SiCepat GoSend berapa hari?", "id"),
         ]
     elif cat == "return_policy":
         qs += [
-            ("Kalau ukuran nggak pas bisa tukar nggak?", "id"),
-            ("Kebijakan retur dan tukar barang gimana?", "id"),
-            ("What is the return and exchange policy?", "en"),
-            ("Berapa lama batas waktu retur?", "id"),
+            ("Kalau ukuran salah atau nggak pas bisa tukar?", "id"),
+            ("Berapa lama batas waktu retur dan tukar barang?", "id"),
+            ("What is the 7-day return and size exchange policy?", "en"),
+            ("Syarat retur atau tukar ukuran gimana?", "id"),
         ]
     elif cat == "faq":
         qs += [
@@ -101,10 +119,12 @@ def _chunk_markdown(filepath: str, default_category: str) -> list[dict]:
 
         category = default_category
         header_lower = header.lower()
-        if "size" in header_lower or "tops" in header_lower or "bottoms" in header_lower or "footwear" in header_lower:
-            category = "sizing_baseline"
+        if "example" in header_lower:
+            category = "sizing_example"
         elif any(brand in header_lower for brand in ["dickies", "levi", "carhartt", "birkenstock", "toms", "champion"]):
             category = "brand_sizing"
+        elif "size" in header_lower or "tops" in header_lower or "bottoms" in header_lower or "footwear" in header_lower:
+            category = "sizing_baseline"
         elif "qris" in header_lower or "payment" in header_lower:
             category = "payment_qris"
         elif "shipping" in header_lower or "delivery" in header_lower:
