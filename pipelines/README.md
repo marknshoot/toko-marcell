@@ -1,8 +1,8 @@
-# `pipelines/` — data engineering, embeddings, and the ML research harnesses
+# `pipelines/` — data engineering, embeddings, and retrieval evaluation harnesses
 
 Everything that runs **offline**. This folder turns an open research dataset into the real data Toko
-Marcell serves online: the product catalog, the vector embeddings, the recommendation tables, the
-review corpus, and the multimodal image–text dataset used for the VLM fine-tuning study.
+Marcell serves online: the product catalog, the bilingual vector embeddings, the recommendation tables,
+the review corpus, and the evaluation harnesses (IR, RAGAS, and collaborative filtering).
 
 There is no mock data. `../shop` no longer ships a hard-coded product array — if the pipeline has not
 run, the shop is empty.
@@ -38,17 +38,11 @@ descriptions (search + NLP), user_id / asin / rating / timestamp (recommendation
 evidence: in `Amazon_Fashion`, **90% of items have no price** and the `categories` field is empty,
 which makes a shop catalog impossible.
 
-> The old plan mentioned "synthetic events" for recommendations. That was upgraded: interactions are
-> **real** — 3.36 M genuine user–item rows with timestamps — so time-based splits and HR@10 are
-> meaningful, not self-graded.
-
 ---
 
 ## 2. Reproduce
 
 ```bash
-cd manual
-
 # 1. download raw files (~2.8 GB, resumable, gitignored)
 bash pipelines/download_data.sh
 
@@ -75,7 +69,7 @@ spare.
 
 ## 3. What the catalog build does
 
-```
+```text
 pass 1  reviews   → interactions per item + rating sum          (11,285,464 reviews read)
 pick    top candidates by interactions (8× the catalog size)
 pass 2  metadata → quality filters, category vocabulary, brand lookup
@@ -121,9 +115,6 @@ kept (all distinct ASINs).
 | Price (USD) | min 1.00 · median 17.86 · p90 49.99 · max 275.00 |
 | Matrix | 3,363,680 / 5,833,104,000 cells = **0.058% dense** |
 
-The long tail is real: the most-reviewed item has 19,693 interactions while the minimum in the catalog
-is 198 — a ~99× spread across just the kept items.
-
 ### 6,000 built → 4,670 served
 
 After the build, `cleanup_catalog.py` runs against the live database and removes:
@@ -132,9 +123,7 @@ After the build, `cleanup_catalog.py` runs against the live database and removes
 2. **duplicate title variants**, keeping the best-rated/most-reviewed row.
 
 Dependent reviews are deleted too, then `VACUUM ANALYZE` runs. The shipped seed and the storefront
-copy therefore read **4,670 products / 46,700 reviews**. The ML artifacts (embeddings, splits, recs)
-are built from the 6,000-product catalog; the served catalog is the cleaned 4,670. Both numbers are
-correct in their own context, and the READMEs say which is which.
+copy therefore read **4,670 products / 46,700 reviews**.
 
 ---
 
@@ -142,146 +131,61 @@ correct in their own context, and the READMEs say which is which.
 
 | Script | Model | Dim | Column | Index |
 |---|---|:---:|---|---|
-| `embed_catalog.py` | `sentence-transformers/all-MiniLM-L6-v2` (fastembed/ONNX) | 384 | `products.embedding` | HNSW cosine |
-| `embed_images.py` | `Qdrant/clip-ViT-B-32-vision` (fastembed/ONNX) | 512 | `products.image_embedding` | HNSW cosine |
-| `embed_catalog_vlm.py` | **fine-tuned champion CLIP** from `pipelines/Best Model/` | 512 | `products.image_embedding` + offline `.npy`/`.json` | HNSW cosine |
-| `export_vision_onnx.py` | exports the champion **vision** tower to ONNX (fp32 + int8) for serving | 512 | `models/champion_vision_encoder{,_int8}.onnx` | — |
-| `export_text_onnx.py` | fp16 conversion of the champion **text** encoder ONNX (half size, identical embeddings) | 512 | `models/champion_text_encoder_fp16.onnx` | — |
-
-> **Do not mix encoders.** The served `products.image_embedding` vectors come from the **fine-tuned
-> champion** (`embed_catalog_vlm.py`). `embed_images.py` writes *zero-shot* fastembed vectors instead;
-> running it against the serving database would desynchronise the query and document spaces. Use it
-> for experiments only. The API likewise has **no** zero-shot fallback — it returns `503` if the
-> champion vision encoder is missing.
+| `embed_catalog.py` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (default) or `all-MiniLM-L6-v2` via `fastembed` | 384 | `products.embedding_ml` / `products.embedding` | HNSW cosine |
+| `embed_images.py` | `Qdrant/clip-ViT-B-32-vision` (`fastembed` ONNX) | 512 | `products.image_embedding` | HNSW cosine |
 
 Text representation for MiniLM is `title + brand + category + features + description` — the same
 fields BM25 indexes, so the two rankers see the same evidence and their disagreement is genuinely
 about *method*, not data.
 
-`embed_catalog_vlm.py` also exposes `--skip-db` to produce the standalone
-`data/processed/catalog_embeddings.npy` + `catalog_items.json` used for offline search experiments.
-
 `download_images.py` prefetches and caches catalog images to `data/processed/images/` (40 threads) so
-the VLM dataset and image embeddings do not re-hit Amazon's CDN.
-
-### Multilingual embedding A/B (opt-in)
-
-`embed_catalog.py` takes `--model` and `--column` so a second dense model can be written to a parallel
-column without touching the default:
+`embed_images.py` does not re-hit Amazon's CDN.
 
 ```bash
-# Default MiniLM (products.embedding):
-python3 pipelines/embed_catalog.py
-# Multilingual variant into products.embedding_ml:
+# Multilingual embeddings (default served column: embedding_ml):
 python3 pipelines/embed_catalog.py \
   --model sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 \
   --column embedding_ml
-```
 
-The API switches which column/model it serves via `TEXT_EMBED_MODEL` + `TEXT_EMBED_COLUMN` env vars.
-The A/B result and the **decision to keep MiniLM as the default** (the multilingual model wins quality
-but peaks ~1 GB RSS with the CLIP encoders loaded) are recorded in
-[`BENCHMARKS.md`](./BENCHMARKS.md#multilingual-embedding-ab--minilm-vs-paraphrase-multilingual-minilm-l12-v2).
+# English MiniLM embeddings (products.embedding):
+python3 pipelines/embed_catalog.py
+
+# Pre-trained CLIP vision embeddings (products.image_embedding):
+python3 pipelines/embed_images.py --overwrite
+```
 
 ---
 
-## 5b. Sizing knowledge (authored, not mined)
+## 5b. Sizing & store policy knowledge (authored, bilingual RAG)
 
-Sizing and fit guidance comes entirely from the **authored knowledge base**, not from the review
-corpus:
+Sizing and policy guidance comes from the **authored knowledge base**:
 
 | File | What |
 |---|---|
-| `api/knowledge/size_charts.md` | the store's sizing guide: TB/BB tops chart, waist bottoms chart, footwear conversion, and per-brand cut rules for Dickies, Levi's, Carhartt, Champion, Birkenstock and TOMS |
+| `api/knowledge/size_charts.md` | the store's bilingual sizing guide: TB/BB tops chart, waist bottoms chart, footwear conversion, and per-brand cut rules for Dickies, Levi's, Carhartt, Champion, Birkenstock and TOMS |
 | `api/knowledge/size_chart.json` | the same values in machine-readable form, consumed by `api/sizing.py`'s `recommend_size` |
+| `api/knowledge/store_policies.md` | store identity, QRIS demo checkout rules, shipping/ongkir rates, and 7-day return/exchange policy |
 
-`size_charts.md` is also embedded into the RAG index (`store_knowledge`), so shoppers can ask about
-sizing in natural language. `size_chart.json` is labelled **"panduan umum toko"** — a store
-rule-of-thumb, explicitly not an official brand chart — and `recommend_size` applies it in two layers
-(store baseline → brand cut rule), always as an advisory with a disclaimer.
-
-> There is no per-product or review-derived fit signal any more. An earlier Phase 4a experiment mined
-> fit mentions from the review corpus into `product_fit` / `brand_fit` tables; those tables, the
-> `build_fit_signals.py` pipeline and the `/products/{id}/fit` endpoint were removed. If an older
-> database still carries them they are inert and can be dropped:
-> `DROP TABLE IF EXISTS product_fit, brand_fit;`
-
-### Applying Phase 4 schema to an existing database
-
-The `embedding_ml` column is Alembic revision `0002` (`api/migrations/versions/`), applied
-automatically when the API starts, and it ships inside the committed seed dump. To add it to an
-**already-populated** target (e.g. the Neon/Render DB) **without a full reseed** or a deploy, run the
-migrations directly — they are idempotent and only ADD objects:
-
-```bash
-cd api && DATABASE_URL="$DATABASE_URL" alembic upgrade head
-```
-
-Then load the data (either via the pipeline, or by restoring the regenerated seed dump):
-
-```bash
-# Multilingual embeddings from the pipeline, against the target DB:
-python3 pipelines/embed_catalog.py --database-url "$DATABASE_URL" \
-  --model sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2 --column embedding_ml
-```
-
-> **Do NOT run this against Neon/Render as part of CI or this PR.** It is documented for the owner to
-> run manually at merge time. This phase only validates it against the local Docker DB.
+`api/knowledge_seed.py` splits the markdown files by section header, embeds each chunk + 3–5 bilingual
+(ID+EN) hypothetical questions using `TEXT_EMBED_MODEL` (`paraphrase-multilingual-MiniLM-L12-v2`), and
+populates `store_knowledge` and `store_knowledge_questions`. At query time, `lookup_store_policy` fuses
+hypothetical-question vectors, direct-chunk vectors, and IDF-weighted bilingual lexical keywords via
+Reciprocal Rank Fusion (`k=60`).
 
 ---
 
 ## 6. Recommendations
 
-Recommendations are built offline by `build_recs.py` and served by three API endpoints. There are no
-fabricated "you may also like" lists: every rail comes from the real 3.36 M-interaction log plus the
-catalog's own `also_buy`/`also_view` graph.
+Recommendations are built offline by `build_recs.py` and served by three API endpoints. Every rail
+comes from the real 3.36 M-interaction log plus the catalog's own `also_buy`/`also_view` graph:
 
-**Signals, and how they combine:**
-
-1. **Popularity, Bayesian-smoothed.** A raw average rating rewards a product with three 5-star
-   reviews. The baseline shrinks it toward the catalog mean instead:
-
-   $$\text{score} = \frac{n \cdot \bar{r} + m \cdot C}{n + m}$$
-
-   with prior weight `m = 100` and prior mean `C = 4.31`. Global top-50 and top-30 per department,
-   deduplicated by title. Written to `popular_recs.json` and used as the cold-start fill pool.
-
-2. **Item-to-item co-occurrence.** Cosine similarity over per-item user sets:
-   `cos(i,j) = co(i,j) / (√n_i · √n_j)`, where `co(i,j)` counts users who interacted with both items.
-   Ultra-popular items are capped at 5,000 sampled users so the candidate product stays bounded.
-
-3. **Metadata boosts.** `also_buy` adds `+0.50` and `also_view` adds `+0.30` to a candidate's score,
-   so explicit co-purchase signals outrank coincidental co-views.
-
-4. **Title dedupe + cold fill.** Variants sharing a title are collapsed. Each item keeps up to 12
-   recommendations; anything with fewer than 6 is backfilled from **category popularity**, then
-   **department popularity** — so no rail is ever empty.
-
-```mermaid
-flowchart LR
-    I["interactions.csv.gz<br/>3.36M rows"] --> CO["co-occurrence<br/>cosine of user sets"]
-    M["products.jsonl<br/>also_buy / also_view"] --> BOOST["metadata boosts<br/>+0.50 / +0.30"]
-    P["rating_count + avg_rating"] --> BAY["Bayesian popularity<br/>m=100, C=4.31"]
-    CO --> MERGE["merge + title dedupe"]
-    BOOST --> MERGE
-    BAY --> MERGE
-    MERGE --> ITEM["item_recommendations<br/>asin → [recs]"]
-    BAY --> POP["popular_recs.json"]
-    ITEM --> API["served by ../api"]
-    POP --> API
-```
-
-Outputs: `data/processed/item_recs.json` (up to 12 recs/ASIN), `data/processed/popular_recs.json`
-(global + per department), and the `item_recommendations` Postgres table (6,000 rows in the seed).
-
-`eval_recs.py` measures them: **sequential leave-one-out** on active users (≥5 interactions) where the
-held-out target is the user's final interaction and the penultimate interaction is the session
-context — i.e. a realistic "recommend the next thing from the current PDP" setup. It reports HR@10,
-HR@5, MRR@10 and nDCG@10 against random and global-popularity baselines and prints the relative gains.
-
-The online side (session recommendations, item recs, popularity) and the offline side (real
-long-horizon interaction history) cover each other's blind spots — see
-[`../api/README.md`](../api/README.md#recommendations) for the serving logic.
+1. **Popularity, Bayesian-smoothed:** $\text{score} = \frac{n \cdot \bar{r} + m \cdot C}{n + m}$ with
+   `m = 100`, `C = 4.31`.
+2. **Item-to-item co-occurrence:** cosine similarity over per-item user sets, capped at 5,000 sampled
+   users for ultra-popular items.
+3. **Metadata boosts:** `also_buy` adds `+0.50` and `also_view` adds `+0.30`.
+4. **Title dedupe + cold fill:** variants collapsed; ≤12 recs/item; backfill from category then
+   department popularity when fewer than 6 remain.
 
 ---
 
@@ -289,98 +193,25 @@ long-horizon interaction history) cover each other's blind spots — see
 
 `extract_reviews.py` streams the 1.27 GB raw reviews file and keeps up to **10 authentic reviews per
 catalog ASIN** (rating, summary, comment, verified flag, date), writing them to the `reviews` table —
-**46,700** rows in the seed. These power the PDP review section and the copilot's aspect-level social
-proof. They are real user reviews, attributed to their (public) reviewer display names.
+**46,700** rows in the seed.
 
 ---
 
-## 8. The multimodal VLM study
-
-This is the ML research core of the project. The question: *can domain-adapting CLIP on this catalog
-measurably improve fine-grained fashion retrieval, and which fine-tuning strategy wins?*
-
-```mermaid
-flowchart LR
-    D["4,670 cleaned products"] --> P["prepare_clip_dataset.py<br/>validate cached images → structured captions"]
-    P --> S["5,378 verified pairs<br/>80/10/10 split (seed 42)"]
-    S --> T["train_clip.py / experiments_clip.py<br/>InfoNCE, hard negatives, AMP"]
-    T --> E["eval_multimodal.py<br/>539-pair test: Recall@K, MRR, error mining"]
-    E --> B["multimodal_benchmark_results.json"]
-    T --> M["models/ (cards tracked, weights ignored)"]
-    M --> O["ONNX text encoder → HF Hub"]
-    O --> A["../api serves the champion encoder"]
-```
-
-### Dataset preparation
-
-`prepare_clip_dataset.py` validates the locally cached images (>500 bytes, readable JPEG), builds
-structured captions (`Brand + Title + (Category / Department) + first fabric features`), and splits
-deterministically into **4,302 train / 537 val / 539 test**. Summary:
-`data/processed/clip_dataset_summary.json` (5,378 pairs; 622 skipped for a missing image).
-
-### Training
-
-`train_clip.py` is the base PyTorch trainer: symmetric InfoNCE, category-aware hard-negative
-`BatchSampler`, mixed precision + gradient scaling, cosine annealing with warmup, validation Recall@1
-checkpointing. `experiments_clip.py` implements the four ablations:
-
-| Flag | Experiment | Idea from |
-|---|---|---|
-| `--exp baseline` | full fine-tune, InfoNCE | Chia et al., Fashion-CLIP (2022) |
-| `--exp lora` | LoRA on `q_proj`, `v_proj` | Hu et al., LoRA (2021) |
-| `--exp siglip` | pairwise sigmoid loss | Zhai et al., SigLIP (2023) |
-| `--exp decoupled_lr` | freeze ViT 0–5, asymmetric LRs | Wortsman et al., WiSE-FT (2022) |
-
-The full study ran on **Kaggle GPU (Tesla T4 16 GB)**, AMP FP16, 3 epochs, batch 64, base LR 5e-6.
-
-### Results (539 held-out pairs) — authoritative leaderboard
-
-| Experiment | Recall@1 | Recall@5 | Recall@10 | MRR | Latency (T4) |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Zero-shot base CLIP | 26.53% | 54.92% | 70.69% | 0.4033 | 27.80 ms |
-| PEFT LoRA | 33.40% | 71.61% | 83.49% | 0.5038 | 15.50 ms |
-| SigLIP | 35.25% | 71.43% | 82.19% | 0.5091 | 19.38 ms |
-| WiSE-FT ensemble (α=0.35) | 37.85% | 73.28% | 85.53% | 0.5363 | 9.76 ms |
-| **🏆 Decoupled LR** | **39.15%** | **78.11%** | **87.20%** | **0.5592** | **14.01 ms** |
-
-**+12.62 points absolute / +47.57% relative Recall@1 over zero-shot.** Machine-readable:
-[`multimodal_benchmark_results.json`](./multimodal_benchmark_results.json). Full narrative and
-qualitative failure cases: [`failure_case_analysis.md`](./failure_case_analysis.md); the hypotheses are
-derived in [`literature_review_clip_finetuning.md`](./literature_review_clip_finetuning.md).
-
-> **Reproducibility note.** `experiments/lora` and `models/fashion_clip` also contain *small local
-> smoke runs* (batch 8, 1 epoch) whose test metrics are much higher — they ran against a tiny
-> evaluation slice and are kept only as sanity checks for the training loop. The **539-pair Kaggle
-> leaderboard above is the authoritative result.** If you are reading a number elsewhere in this repo,
-> it should reconcile with this table and the JSON.
-
-### Export to production
-
-The champion's **text encoder was exported to ONNX** for cheap CPU inference and is published at
-[`Marcell-Kristianto/toko-marcell-clip`](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip).
-`../api/search.py` downloads it at runtime (or uses a local copy), runs it with ONNX Runtime on CPU
-(< ~150 MB RAM, 2 intra-op threads), and falls back to fastembed's general CLIP if it is unavailable.
-Model **weights** themselves are **gitignored** (large binaries); the small model cards, adapter
-configs and experiment summaries under `models/experiments/` are tracked. The HF hub artifact is the
-production contract.
-
----
-
-## 9. Evaluation harnesses at a glance
+## 8. Evaluation harnesses at a glance
 
 | Harness | Protocol | Metrics |
 |---|---|---|
-| `eval_search.py` | 32 queries in 4 groups (brand/SKU, category+features, semantic, Indonesian/casual), BM25 vs hybrid | HitRate@10, Precision@10, MRR@10, nDCG@10 |
+| `eval_search.py` | 32 queries in 4 groups (brand/SKU, category+features, semantic, Indonesian/casual), 5 modes | HitRate@10, Precision@10, MRR@10, nDCG@10 |
+| `eval_rag.py` | 12 bilingual (ID+EN) policy & sizing queries evaluated with **RAGAS** (`direct_chunk` vs `hypothetical_question` vs `hybrid_rrf`) | `id_based_context_precision`, `id_based_context_recall`, `non_llm_context_precision_with_reference`, `non_llm_context_recall` |
 | `eval_recs.py` | sequential leave-one-out, ≥5 interactions/user, random + popularity baselines | HR@10, HR@5, MRR@10, nDCG@10 |
-| `eval_multimodal.py` | 539-pair text→image retrieval, zero-shot vs fine-tuned | Recall@1/5/10, MRR, mean rank, latency, rank-migration mining |
 | `eda_interactions.py` | interaction EDA | volume, coverage, sparsity, long tail, rating distribution, temporal span |
 | `tests/test_pipeline_math.py` | unit tests for pipeline maths (no DB) | — |
 
-All harnesses print human-readable tables and are safe to run repeatedly against a local stack.
+All harnesses print human-readable tables and write machine-readable JSON artifacts to `pipelines/results/`.
 
 ---
 
-## 10. Script reference
+## 9. Script reference
 
 | Script | Purpose |
 |---|---|
@@ -389,67 +220,15 @@ All harnesses print human-readable tables and are safe to run repeatedly against
 | `seed.py` | upsert catalog → Postgres (offline compose profile) |
 | `cleanup_catalog.py` | remove dead-image and duplicate-title rows (6,000 → 4,670) |
 | `download_images.py` | prefetch product images to the local cache |
-| `embed_catalog.py` | MiniLM 384-d text embeddings + HNSW (`--model`/`--column` for the multilingual A/B) |
-| `embed_images.py` | fastembed CLIP 512-d image embeddings + HNSW |
-| `embed_catalog_vlm.py` | fine-tuned champion CLIP image embeddings (+ offline `.npy`) |
-| `export_vision_onnx.py` | export the champion vision tower to ONNX (fp32 + int8) for torch-free serving |
-| `export_text_onnx.py` | convert the champion text encoder ONNX to fp16 (half size, identical embeddings) |
+| `embed_catalog.py` | 384-d text embeddings + HNSW (`--model`/`--column` for multilingual `embedding_ml`) |
+| `embed_images.py` | pre-trained `fastembed` CLIP (`Qdrant/clip-ViT-B-32-vision`) 512-d image embeddings + HNSW |
 | `build_recs.py` | co-occurrence + metadata boosts + Bayesian popularity + category/department backfill |
 | `extract_reviews.py` | ≤10 real reviews per ASIN → `reviews` |
 | `eda_interactions.py` | interaction EDA |
-| `prepare_clip_dataset.py` | 5,378 verified pairs → 80/10/10 splits |
-| `train_clip.py` | PyTorch InfoNCE trainer (hard negatives, AMP, warmup) |
-| `experiments_clip.py` | the 4 fine-tuning ablations |
-| `eval_multimodal.py` | multimodal retrieval evaluation + failure mining |
-| `eval_search.py` | BM25 vs hybrid IR harness |
+| `eval_search.py` | 5-mode BM25 / vector / hybrid / rerank / trimodal IR harness |
+| `eval_rag.py` | RAGAS evaluation harness for store policy & sizing RAG |
 | `eval_recs.py` | recommendation HR/nDCG harness |
 | `migrate_to_neon.py` | local → Neon serverless migration (schema, catalog, embeddings, indexes) |
-| `kaggle/` | notebook + CLI metadata for the GPU study |
-
----
-
-## 11. Kaggle workflow
-
-The GPU study is packaged for Kaggle's free tier. Full step-by-step instructions (auth, dataset
-upload, kernel push, output download, and the web-UI alternative) live in
-[`kaggle/README.md`](./kaggle/README.md). In short: build a ~165 MB dataset of the JSON splits +
-`images.tar.gz`, push the notebook with `"enable_gpu": "true"`, and pull the resulting checkpoints and
-`experiment_summary.json` files back into `models/`.
-
----
-
-## 12. Decisions you may want to revisit
-
-1. **Prices are USD, the shop shows IDR.** `--usd-idr` defaults to `16000`, a *fixed demo rate*
-   recorded in `stats.json`. It is a presentation conversion, not a live rate; real prices stay
-   untouched in `price_usd`.
-2. **The catalog is multi-brand — decided, not accidental** (Levi's, Dickies, TOMS, Birkenstock,
-   Timex…). Multi-brand is **not** multi-vendor: one seller, one catalog, one checkout, no marketplace
-   mechanics. Filtering to a single brand was rejected because it would shrink the catalog and weaken
-   the recommendation signal without improving the product story.
-3. **`products.id` is a stable integer** (`1..6000`, ordered by interaction count) because FastAPI and
-   the cart use ints; `asin` stays the ML/event key. Deterministic across runs.
-4. **Images are hot-linked** from Amazon's CDN rather than re-hosted, to respect the dataset licence
-   and keep the repo light.
-5. **`data/processed/` is gitignored**, but the cleaned seed is committed so the demo runs without an
-   8-minute pipeline.
-6. **Dedupe before pagination.** Title sharing variants are collapsed in the clean-up step and again
-   in search, so `total` counts reachable results.
-
----
-
-## 13. Known gaps
-
-- The build fits 6,000 products; the served catalog is the cleaned 4,670. Re-running the full ML suite
-   against the cleaned catalog (rather than the 6,000 build) is a fair next step.
-- The qualitative failure analysis in `failure_case_analysis.md` comes from an earlier evaluation
-  pass; its aggregate table is superseded by `multimodal_benchmark_results.json` and the leaderboard
-  above. The case studies are still useful as illustrations of *why* zero-shot CLIP fails on fabric
-  and cut.
-- Pipeline outputs are not yet published as CI artifacts; reproducing a leaderboard number currently
-  means running the harness locally.
-- No automated data-quality gate: `build_catalog.py` records its drops in `stats.json`, but nothing
-  fails the build if the distribution shifts.
 
 ---
 
@@ -458,4 +237,3 @@ upload, kernel push, output download, and the web-UI alternative) live in
 - [`BENCHMARKS.md`](./BENCHMARKS.md) — the source ledger for every headline number
 - [`../README.md`](../README.md) — project overview and architecture
 - [`../api/README.md`](../api/README.md) — how the served catalog, search and copilot work
-- [`kaggle/README.md`](./kaggle/README.md) — running the GPU study

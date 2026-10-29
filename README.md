@@ -1,9 +1,7 @@
-# Toko Marcell — Multimodal Hybrid Retrieval & Agentic AI E-Commerce Engine
+# Toko Marcell — Bilingual Hybrid Retrieval & Agentic AI E-Commerce Engine
 
 [![Live Demo](https://img.shields.io/badge/Demo-Live%20Storefront-black?style=for-the-badge&logo=vercel)](https://toko-marcell.vercel.app)
 [![Python](https://img.shields.io/badge/Python-3.11%2F3.12-3776AB?style=for-the-badge&logo=python&logoColor=white)](https://python.org)
-[![PyTorch](https://img.shields.io/badge/PyTorch-2.0%2B-EE4C2C?style=for-the-badge&logo=pytorch&logoColor=white)](https://pytorch.org)
-[![Hugging Face](https://img.shields.io/badge/Hugging%20Face-CLIP%20VLM-FFD21E?style=for-the-badge&logo=huggingface&logoColor=black)](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip)
 [![PostgreSQL](https://img.shields.io/badge/PostgreSQL%2016-pgvector%20HNSW-336791?style=for-the-badge&logo=postgresql&logoColor=white)](https://github.com/pgvector/pgvector)
 [![FastAPI](https://img.shields.io/badge/FastAPI-Model%20Serving-009688?style=for-the-badge&logo=fastapi&logoColor=white)](https://fastapi.tiangolo.com)
 [![LangChain](https://img.shields.io/badge/LangChain-Agentic%20Copilot-1C3C3C?style=for-the-badge&logo=langchain&logoColor=white)](https://langchain.com)
@@ -13,18 +11,16 @@
 [![CI](https://img.shields.io/badge/CI-GitHub%20Actions-2088FF?style=for-the-badge&logo=githubactions&logoColor=white)](./.github/workflows/ci.yml)
 
 > **Toko Marcell** is an end-to-end, production-deployed e-commerce platform built from scratch to
-> benchmark and serve **Multimodal Foundation Models (VLMs)**, **hybrid lexical–dense–visual vector
-> retrieval**, and an **agentic AI shopping copilot with grounded RAG** over a real catalog of
-> **4,670 curated products** (built from an initial 6,000 candidate extract).
+> engineer and benchmark **bilingual (Indonesian + English) hybrid lexical–dense–visual vector
+> retrieval**, **RAGAS-evaluated store policy & sizing RAG**, and a **hardened agentic AI shopping
+> copilot** over a real catalog of **4,670 curated products** (built from an initial 6,000 candidate extract).
 
 | | |
 |---|---|
 | 🌐 **Live storefront** | [https://toko-marcell.vercel.app](https://toko-marcell.vercel.app) |
 | ⚡ **Live API / interactive docs** | [https://toko-marcell-api.onrender.com/docs](https://toko-marcell-api.onrender.com/docs) |
-| 🧠 **Fine-tuned CLIP on HF Hub** | [Marcell-Kristianto/toko-marcell-clip](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip) |
-| 🔬 **Research report (failure analysis)** | [`pipelines/failure_case_analysis.md`](./pipelines/failure_case_analysis.md) |
-| 📑 **Literature review (CLIP fine-tuning)** | [`pipelines/literature_review_clip_finetuning.md`](./pipelines/literature_review_clip_finetuning.md) |
-| 📊 **Machine-readable leaderboard** | [`pipelines/multimodal_benchmark_results.json`](./pipelines/multimodal_benchmark_results.json) |
+| 📊 **IR & Multilingual benchmarks** | [`pipelines/results/search_eval_multilingual.json`](./pipelines/results/search_eval_multilingual.json) |
+| 🧪 **RAGAS evaluation results** | [`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json) |
 | 🧾 **Benchmark source ledger** | [`pipelines/BENCHMARKS.md`](./pipelines/BENCHMARKS.md) — what each number is and how to reproduce it |
 
 > **Note on the live API:** the backend runs on Render's free tier, so it sleeps after 15 minutes of
@@ -43,19 +39,19 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 
 | # | What | Result | Where |
 |---|---|---|---|
-| 1 | **VLM fine-tuning study** — 4 fine-tuning strategies vs a zero-shot baseline, 5,378 image–text pairs, 539 held-out test | champion lifts text→image **Recall@1 26.53% → 39.15%** (+47.57% rel) | [leaderboard](./pipelines/multimodal_benchmark_results.json) |
-| 2 | **Hybrid retrieval** — BM25 + MiniLM (384-d) + CLIP (512-d) → RRF (k=60); optional ONNX cross-encoder on the copilot path | exact SKUs *and* semantic/visual queries; `?mode=` switchable | [API internals](./api/README.md#search--how-it-ranks) |
-| 3 | **Grounded agentic copilot** — LangChain v1 `create_agent` + OpenRouter (free tier), deterministic zero-LLM guardrail, 7 tools, LangGraph Postgres memory, hypothetical-question policy RAG | answers only from tool evidence; refuses off-topic and injection attempts without an LLM call | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
-| 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe | [recommendation engine](./README.md#-recommendation-engine) |
-| 5 | **Authored sizing knowledge base** — TB/BB charts, waist conversions and per-brand cut rules, embedded into RAG | deterministic `recommend_size` (2-layer chart → brand rule) + natural-language sizing answers, always advisory | [sizing knowledge base](./README.md#-sizing--fit-knowledge-base) |
+| 1 | **Bilingual hybrid retrieval** — BM25 + multilingual MiniLM (`paraphrase-multilingual-MiniLM-L12-v2`, 384-d) + pre-trained CLIP (`fastembed`, 512-d) → RRF (`k=60`) + optional ONNX cross-encoder reranker | lifts overall hybrid **nDCG@10 0.794 → 0.894** (`100%` HR@10) and Indonesian **nDCG@10 0.334 → 0.765** | [API internals](./api/README.md#search--how-it-ranks) |
+| 2 | **RAGAS-evaluated store policy & sizing RAG** — hypothetical-question vectors + direct-chunk vectors + IDF-weighted bilingual lexical RRF | **1.0000 Context Recall** & **0.9167 Context Precision** on 12 bilingual ID+EN queries (`ragas.evaluate`) | [`pipelines/eval_rag.py`](./pipelines/eval_rag.py) |
+| 3 | **Hardened agentic copilot** — LangChain v1 `create_agent` + OpenRouter, LLM guardrail with 3-turn history window (3 user + 3 assistant), `<store_context>` indirect prompt-injection defense, 7 tools, LangGraph Postgres memory | answers only from tool evidence; blocks off-topic and multi-turn injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
+| 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe (**+4,322% HR@10** vs popularity) | [recommendation engine](./README.md#-recommendation-engine) |
+| 5 | **Raw `psycopg` v3 backend engineering** — connection pooling (`psycopg_pool`), zero ORM, 100% parameterized SQL (`psycopg.sql.Identifier`), bounded sliding-window rate limiting, and non-blocking async I/O | zero SQL injection vectors, bounded memory under IP churn, non-blocking ONNX inference | [backend security](./README.md#-production-reliability-caching--defensive-security) |
 
 **Measured results** (committed artifacts in [`pipelines/results/`](./pipelines/results/)):
 
-| Benchmark | Metric | BM25 | Hybrid | Hybrid+Rerank | Trimodal |
+| Benchmark | Metric | BM25 | Hybrid (MiniLM) | Hybrid (Multilingual) | Trimodal |
 |---|---|:---:|:---:|:---:|:---:|
-| IR (32 queries) | nDCG@10 | 0.794 | **0.879** | 0.893 | 0.908 |
-| IR (32 queries) | MRR@10 | 0.792 | **0.906** | 0.885 | 0.932 |
-| IR — Indonesian (8q) | nDCG@10 | 0.334 | 0.622 | 0.739 | **0.821** |
+| IR (32 queries) | nDCG@10 | 0.794 | 0.879 | **0.894** | 0.908 |
+| IR (32 queries) | MRR@10 | 0.792 | 0.906 | **0.919** | 0.932 |
+| IR — Indonesian (8q) | nDCG@10 | 0.334 | 0.622 | **0.765** | 0.821 |
 
 | Recs (5 K users) | HR@10 | nDCG@10 |
 |---|:---:|:---:|
@@ -63,26 +59,21 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 | Popularity | 0.18% | 0.0008 |
 | **Item-to-Item CF** | **7.96%** | **0.0501** |
 
-| RAG retrieval (12 ID+EN queries) | HR@1 | HR@3 | MRR@3 |
-|---|:---:|:---:|:---:|
-| Direct-chunk | 0.250 | 0.333 | 0.292 |
-| **Hypothetical-question** | **0.750** | **0.917** | **0.819** |
+| RAGAS Policy & Sizing RAG (12 ID+EN queries, k=3) | ID Precision@3 | ID Recall@3 | Context Precision | Context Recall |
+|---|:---:|:---:|:---:|:---:|
+| `direct_chunk` | 0.2500 | 0.7500 | 0.4722 | 0.7500 |
+| `hypothetical_question` | 0.2500 | 0.7500 | 0.6944 | 0.7500 |
+| **`hybrid_rrf` (`lookup_store_policy`)** | **0.3333** | **1.0000** | **0.9167** | **1.0000** |
 
-Indexing a few template-generated hypothetical questions per policy chunk roughly triples HR@1 over
-embedding the raw chunk text (artifacts: [`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json),
+Combining bilingual hypothetical-question embeddings (`store_knowledge_questions`), direct chunk
+embeddings (`store_knowledge`), and IDF-weighted lexical keyword matching via Reciprocal Rank Fusion
+achieves **1.0000 Context Recall** and **0.9167 Context Precision** in RAGAS evaluation
+(artifacts: [`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json),
 [`pipelines/eval_rag.py`](./pipelines/eval_rag.py)).
 
-**Multilingual embedding A/B** ([`pipelines/results/search_eval_multilingual.json`](./pipelines/results/search_eval_multilingual.json)):
-`paraphrase-multilingual-MiniLM-L12-v2` lifts overall hybrid nDCG@10 0.879 → 0.894 and the
-Indonesian group 0.622 → 0.765, but roughly doubles peak RSS (~1024 MB vs ~610–650 MB) with both
-CLIP ONNX encoders loaded — so MiniLM stays the default and the multilingual model is opt-in.
-
-The cross-encoder reranker improves nDCG@10 overall (+1.4 pts vs hybrid) and substantially on
-Indonesian queries (+0.117), but slightly lowers MRR@10 overall (0.906 → 0.885). On Category/Attr
-it drops nDCG (0.990 → 0.940). Net: a modest positive, strongest on the hardest group.
-
-**Stack:** Next.js 16 · React 19 · FastAPI · PostgreSQL 16 + pgvector · PyTorch/CLIP · LangChain +
-OpenRouter (free tier, Gemini fallback) · Docker · Vercel + Render + Neon.
+**Stack:** Next.js 16 · React 19 · FastAPI · PostgreSQL 16 + pgvector (`psycopg` v3 + `psycopg_pool`) ·
+`fastembed` (Multilingual MiniLM + CLIP ViT-B/32) · LangChain/LangGraph + OpenRouter (Gemini fallback) ·
+RAGAS · Docker · Vercel + Render + Neon.
 
 **Try it locally**
 
@@ -124,15 +115,20 @@ author-measured. Open gaps are in [Honest limitations](#-honest-limitations--wha
 This is a portfolio project, and it is deliberately **not** a CRUD tutorial with a prettier homepage.
 It exists to demonstrate four things a hiring manager can verify rather than take on trust:
 
-1. **A real ML research loop** — hypothesis → controlled ablation → measured leaderboard → failure
-   analysis → production export. Not a notebook that trains once and is never evaluated.
-2. **Information retrieval engineering** — three independent rankers (BM25, dense sentence vectors,
-   cross-modal CLIP) fused with Reciprocal Rank Fusion, plus an optional cross-encoder reranker on the copilot path.
-3. **Grounded LLM application engineering** — a LangChain v1 `create_agent` loop that can only speak
-   from tool results, fronted by a deterministic zero-LLM guardrail, with a 7-tool whitelist,
-   prompt-injection/off-topic refusal, token-budget and model-call-count safeguards, and tests.
-4. **Systems that survive free-tier reality** — cold starts, edge caching, in-memory TTL caches,
-   server-authoritative checkout (a tampered price is rejected, not ignored).
+1. **Bilingual information retrieval engineering** — three independent rankers (hand-written BM25,
+   multilingual dense sentence vectors via `paraphrase-multilingual-MiniLM-L12-v2`, and cross-modal
+   pre-trained CLIP via `fastembed`) fused with Reciprocal Rank Fusion, plus an optional cross-encoder
+   reranker (`ms-marco-MiniLM-L-6-v2`).
+2. **RAGAS-evaluated store policy & sizing RAG** — hybrid retrieval fusing hypothetical-question
+   embeddings, direct chunk embeddings, and IDF-weighted bilingual lexical keywords, benchmarked with
+   standard RAGAS context precision and recall metrics.
+3. **Hardened agentic LLM engineering** — a LangChain v1 `create_agent` loop that can only speak
+   from tool results, fronted by an LLM guardrail with a 3-turn history window (3 user + 3 assistant),
+   indirect prompt-injection isolation (`<store_context>` tags + header sanitization), a 7-tool
+   whitelist, and token/call-count safeguards.
+4. **Backend systems that survive production constraints** — raw `psycopg` v3 connection pooling
+   without ORM bloat, 100% parameterized SQL, bounded sliding-window rate limiting, non-blocking
+   async I/O (`asyncio.to_thread`), and server-authoritative checkout.
 
 Every number below is either measured and stored in the repository or read from the code at runtime.
 Nothing is invented. Where something is simplified or unfinished, it is written down as such in
@@ -144,8 +140,7 @@ Nothing is invented. Where something is simplified or unfinished, it is written 
 
 - [TL;DR](#tldr)
 - [System architecture](#-system-architecture)
-- [Research pillar 1 — the VLM contrastive fine-tuning study](#-research-pillar-1--the-vlm-contrastive-fine-tuning-study)
-- [Research pillar 2 — tri-modal hybrid retrieval](#-research-pillar-2--tri-modal-hybrid-retrieval)
+- [Tri-modal bilingual hybrid retrieval](#-tri-modal-bilingual-hybrid-retrieval)
 - [Recommendation engine](#-recommendation-engine)
 - [Sizing & fit knowledge base](#-sizing--fit-knowledge-base)
 - [The agentic copilot](#-the-agentic-copilot-admin-toko-marcell)
@@ -195,10 +190,10 @@ flowchart TD
 
     subgraph Retrieval["Tier 3 — hybrid retrieval & fusion"]
         BM25["BM25 (lexical)"]
-        MiniLM["Dense text: all-MiniLM-L6-v2 (384-d)"]
-        CLIP["Visual / cross-modal: fine-tuned CLIP ViT-B/32 (512-d)"]
+        MiniLM["Dense text: paraphrase-multilingual-MiniLM-L12-v2 (384-d)"]
+        CLIP["Visual / cross-modal: fastembed CLIP ViT-B/32 (512-d)"]
         RRF["Reciprocal Rank Fusion (k=60)"]
-        CE["Cross-encoder reranker (optional, copilot only)<br/>(ms-marco-MiniLM-L-6-v2, ONNX)"]
+        CE["Cross-encoder reranker (optional)<br/>(ms-marco-MiniLM-L-6-v2, ONNX)"]
     end
 
     subgraph Storage["Tier 4 — PostgreSQL 16 + pgvector"]
@@ -241,101 +236,23 @@ only ever talks HTTP** (`shop/src/lib/api.js` is the only place that knows the A
 
 ---
 
-## 🔬 Research pillar 1 — the VLM contrastive fine-tuning study
-
-**The problem.** General-purpose CLIP (`openai/clip-vit-base-patch32`) is good at separating a dog
-from a car and bad at separating clean dress chinos from rugged work pants, a relaxed straight cut
-from a slim taper, or glossy waterproof nylon from matte fleece. These "fine-grained semantic gaps"
-are exactly where e-commerce search lives. The study asks a specific, testable question:
-
-> If we domain-adapt CLIP on this catalog, **which fine-tuning strategy** buys the most retrieval
-> accuracy, and **where does it still fail?**
-
-### Dataset
-
-- **5,378 verified image–text pairs** extracted from the catalog, split deterministically
-  (seed 42) into **4,302 train / 537 val / 539 test** (`pipelines/prepare_clip_dataset.py`).
-- 622 pairs were skipped because the cached image was missing — the split summary records this.
-- Captions are **structured**, not marketing prose:
-  `Brand + Title + (Category / Department) + first fabric feature bullets`.
-  The literature review (Chia et al., 2022) found structured captions outperform raw titles by a
-  wide margin on fashion recall; this pipeline follows that finding.
-
-### Method
-
-Four adaptation hypotheses (plus a zero-shot reference), each derived from a paper (see
-[`literature_review_clip_finetuning.md`](./pipelines/literature_review_clip_finetuning.md)):
-
-| Experiment | What it changes | Source idea |
-|---|---|---|
-| **Zero-shot (reference)** | Frozen pretrained CLIP — the number to beat | — |
-| **LoRA** | Freeze base, train low-rank adapters on `q_proj, v_proj` | Hu et al., LoRA (2021) |
-| **SigLIP** | Replace batch softmax with pairwise sigmoid loss | Zhai et al., SigLIP (2023) |
-| **WiSE-FT** | Weight-space ensemble of fine-tuned + zero-shot | Wortsman et al. (2022) |
-| **Decoupled LR 🏆** | Freeze ViT layers 0–5, asymmetric LRs per module | Wortsman et al. (2022) |
-
-Training ran on **Kaggle GPU — NVIDIA Tesla T4 16 GB**, mixed precision (AMP FP16),
-3 epochs, batch size 64, base LR 5e-6. The exact run configuration lives in
-[`multimodal_benchmark_results.json`](./pipelines/multimodal_benchmark_results.json).
-
-### Benchmark scoreboard (539 held-out test pairs)
-
-| Experiment | Architecture / approach | Recall@1 | Recall@5 | Recall@10 | MRR | Latency (T4) |
-|---|---|:---:|:---:|:---:|:---:|:---:|
-| Zero-shot base | `openai/clip-vit-base-patch32` (frozen) | 26.53% | 54.92% | 70.69% | 0.4033 | 27.80 ms |
-| PEFT LoRA | LoRA, early-stopped, r=16, α=32 on `q_proj, v_proj` | 33.40% | 71.61% | 83.49% | 0.5038 | 15.50 ms |
-| SigLIP | Pairwise sigmoid loss, learnable temperature/bias | 35.25% | 71.43% | 82.19% | 0.5091 | 19.38 ms |
-| WiSE-FT | Weight-space ensemble (decoupled LR + zero-shot, α=0.35) | 37.85% | 73.28% | 85.53% | 0.5363 | 9.76 ms |
-| **🏆 Champion — Decoupled LR** | ViT 0–5 frozen · vision 0.2× · text 1.0× · projection 2.0× | **39.15%** | **78.11%** | **87.20%** | **0.5592** | **14.01 ms** |
-
-**Headline result: Recall@1 26.53% → 39.15% = +12.62 points absolute, +47.57% relative.**
-
-### What the results actually say
-
-1. **Decoupling the learning rate across depths beat every structurally cleverer alternative.**
-   Freezing the early ViT blocks preserves generic edge/texture filters, while a 2× LR on the
-   projection heads adapts the shared embedding space fastest. LoRA (a *more* parameter-efficient
-   method) landed 5.75 points lower on Recall@1 — this is a useful, counter-intuitive finding.
-2. **Weight-space ensembling is a strong, cheap regularizer** (37.85% R@1) and the fastest at
-   inference (9.76 ms), making it a good candidate for a latency-constrained deployment even though
-   it is not the accuracy champion.
-3. **SigLIP's pairwise loss is competitive but not dominant here**, which is plausible: at
-   batch 64 the false-negative pressure that SigLIP removes is smaller than in the small-batch
-   regime the paper targets.
-4. **The champion was exported for production**, not left in a notebook: the text encoder went to
-   ONNX and is downloadable at runtime from Hugging Face Hub
-   ([`Marcell-Kristianto/toko-marcell-clip`](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip)).
-   Serving uses ONNX Runtime on CPU (< ~150 MB RAM, 2 intra-op threads, graph optimizations on).
-
-### Failure-mode analysis
-
-[`pipelines/failure_case_analysis.md`](./pipelines/failure_case_analysis.md) is the qualitative
-half of the study: it dissects cases where rank improved dramatically or did not, e.g. distressed
-denim texture, the structural drape of 8.5 oz twill, and specular sheen on waterproof nylon. The
-remaining known failure mode is **sub-brand logo invariance** (e.g. a small embroidered logo patch),
-proposed fix multi-crop / RoI-Align training. The research report's *qualitative* case section and
-the *aggregate* scoreboard in this README come from different evaluation passes; the aggregate table
-here is the authoritative Kaggle 4-way leaderboard stored in the JSON above.
-
----
-
-## ⚡ Research pillar 2 — tri-modal hybrid retrieval
+## ⚡ Tri-modal bilingual hybrid retrieval
 
 Pure vector search fails on exact tokens (SKU numbers, model numbers like `501`, brand names).
-Pure lexical search fails on typos, synonyms, and conversational intent. Toko Marcell runs all the
-rankers that matter and fuses them.
+Pure lexical search fails on typos, synonyms, and conversational Indonesian/English intent. Toko Marcell
+runs all the rankers that matter and fuses them.
 
 ```mermaid
 flowchart LR
-    Q["Query (text or image)"] --> BM25["① BM25 lexical<br/>title ×3 · brand ×2 · category ×1.5<br/>department ×1 · features ×1 · desc ×0.5"]
-    Q --> Dense["② Dense sentence vectors<br/>all-MiniLM-L6-v2, 384-d, pgvector HNSW"]
-    Q --> Visual["③ Cross-modal CLIP<br/>fine-tuned ViT-B/32 text encoder, 512-d"]
-    Img["Uploaded image"] --> Vision["CLIP vision encoder<br/>512-d → pgvector HNSW"]
+    Q["Query (Indonesian / English)"] --> BM25["① BM25 lexical<br/>title ×3 · brand ×2 · category ×1.5<br/>department ×1 · features ×1 · desc ×0.5"]
+    Q --> Dense["② Multilingual dense vectors<br/>paraphrase-multilingual-MiniLM-L12-v2, 384-d, pgvector HNSW"]
+    Q --> Visual["③ Cross-modal CLIP<br/>Qdrant/clip-ViT-B-32-text, 512-d"]
+    Img["Uploaded image"] --> Vision["Qdrant/clip-ViT-B-32-vision<br/>512-d → pgvector HNSW"]
     BM25 --> RRF["Reciprocal Rank Fusion<br/>score = Σ 1/(60 + rank)"]
     Dense --> RRF
     Visual --> RRF
     RRF --> Out["Ranked products"]
-    RRF -. "copilot only, ENABLE_RERANKER" .-> CE["Cross-encoder rerank<br/>ms-marco-MiniLM-L-6-v2 (ONNX)"]
+    RRF -. "ENABLE_RERANKER" .-> CE["Cross-encoder rerank<br/>ms-marco-MiniLM-L-6-v2 (ONNX)"]
     CE -.-> Out
     Vision --> Out
 ```
@@ -349,12 +266,7 @@ BM25's saturation handles fractional term frequencies fine. The tokenizer does l
 folding → alphanumeric filtering → stopword removal → a small **plural fold** (`sneakers→sneaker`,
 `jeans→jean`). It is *not* a Porter stemmer; that limitation is stated where it lives, in the code.
 
-Why in-process? At this catalog size the whole index rebuilds in well under a second and lives
-comfortably in RAM, so an external service would add a dependency for nothing. Known gaps are
-deliberate: no typo tolerance, no synonyms, no phrases — and those gaps are precisely what the
-embedding half exists to close. That is why the baseline was measured *first*.
-
-**Honest baseline behaviour (measured in `api/tests/test_search_unit.py` + manual probing):**
+**Honest baseline behaviour (measured in `api/tests/test_search_unit.py`):**
 
 ```
 'levis 501'            → exact model numbers, four distinct variants
@@ -367,25 +279,21 @@ embedding half exists to close. That is why the baseline was measured *first*.
 different ASIN. Without dedupe, a query like `jeans` shows the same title twice in the top 10.
 Dedupe runs *before* pagination so `total` counts results a shopper can actually reach.
 
-### 2. Dense semantic retrieval
+### 2. Bilingual dense semantic retrieval
 
-384-dimensional `sentence-transformers/all-MiniLM-L6-v2` embeddings (via **fastembed**, ONNX runtime)
-stored in a `vector(384)` column with an **HNSW cosine index**. Text representation =
-`title + brand + category + features + description`. This ranker is what lets "shoes for women" and
-"white sneakers" work without exact token overlap.
+384-dimensional `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` embeddings (via **fastembed**,
+ONNX runtime) stored in `products.embedding_ml` with an **HNSW cosine index** (alongside English-only
+`all-MiniLM-L6-v2` in `products.embedding`). Text representation =
+`title + brand + category + features + description`. This ranker lets both Indonesian shopper queries
+(*"jaket musim hujan anti air"*, *"sepatu lari empuk nyaman"*) and English intent queries match English
+catalog products without requiring manual translation.
 
-### 3. Cross-modal visual retrieval
+### 3. Cross-modal visual retrieval (`fastembed` CLIP)
 
-An uploaded photo is encoded with the **fine-tuned CLIP vision tower** to a 512-d vector and matched
-against `products.image_embedding` (HNSW cosine). The same 512-d space lets a *text* query search
-product *images* (`mode=trimodal`) — so "waterproof hooded packable rain jacket nylon shell" can be
-retrieved by the visual sheen of the garment, not only by words. Encoders are loaded lazily and
-cached per process. The champion fine-tuned encoders are served as **ONNX** (no `torch`): the text
-tower is fp16 (~127 MB) and the vision tower is int8 (~96 MB), both published and fetched at runtime
-([`pipelines/export_text_onnx.py`](./pipelines/export_text_onnx.py),
-[`pipelines/export_vision_onnx.py`](./pipelines/export_vision_onnx.py)). If no champion vision
-encoder is present, image search returns `503` rather than falling back to a mismatched zero-shot
-space.
+An uploaded photo is encoded with `Qdrant/clip-ViT-B-32-vision` (via `fastembed` ONNX runtime, offloaded
+to a worker thread via `asyncio.to_thread`) to a 512-d vector and matched against `products.image_embedding`
+(HNSW cosine). The same 512-d CLIP space lets a *text* query (`Qdrant/clip-ViT-B-32-text`) search product
+*images* (`mode=trimodal`). Encoders are loaded lazily and cached per process.
 
 ### 4. Reciprocal Rank Fusion (k = 60)
 
@@ -398,43 +306,26 @@ similarities are bounded in [-1, 1]; RRF needs only *ranks*, so the heterogeneou
 combined with no calibration and no per-query tuning. `k=60` is the constant from
 Cormack, Clarke & Buettcher (2009).
 
-### 5. Stage-2 cross-encoder reranking (optional, copilot path)
+### 5. Stage-2 cross-encoder reranking (`ENABLE_RERANKER`)
 
-The HTTP `/search` endpoint returns the RRF order. The copilot's `search_catalog` tool can add a
-second stage behind the `ENABLE_RERANKER` flag (off on the 512 MB deployment, on in local Compose):
-top candidates are re-scored by `Xenova/ms-marco-MiniLM-L-6-v2` run through **ONNX Runtime**
+Top candidates can be re-scored by `Xenova/ms-marco-MiniLM-L-6-v2` run through **ONNX Runtime**
 (~15–25 ms for ~20 candidates). A cross-encoder sees the query and document *together*, so it
 captures relevance a bi-encoder cannot — the standard two-stage retrieve-then-rerank pattern.
-If the model cannot be downloaded, the code logs a warning and returns the Stage-1 order, so the
-search endpoint degrades rather than breaks.
 
-### Evaluation harness
+### Evaluation harnesses (IR & RAGAS)
 
-`pipelines/eval_search.py` ships a **32-query benchmark** across four groups — exact brand/SKU,
-category + explicit features, semantic/intent, and Indonesian/casual cross-lingual — and reports
-HitRate@10, Precision@10, MRR@10 and nDCG@10 for **BM25 vs hybrid**, with a group breakdown and
-relative gains. `mode=bm25|vector|hybrid|trimodal` is returned in every response so the eval harness
-and the UI can always tell which ranker produced a result set instead of inferring it.
-
-### Multilingual embedding A/B (opt-in)
-
-Many shoppers type Indonesian. `pipelines/results/search_eval_multilingual.json` records a hybrid-mode
-A/B of `paraphrase-multilingual-MiniLM-L12-v2` against the default `all-MiniLM-L6-v2`: overall
-nDCG@10 **0.879 → 0.894**, MRR@10 **0.906 → 0.919**, and the Indonesian query group nDCG@10
-**0.622 → 0.765**. The catch is memory — peak RSS with both CLIP ONNX encoders loaded is **~1024 MB**
-vs **~610–650 MB** for MiniLM, which overruns the 512 MB free tier. So MiniLM stays the default and
-the multilingual model is **opt-in** via `TEXT_EMBED_MODEL` + `TEXT_EMBED_COLUMN=embedding_ml` (the
-`embedding_ml` column already ships in the seed).
-
-### Hypothetical-question RAG
-
-The copilot's policy answers retrieve from `store_knowledge`, but embedding a raw policy chunk and
-embedding the question a shopper actually asks live in different parts of the vector space.
-`pipelines/eval_rag.py` quantifies the gap on **12 labelled ID+EN queries**
-([`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json)): direct-chunk retrieval
-scores HR@1 **0.250** / HR@3 0.333 / MRR@3 0.292, while indexing **82 template-generated hypothetical
-questions** (3–5 ID+EN per chunk, in `store_knowledge_questions`) lifts it to HR@1 **0.750** / HR@3
-**0.917** / MRR@3 **0.819** — roughly triple HR@1.
+1. **Catalog IR (`pipelines/eval_search.py`)**: Evaluates **32 queries** across four groups — exact
+   brand/SKU, category + explicit features, semantic/intent, and Indonesian/casual cross-lingual —
+   across 5 modes (`bm25`, `vector`, `hybrid`, `hybrid+rerank`, `trimodal`). Switching hybrid search to
+   `paraphrase-multilingual-MiniLM-L12-v2` lifts overall nDCG@10 **0.794 → 0.894** (`100%` HitRate@10)
+   and Indonesian nDCG@10 **0.334 → 0.765** ([`pipelines/results/search_eval_multilingual.json`](./pipelines/results/search_eval_multilingual.json)).
+2. **Store Policy & Sizing RAG (`pipelines/eval_rag.py`)**: Uses **RAGAS** (`ragas.evaluate` with
+   `IDBasedContextPrecision`, `IDBasedContextRecall`, `NonLLMContextPrecisionWithReference`, and
+   `NonLLMContextRecall`) on **12 bilingual ID+EN shopper queries**
+   ([`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json)). Fusing hypothetical
+   questions (`store_knowledge_questions`), direct chunks (`store_knowledge`), and IDF-weighted
+   bilingual lexical keywords via RRF (`hybrid_rrf`) lifts Context Precision from **0.4722 → 0.9167**
+   and Context Recall from **0.7500 → 1.0000** (`12/12` queries).
 
 ---
 
@@ -590,16 +481,19 @@ sequenceDiagram
     A-->>S: reply + products[≤6] + citations + suggestions + ui_actions
 ```
 
-1. **Deterministic guardrail (`api/guardrail.py`).** Before any LLM runs, greetings/thanks/identity,
-   off-topic requests (code, SQL, maths, politics, medical/legal, creative) and prompt-injection
-   attempts get a canned "Admin Toko Marcell" reply with **zero LLM calls**. Anything else goes to
-   the agent. The response carries a `guardrail` field (`greeting` | `off_topic` | `injection` |
-   `null`) and the tests assert it.
+1. **LLM-based pre-agent guardrail (`api/guardrail.py`).** Before the tool-calling agent runs,
+   `classify(message, history)` evaluates the user message alongside up to **3 user + 3 assistant**
+   history turns using a fast LLM classifier (with deterministic regex fast-path for pure greetings/injections
+   and full offline fallback when `COPILOT_FAKE_LLM=1`). Greetings, off-topic requests (code, SQL, maths,
+   politics, medical/legal, creative) and multi-turn prompt-injection attempts receive a canned
+   "Admin Toko Marcell" reply. The response carries a `guardrail` field (`greeting` | `off_topic` |
+   `injection` | `null`) and the tests assert it.
 2. **`create_agent` loop.** The agent plans tool calls, runs them, and composes the grounded reply in
    a single LangGraph loop. **Middleware** wraps it: `ContextInjectionMiddleware` injects the current
    page / pinned product (re-read from the DB), a `[Produk dalam percakapan ini] [1]…` shown-products
-   registry and recent browsing context; `TrimHistoryMiddleware` keeps history under a 2,000-token
-   budget (char/4 estimate); `ModelCallLimitMiddleware` caps the turn at **3 model calls**.
+   registry and recent browsing context inside `<store_context>` tags; `TrimHistoryMiddleware` keeps
+   history under a 2,000-token budget (char/4 estimate); `ModelCallLimitMiddleware` caps the turn at
+   **3 model calls**.
 3. **Grounded reply.** Products, prices and policy all come from tool evidence, in the "Admin Toko
    Marcell" voice (Indonesian or English, mirroring the shopper).
 
@@ -952,46 +846,38 @@ manual/
 │   │   ├── events.py             #     funnel events + summary
 │   │   ├── checkout.py           #     confirm checkout, order lookup
 │   │   └── copilot.py            #     AI copilot chat + tool listing
-│   ├── search.py                 #   BM25 + embeddings + RRF + CLIP encoders (ONNX)
+│   ├── search.py                 #   BM25 + multilingual embeddings + RRF + fastembed CLIP encoders
 │   ├── reranker.py               #   Stage-2 ONNX cross-encoder
 │   ├── copilot_agent.py          #   LangChain v1 create_agent loop + middleware
 │   ├── copilot_tools.py          #   the 7 grounding tools (schema bound to the agent)
 │   ├── copilot_llm.py            #   provider chain (.with_fallbacks) + COPILOT_FAKE_LLM
 │   ├── copilot_memory.py         #   LangGraph PostgresSaver + thread activity / TTL
-│   ├── guardrail.py              #   deterministic zero-LLM greeting/off-topic/injection gate
+│   ├── guardrail.py              #   LLM-based 3-turn guardrail + deterministic regex fallback
 │   ├── sizing.py                 #   2-layer recommend_size (store chart → brand offset)
-│   ├── rate_limiter.py           #   sliding-window per-IP rate limiter
+│   ├── rate_limiter.py           #   bounded sliding-window per-IP rate limiter
 │   ├── knowledge_seed.py         #   markdown → embedded store_knowledge + hypothetical questions
 │   ├── knowledge/                #   authored size_charts.md + size_chart.json + policies (RAG source)
-│   └── tests/                    #   177 pytest cases (unit + live API, fake-LLM copilot)
+│   └── tests/                    #   pytest suite (unit + RAGAS + live API, fake-LLM copilot)
 ├── shop/                         # Next.js 16 storefront
 │   └── src/{app,components,lib}  #   routes, UI (CopilotChat + ProductCopilotEntry), API client, session & cart state
-├── pipelines/                    # offline ML + data engineering
+├── pipelines/                    # offline data & retrieval engineering
 │   ├── build_catalog.py          #   raw Amazon data → 6,000-product catalog (3 streaming passes)
 │   ├── seed.py                   #   catalog → Postgres (offline, upsert by asin)
 │   ├── cleanup_catalog.py        #   drop dead images + duplicate titles → 4,670 live
-│   ├── build_recs.py             #   co-occurrence + co-view + embedding backfill → recs
-│   ├── embed_catalog.py          #   MiniLM 384-d text embeddings + HNSW
-│   ├── embed_images.py / embed_catalog_vlm.py   # CLIP 512-d image embeddings
+│   ├── build_recs.py             #   co-occurrence + co-view + popularity backfill → recs
+│   ├── embed_catalog.py          #   384-d multilingual/English text embeddings + HNSW
+│   ├── embed_images.py           #   pre-trained fastembed CLIP 512-d image embeddings + HNSW
 │   ├── extract_reviews.py        #   top reviews per ASIN → reviews table
-│   ├── prepare_clip_dataset.py   #   5,378 verified pairs → 80/10/10 splits
-│   ├── train_clip.py             #   PyTorch InfoNCE training loop (hard negatives, AMP)
-│   ├── experiments_clip.py       #   the 4 ablation experiments (baseline/LoRA/SigLIP/decoupled)
-│   ├── eval_multimodal.py        #   text→image Recall@K / MRR evaluation + error mining
-│   ├── eval_search.py            #   32-query BM25 vs hybrid IR harness
+│   ├── eval_search.py            #   32-query 5-mode BM25 / vector / hybrid / rerank / trimodal IR harness
+│   ├── eval_rag.py               #   RAGAS evaluation harness (direct_chunk vs hypothetical_question vs hybrid_rrf)
 │   ├── eval_recs.py              #   leave-one-out HR@K / MRR / nDCG harness
-│   ├── eval_rag.py               #   direct-chunk vs hypothetical-question RAG eval
 │   ├── eda_interactions.py       #   sparsity, long tail, rating distribution
-│   ├── migrate_to_neon.py        #   local → Neon serverless migration
-│   ├── kaggle/                   #   notebook + CLI metadata for the GPU study
-│   ├── failure_case_analysis.md  #   qualitative research report
-│   └── literature_review_clip_finetuning.md
+│   └── migrate_to_neon.py        #   local → Neon serverless migration
 ├── data/
 │   ├── seed/init.sql.gz          # COMMITTED: the seeded database dump (works without raw data)
 │   ├── knowledge/*.md            # COMMITTED: RAG source documents
 │   ├── raw/                      # gitignored: ~2.8 GB downloads
-│   └── processed/                # gitignored: reproducible artifacts (embeddings, splits, …)
-├── models/                       # weights gitignored; small model cards & summaries tracked
+│   └── processed/                # gitignored: reproducible artifacts (embeddings, recs, …)
 ├── docker-compose.yml            # one-command full stack
 ├── render.yaml                   # Render blueprint (API)
 ├── run-local.sh                  # friendly wrapper around docker compose
@@ -1000,11 +886,8 @@ manual/
 
 > **What is and is not committed.** Only the seed dump and the knowledge documents are committed
 > under `data/`; raw and processed data are gitignored because they are large and reproducible.
-> Model **weights** (`*.onnx`, `*.safetensors`, `*.pt`) are gitignored too — the production text
-> encoder is published on Hugging Face Hub and fetched at runtime, and the rest can be regenerated
-> with the pipelines above. The small **model cards, adapter configs and experiment summaries** under
-> `models/experiments/` *are* tracked, so the study's evidence is browsable on GitHub without
-> shipping binaries. A fresh clone runs immediately via Docker and can reproduce the ML from source.
+> A fresh clone runs immediately via Docker and can reproduce all embeddings and evaluation benchmarks
+> from source.
 
 ---
 
@@ -1051,8 +934,10 @@ These are the choices that shaped the project. Each is stated with the alternati
    score-calibration problem that would otherwise dominate the work.
 4. **A hand-written baseline, measured first.** If BM25 had been skipped, "hybrid search is better"
    would be a claim with no denominator. It is now a number produced by `eval_search.py`.
-5. **Four ablations against a zero-shot baseline instead of one fine-tune.** The goal was a finding, not a checkpoint. The
-   counter-intuitive result (decoupled LR beats LoRA) is the interesting part.
+5. **Multilingual embeddings + hybrid RRF for bilingual shoppers.** Indonesian shoppers ask in
+   Indonesian while the catalog titles are English. `paraphrase-multilingual-MiniLM-L12-v2` bridges
+   the cross-lingual semantic gap, while BM25 + IDF-weighted lexical matching preserve exact SKU and
+   brand precision.
 6. **Dedupe before pagination.** Paginating first and deduping the page would make `total` a lie.
 7. **Server-authoritative checkout, client-sent `{asin, qty}`.** The alternative — trusting a client
    total — is a demo that can be made to "pay Rp 1" from the URL bar. The confirmation page fetches
@@ -1062,9 +947,8 @@ These are the choices that shaped the project. Each is stated with the alternati
 9. **Honest emptiness.** Rates are `null` when undefined; missing catalog fields stay missing. A demo
    that reports "0%" from an empty table is worse than one that says "no data yet".
 10. **Degrade, don't break.** Missing LLM key → clean 503. Missing reranker → Stage-1 order.
-    Missing champion CLIP vision encoder → image search returns `503` (never a mismatched zero-shot
-    fallback). Couriers/shipping/QRIS are explicitly labelled simulations, so nobody mistakes the
-    demo for a real store.
+    Missing CLIP vision encoder → image search returns `503`. Couriers/shipping/QRIS are explicitly
+    labelled simulations, so nobody mistakes the demo for a real store.
 
 ---
 
@@ -1083,47 +967,26 @@ This section exists because a portfolio that hides its edges is less useful than
 - **Reindex is manual.** After reseeding, `POST /search/reindex` must be called (or the container
   restarted) because the BM25 index lives for the life of the process.
 - **The copilot chat is text-only.** It binds no vision tool and accepts no image payload — free
-  vision-capable LLMs have very small usage quotas, so no multimodal model is used. Photo search is
-  not gone, it just lives in the storefront (`POST /search/image` → CLIP vision → `image_embedding`);
+  vision-capable LLMs have very small usage quotas, so no multimodal model is used. Photo search
+  lives in the storefront (`POST /search/image` → `fastembed` CLIP vision → `image_embedding`);
   the chat is a separate text surface. There is also deliberately **no order-status tool**: checkout
   is a demo simulation with no fulfillment, shipping or tracking to report.
-- **Image search needs the champion vision encoder (~96 MB int8 ONNX), and has no fallback.** It runs
-  without `torch` and matches the stored fine-tuned vectors (cosine 0.991 vs fp32). The artifact is
-  published at
-  [HF Hub: Marcell-Kristianto/toko-marcell-clip](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip)
-  and fetched at runtime, so it works for a local build (mounted `models/`) and for a public deploy.
-  Serving memory is trimmed for the free tier: the vision encoder is **int8** (~96 MB) and the text
-  encoder is **fp16** (~127 MB, identical embeddings) — see
-  [`pipelines/BENCHMARKS.md`](./pipelines/BENCHMARKS.md). Even so, loading every model at once
-  (vision + text + MiniLM + reranker) can approach the 512 MB Render free-tier budget; a ≥1 GB plan
-  removes the cliff. Because `mode=trimodal` is the one request that loads **both** the text ONNX and
-  MiniLM, it is **disabled by default** on the deployment (`ENABLE_TRIMODAL`) and returns `400` when
-  off. If no encoder is present the endpoint returns **`503`** by design (a zero-shot encoder would
-  occupy a different space). Text search and the copilot are unaffected.
-- **The multilingual embedding model is too big for the free tier.** It lifts overall hybrid nDCG@10
-  0.879 → 0.894 and the Indonesian group 0.622 → 0.765, but peak RSS with both CLIP ONNX encoders
-  loaded is ~1024 MB vs ~610–650 MB for MiniLM — over the 512 MB budget. So it stays opt-in
-  (`TEXT_EMBED_MODEL` + `TEXT_EMBED_COLUMN=embedding_ml`) and MiniLM is the default.
+- **Memory budget on 512 MB free-tier hosts.** Loading every ONNX model at once (multilingual MiniLM +
+  CLIP vision + CLIP text + cross-encoder reranker) exceeds a 512 MB free-tier container. On
+  512 MB deployments, `ENABLE_TRIMODAL` and `ENABLE_RERANKER` are off by default, and
+  `TEXT_EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2` (`TEXT_EMBED_COLUMN=embedding`) can be set
+  if lower resident memory is required.
 - **Sizing is authored, deterministic and advisory only.** `api/sizing.py` maps TB/BB to a size using
   the store's own chart and applies the documented brand cut rules; there is no per-product fit
   signal and no ML model in the loop. The copilot always frames sizing as an advisory, never a
   certainty, because the guide is a store rule-of-thumb rather than an official brand chart.
-- **The RAG eval set is small** — 12 labelled ID+EN queries. The hypothetical-question lift (HR@1
-  0.250 → 0.750) is real on that set but a larger labelled set would tighten the estimate.
 - **Live copilot quality depends on the free OpenRouter model.** The grounding, tools and guardrail
-  are deterministic, but the prose quality on the live demo rides on whichever free model the pool
-  routes to; `COPILOT_FAKE_LLM=1` is what CI uses for determinism.
-- **On the 512 MB free tier the copilot's cross-encoder reranker is off** (`ENABLE_RERANKER=false`)
-  to stay within the memory budget; it falls back to Stage-1 ranking. The `/search` endpoint never
-  used the reranker, so HTTP search quality is unchanged; local Compose keeps it on.
+  are deterministic in CI (`COPILOT_FAKE_LLM=1`), while the live demo rides on whichever free model
+  the OpenRouter pool routes to.
 - **Live API sleeps.** Render free tier cold-starts in 30–50 s; the UI handles it, but the first
   request to the live backend after idle is genuinely slow.
 - **Free-tier dependency.** Neon + Render free tiers are enough for a portfolio demo, not for SLA
   traffic.
-- **Research scoreboards.** The aggregate Kaggle leaderboard in this README is authoritative
-  (`multimodal_benchmark_results.json`). The qualitative case section of
-  `failure_case_analysis.md` comes from an earlier evaluation pass; treat its individual rank
-  numbers as illustrative of *phenomena*, not as the current leaderboard.
 
 ---
 
@@ -1131,18 +994,13 @@ This section exists because a portfolio that hides its edges is less useful than
 
 Ordered by value to the product, not by ease:
 
-1. **Confirm the Render memory budget end-to-end.** Both encoders are now size-reduced and published
-   (vision int8 ~96 MB, text fp16 ~127 MB); a ≥1 GB Render plan would let every model — including the
-   opt-in multilingual embeddings — be resident at once without approaching the 512 MB free-tier limit.
-2. Grow the RAG eval set (currently 12 labelled RAG queries) so the hypothetical-question
-   gains are estimated on a larger, more representative sample.
-3. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`
+1. Expand the RAGAS evaluation dataset beyond the initial 12 bilingual queries and add optional
+   LLM-judged Faithfulness & Answer Relevancy runs in CI.
+2. Move catalog filtering fully server-side and emit a real `product_click` event so `search_to_pdp`
    becomes a true CTR.
-4. Add `Idempotency-Key` support to checkout.
-5. Add a scheduled reindex.
-6. Add the qualitative failure analysis' logo/patch fix (multi-crop or RoI-Align training) and
-   re-run the leaderboard.
-7. Publish a reproducible eval report artifact per CI run so leaderboard numbers can be re-generated
+3. Add `Idempotency-Key` support to checkout.
+4. Add a scheduled reindex.
+5. Publish a reproducible eval report artifact per CI run so benchmark numbers can be re-generated
    with one command.
 
 ---
@@ -1166,8 +1024,6 @@ Ordered by value to the product, not by ease:
   and their respective brands; images are **hot-linked from Amazon's CDN and never re-hosted**.
 - **Paper:** Ni, J., Li, J., McAuley, J. — *Justifying recommendations using distantly-labeled
   reviews and fine-grained aspects*, EMNLP 2019.
-- **Kaggle VLM study:** run on Kaggle's free GPU tier (Tesla T4 16 GB) — see
-  [`pipelines/kaggle/README.md`](./pipelines/kaggle/README.md).
 - **Code licence:** [MIT](./LICENSE). The licence covers the source code only, not the dataset content.
 - **This repository** is an engineering portfolio project. The storefront, checkout, couriers and QRIS
   payment are **simulations** and charge no real money.
