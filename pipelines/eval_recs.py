@@ -54,17 +54,17 @@ def main():
 
     random.seed(args.seed)
 
-    print(f"Loading recommendation models and catalog...")
+    print("Loading recommendation models and catalog...")
     t0 = time.perf_counter()
 
-    with open(args.products_file, "r", encoding="utf-8") as f:
+    with open(args.products_file, encoding="utf-8") as f:
         catalog_asins = [json.loads(line)["asin"] for line in f]
     catalog_set = set(catalog_asins)
 
-    with open(args.item_recs_file, "r", encoding="utf-8") as f:
+    with open(args.item_recs_file, encoding="utf-8") as f:
         item_recs = json.load(f)
 
-    with open(args.popular_recs_file, "r", encoding="utf-8") as f:
+    with open(args.popular_recs_file, encoding="utf-8") as f:
         popular_data = json.load(f)
         global_popular = popular_data.get("global", [])
 
@@ -76,7 +76,7 @@ def main():
 
     with gzip.open(args.interactions_file, mode="rt", encoding="utf-8") as f:
         reader = csv.reader(f)
-        header = next(reader)
+        next(reader)
         for row in reader:
             if not row or len(row) < 4:
                 continue
@@ -166,7 +166,7 @@ def main():
     ndcg_gain = ((cf_ndcg - pop_ndcg) / pop_ndcg) * 100 if pop_ndcg > 0 else 0
 
     print("=" * 80)
-    print(f"Item-to-Item CF vs Popularity Baseline:")
+    print("Item-to-Item CF vs Popularity Baseline:")
     print(f"  HR@10 Relative Gain:  {hr10_gain:+.1f}% ({pop_hr10:.2%} -> {cf_hr10:.2%})")
     print(f"  nDCG@10 Relative Gain: {ndcg_gain:+.1f}% ({pop_ndcg:.4f} -> {cf_ndcg:.4f})")
     print("=" * 80)
@@ -202,7 +202,7 @@ def main():
             }
 
         output = {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
             "git_commit": git_commit,
             "eval_protocol": "sequential leave-one-out, active users >= 5 interactions",
             "n_users_sampled": sample_size,

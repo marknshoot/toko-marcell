@@ -75,7 +75,7 @@ jobs:
         run: pip install ruff
 
       - name: Ruff lint check
-        run: ruff check api/ --fix && ruff check api/
+        run: ruff check api/ pipelines/ --fix && ruff check api/ pipelines/
 
       - name: Restore database from seed
         run: |
@@ -129,6 +129,15 @@ jobs:
           # Stop the API server
           kill $API_PID 2>/dev/null || true
           exit ${TEST_EXIT:-0}
+
+      - name: Run copilot business scenario benchmark
+        env:
+          DATABASE_URL: postgresql://toko:toko@localhost:5432/toko
+          FASTEMBED_CACHE_DIR: /tmp/fastembed_cache
+          ENABLE_RERANKER: "false"
+          COPILOT_FAKE_LLM: "1"
+        run: |
+          python pipelines/eval_copilot.py --out pipelines/results/copilot_eval.json
 
   deploy-render:
     name: Render Deploy Status

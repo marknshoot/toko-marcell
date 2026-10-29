@@ -8,8 +8,8 @@ Clean up Toko Marcell database on Neon PostgreSQL:
 """
 
 import os
-import sys
 import time
+
 import psycopg
 
 DEFAULT_DATABASE_URL = os.environ.get(

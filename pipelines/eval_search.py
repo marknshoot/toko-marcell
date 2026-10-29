@@ -443,7 +443,6 @@ def run_eval(api_url: str, modes: list[str]):
 
     # ── Print comparison table ─────────────────────────────────────────────────
     print("\n" + "=" * 100)
-    header_modes = "  ".join(f"{'P@10':>6} {'nDCG':>6} {'MRR':>6}" for _ in modes)
     mode_labels = "  ".join(f"{'--- ' + m + ' ---':^20}" for m in modes)
     print(f"{'Group':<18} | {mode_labels}")
     print("-" * 100)
@@ -510,7 +509,7 @@ def main():
         out_path.parent.mkdir(parents=True, exist_ok=True)
 
         output = {
-            "timestamp": datetime.datetime.now(datetime.timezone.utc).isoformat(),
+            "timestamp": datetime.datetime.now(datetime.UTC).isoformat(),
             "git_commit": _git_commit_short(),
             "api_url": args.api_url,
             "query_count": len(BENCHMARK_QUERIES),

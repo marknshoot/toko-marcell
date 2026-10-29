@@ -106,7 +106,7 @@ def main():
 
                 update_params = [
                     (format_vector(vec), doc_id)
-                    for doc_id, vec in zip(doc_ids, embeddings)
+                    for doc_id, vec in zip(doc_ids, embeddings, strict=False)
                 ]
                 cur.executemany(
                     f"UPDATE products SET {column} = %s WHERE id = %s",

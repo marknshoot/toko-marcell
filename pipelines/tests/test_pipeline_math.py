@@ -1,12 +1,11 @@
 import sys
 from pathlib import Path
-import pytest
 
 PIPELINES_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PIPELINES_DIR))
 
 from build_catalog import clean_text, is_scraped_script, parse_price_usd
-from eval_search import compute_dcg, compute_ndcg, compute_mrr
+from eval_search import compute_mrr, compute_ndcg
 
 
 def test_clean_text_strips_html_tags_and_scripts():

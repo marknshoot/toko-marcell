@@ -4,11 +4,11 @@ Prefetch and cache catalog product images from Amazon CDN to data/processed/imag
 """
 
 import os
-import sys
 import time
 import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
+
 import psycopg
 
 DEFAULT_DATABASE_URL = os.environ.get(
@@ -46,7 +46,7 @@ def download_one(row):
 
 def main():
     IMAGE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    print(f"Connecting to database to get image URLs...")
+    print("Connecting to database to get image URLs...")
     with psycopg.connect(DEFAULT_DATABASE_URL) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT id, asin, image_url FROM products WHERE image_url IS NOT NULL")
