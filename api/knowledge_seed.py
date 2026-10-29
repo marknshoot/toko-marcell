@@ -169,13 +169,18 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
             )
             existing_cols = {row[0] for row in cur.fetchall()}
             if existing_cols and not force_reload:
-                cur.execute("SELECT COUNT(*) FROM store_knowledge")
+                cur.execute(
+                    "SELECT COUNT(*) FROM store_knowledge WHERE category = 'sizing_example'"
+                )
                 count = cur.fetchone()[0]
                 if count > 0:
                     return count
 
-            if force_reload:
-                cur.execute("TRUNCATE TABLE store_knowledge")
+            # Reaching here means either a forced reload, or the table holds only
+            # legacy pre-Phase-7b rows (no 'sizing_example' category). Clear it so
+            # the bilingual chunks don't duplicate stale content. CASCADE is required
+            # because store_knowledge_questions has an FK onto store_knowledge.
+            cur.execute("TRUNCATE TABLE store_knowledge CASCADE")
 
             logger.info("Embedding and inserting %d knowledge chunks...", len(chunks))
             inserted = 0
