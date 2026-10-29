@@ -1,5 +1,6 @@
 """Search endpoints: text search, image search, reindex."""
 
+import asyncio
 import hmac
 import logging
 import time
@@ -10,7 +11,7 @@ from db import get_conn
 from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
 from psycopg import sql
 from search import (
-    BM25Index,
+    build_search_index,
     embed_image_bytes,
     embed_query,
     embed_query_clip_text,
@@ -26,39 +27,6 @@ from routers.catalog import PRODUCT_COLUMNS, row_to_product
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
-
-
-# ── BM25 index builder ──────────────────────────────────────────────────────
-
-def build_search_index() -> BM25Index:
-    """Read the catalog and build the BM25 index."""
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT id, title, brand, category, department, features, description
-                FROM products
-                """
-            )
-            rows = cur.fetchall()
-
-    index = BM25Index()
-    for product_id, title, brand, category, department, features, description in rows:
-        index.add(
-            product_id,
-            {
-                "title": title or "",
-                "brand": brand or "",
-                "category": category or "",
-                "department": department or "",
-                "features": " ".join(features or []),
-                "description": description or "",
-            },
-            dedupe_key=(title or "").strip().lower(),
-        )
-    index.build()
-    logger.info("BM25 index built: %d documents", index.size)
-    return index
 
 
 # ── Reindex ──────────────────────────────────────────────────────────────────
@@ -300,35 +268,12 @@ def search_products(
 
 # ── Image search ─────────────────────────────────────────────────────────────
 
-@router.post("/search/image")
-async def search_by_image(
-    file: UploadFile = File(...),  # noqa: B008  # FastAPI dependency injection pattern
-    department: str | None = Query(None),
-    limit: int = Query(24, ge=1, le=50),
-):
-    """Visual Search (Search by Image) using multimodal CLIP ViT-B/32 embeddings."""
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file must be an image (JPEG, PNG, WEBP, etc.)",
-        )
-
-    contents = await file.read()
-    if len(contents) < 50:
-        raise HTTPException(status_code=400, detail="Image file is too small or corrupted")
-    if len(contents) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Image file exceeds 10MB limit")
-
-    started = time.perf_counter()
-    if not vision_encoder_ready():
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Image search is unavailable: the fine-tuned CLIP vision encoder is "
-                "not loaded on this deployment."
-            ),
-        )
-
+def _run_image_search_sync(
+    contents: bytes,
+    department: str | None,
+    limit: int,
+    started: float,
+) -> tuple[list[dict], float, float]:
     vec = embed_image_bytes(contents)
     if not vec:
         raise HTTPException(
@@ -370,6 +315,41 @@ async def search_by_image(
         prod = row_to_product(row[:-1])
         prod["visualSimilarity"] = float(row[-1]) if row[-1] is not None else 0.0
         items.append(prod)
+    return items, embed_ms, db_ms
+
+
+@router.post("/search/image")
+async def search_by_image(
+    file: UploadFile = File(...),  # noqa: B008  # FastAPI dependency injection pattern
+    department: str | None = Query(None),
+    limit: int = Query(24, ge=1, le=50),
+):
+    """Visual Search (Search by Image) using multimodal CLIP ViT-B/32 embeddings."""
+    if not file.content_type or not file.content_type.startswith("image/"):
+        raise HTTPException(
+            status_code=400,
+            detail="Uploaded file must be an image (JPEG, PNG, WEBP, etc.)",
+        )
+
+    contents = await file.read()
+    if len(contents) < 50:
+        raise HTTPException(status_code=400, detail="Image file is too small or corrupted")
+    if len(contents) > 10 * 1024 * 1024:
+        raise HTTPException(status_code=400, detail="Image file exceeds 10MB limit")
+
+    started = time.perf_counter()
+    if not await asyncio.to_thread(vision_encoder_ready):
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Image search is unavailable: the fine-tuned CLIP vision encoder is "
+                "not loaded on this deployment."
+            ),
+        )
+
+    items, embed_ms, db_ms = await asyncio.to_thread(
+        _run_image_search_sync, contents, department, limit, started
+    )
 
     return {
         "items": items,

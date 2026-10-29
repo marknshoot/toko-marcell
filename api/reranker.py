@@ -38,7 +38,12 @@ def _get_reranker():
             from huggingface_hub import hf_hub_download
             from tokenizers import Tokenizer
 
-            cache_dir = os.environ.get("HF_HUB_CACHE", "/tmp/hf_cache")
+            try:
+                from config import get_settings
+                default_cache = get_settings().HF_HUB_CACHE
+            except Exception:
+                default_cache = "/tmp/hf_cache"
+            cache_dir = os.environ.get("HF_HUB_CACHE", default_cache)
             model_path = hf_hub_download(
                 "Xenova/ms-marco-MiniLM-L-6-v2",
                 "onnx/model.onnx",
@@ -90,7 +95,16 @@ def rerank(
     if len(candidates) <= 1:
         return candidates[:limit]
 
-    if os.environ.get("ENABLE_RERANKER", "false").strip().lower() not in ("1", "true", "yes"):
+    raw_flag = os.environ.get("ENABLE_RERANKER")
+    if raw_flag is not None:
+        enabled = raw_flag.strip().lower() in ("1", "true", "yes")
+    else:
+        try:
+            from config import get_settings
+            enabled = bool(get_settings().ENABLE_RERANKER)
+        except Exception:
+            enabled = False
+    if not enabled:
         # Cross-encoder disabled on memory-constrained deployments: keep the Stage-1 order.
         # Only the copilot's search_catalog uses this; the /search endpoint never did.
         return candidates[:limit]
