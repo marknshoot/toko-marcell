@@ -194,20 +194,32 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
 
     @tool
     def recommend_size(
-        height_cm: float,
-        weight_kg: float,
+        height_cm: float | None = None,
+        weight_kg: float | None = None,
+        foot_length_cm: float | None = None,
+        waist_cm: float | None = None,
+        head_circumference_cm: float | None = None,
         ref_or_asin: str | None = None,
         category: str | None = None,
         brand: str | None = None,
     ) -> dict:
-        """Suggest a size from height (TB, cm) + weight (BB, kg) using the store's
-        size chart plus the brand cut rules for that brand.
-        Always advisory, never a guarantee. Pass a ref/ASIN to tie it to a
-        specific product."""
+        """Suggest a size using the measurement the category actually needs:
+        height (TB, cm) + weight (BB, kg) for tops/bottoms/dress, foot length
+        (cm) for shoes, waist (cm) for belts, or head circumference (cm) for
+        hats. Pass a ref/ASIN to tie it to a specific product. Always advisory,
+        never a guarantee. Unsupported categories return applicable=false
+        instead of a guessed S/M/L."""
         asin = ctx.resolve_ref(ref_or_asin) if ref_or_asin else None
         return agent_tools.recommend_size(
-            height_cm=height_cm, weight_kg=weight_kg,
-            asin=asin, category=category, brand=brand, db_url=ctx.db_url,
+            height_cm=height_cm,
+            weight_kg=weight_kg,
+            foot_length_cm=foot_length_cm,
+            waist_cm=waist_cm,
+            head_circumference_cm=head_circumference_cm,
+            asin=asin,
+            category=category,
+            brand=brand,
+            db_url=ctx.db_url,
         )
 
     @tool

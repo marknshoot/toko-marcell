@@ -1,137 +1,197 @@
 {
-  "timestamp": "2026-10-29T12:56:02.992693+00:00",
-  "git_commit": "8a29cee",
+  "timestamp": "2026-10-29T15:31:50.728161+00:00",
+  "git_commit": "d05845d",
   "framework": "ragas",
   "embedding_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
   "k": 3,
   "query_count": 12,
   "strategies": {
     "direct_chunk": {
-      "id_based_context_precision": 0.25,
-      "id_based_context_recall": 0.75,
-      "non_llm_context_precision_with_reference": 0.4722,
-      "non_llm_context_recall": 0.75
+      "id_based_context_precision": 0.2222,
+      "id_based_context_recall": 0.6667,
+      "non_llm_context_precision_with_reference": 0.5417,
+      "non_llm_context_recall": 0.6667
     },
     "hypothetical_question": {
-      "id_based_context_precision": 0.25,
-      "id_based_context_recall": 0.75,
-      "non_llm_context_precision_with_reference": 0.6944,
-      "non_llm_context_recall": 0.75
+      "id_based_context_precision": 0.3056,
+      "id_based_context_recall": 0.9167,
+      "non_llm_context_precision_with_reference": 0.7222,
+      "non_llm_context_recall": 0.9167
     },
     "hybrid_rrf": {
       "id_based_context_precision": 0.3333,
       "id_based_context_recall": 1.0,
-      "non_llm_context_precision_with_reference": 0.9167,
+      "non_llm_context_precision_with_reference": 0.875,
       "non_llm_context_recall": 1.0
     }
   },
   "direct_chunk": {
-    "id_based_context_precision": 0.25,
-    "id_based_context_recall": 0.75,
-    "non_llm_context_precision_with_reference": 0.4722,
-    "non_llm_context_recall": 0.75
+    "id_based_context_precision": 0.2222,
+    "id_based_context_recall": 0.6667,
+    "non_llm_context_precision_with_reference": 0.5417,
+    "non_llm_context_recall": 0.6667
   },
   "hypothetical_question": {
-    "id_based_context_precision": 0.25,
-    "id_based_context_recall": 0.75,
-    "non_llm_context_precision_with_reference": 0.6944,
-    "non_llm_context_recall": 0.75
+    "id_based_context_precision": 0.3056,
+    "id_based_context_recall": 0.9167,
+    "non_llm_context_precision_with_reference": 0.7222,
+    "non_llm_context_recall": 0.9167
   },
   "hybrid_rrf": {
     "id_based_context_precision": 0.3333,
     "id_based_context_recall": 1.0,
-    "non_llm_context_precision_with_reference": 0.9167,
+    "non_llm_context_precision_with_reference": 0.875,
     "non_llm_context_recall": 1.0
   },
   "per_query": [
     {
       "query": "ongkir ke surabaya berapa lama",
       "expected": "shipping",
-      "reference_chunk_id": 18,
+      "reference_chunk_id": 29,
       "direct_top_ids": [
-        22,
-        19,
-        23
+        33,
+        30,
+        34
       ],
       "hyp_top_ids": [
-        19,
-        16,
-        18
+        27,
+        30,
+        29
       ],
       "hybrid_top_ids": [
-        18,
-        21,
-        19
+        29,
+        24,
+        32
       ]
     },
     {
       "query": "gratis ongkir mulai berapa",
       "expected": "shipping",
-      "reference_chunk_id": 18,
+      "reference_chunk_id": 29,
       "direct_top_ids": [
-        22,
-        20,
-        13
+        33,
+        31,
+        21
       ],
       "hyp_top_ids": [
-        18,
-        17,
-        7
+        29,
+        28,
+        14
       ],
       "hybrid_top_ids": [
-        18,
-        22,
-        17
+        29,
+        33,
+        28
       ]
     },
     {
       "query": "kalau ukuran salah bisa tukar?",
       "expected": "return",
-      "reference_chunk_id": 19,
+      "reference_chunk_id": 30,
       "direct_top_ids": [
         10,
         9,
-        13
+        24
       ],
       "hyp_top_ids": [
-        19,
-        16,
-        7
+        27,
+        30,
+        14
       ],
       "hybrid_top_ids": [
-        19,
-        4,
-        3
+        9,
+        30,
+        24
       ]
     },
     {
       "query": "berapa lama batas retur barang",
       "expected": "return",
-      "reference_chunk_id": 19,
+      "reference_chunk_id": 30,
       "direct_top_ids": [
-        19,
-        22,
-        13
+        30,
+        33,
+        21
       ],
       "hyp_top_ids": [
-        19,
-        16,
-        18
+        27,
+        30,
+        29
       ],
       "hybrid_top_ids": [
-        19,
-        23,
-        22
+        30,
+        24,
+        33
       ]
     },
     {
       "query": "cara bayarnya gimana ya",
       "expected": "payment",
+      "reference_chunk_id": 28,
+      "direct_top_ids": [
+        33,
+        28,
+        30
+      ],
+      "hyp_top_ids": [
+        28,
+        29,
+        30
+      ],
+      "hybrid_top_ids": [
+        28,
+        32,
+        30
+      ]
+    },
+    {
+      "query": "apakah pembayaran cuma simulasi",
+      "expected": "payment",
+      "reference_chunk_id": 28,
+      "direct_top_ids": [
+        28,
+        31,
+        33
+      ],
+      "hyp_top_ids": [
+        28,
+        30,
+        27
+      ],
+      "hybrid_top_ids": [
+        28,
+        31,
+        25
+      ]
+    },
+    {
+      "query": "dickies 874 ambil ukuran berapa",
+      "expected": "dickies",
+      "reference_chunk_id": 14,
+      "direct_top_ids": [
+        21,
+        14,
+        10
+      ],
+      "hyp_top_ids": [
+        14,
+        21,
+        16
+      ],
+      "hybrid_top_ids": [
+        21,
+        14,
+        30
+      ]
+    },
+    {
+      "query": "does champion run large or small",
+      "expected": "champion",
       "reference_chunk_id": 17,
       "direct_top_ids": [
-        22,
         17,
-        19
+        16,
+        10
       ],
       "hyp_top_ids": [
         17,
@@ -140,108 +200,48 @@
       ],
       "hybrid_top_ids": [
         17,
-        21,
-        19
-      ]
-    },
-    {
-      "query": "apakah pembayaran cuma simulasi",
-      "expected": "payment",
-      "reference_chunk_id": 17,
-      "direct_top_ids": [
-        17,
-        20,
-        22
-      ],
-      "hyp_top_ids": [
-        17,
         16,
-        19
-      ],
-      "hybrid_top_ids": [
-        17,
-        20,
-        19
-      ]
-    },
-    {
-      "query": "dickies 874 ambil ukuran berapa",
-      "expected": "dickies",
-      "reference_chunk_id": 7,
-      "direct_top_ids": [
-        13,
-        7,
-        8
-      ],
-      "hyp_top_ids": [
-        7,
-        13,
-        9
-      ],
-      "hybrid_top_ids": [
-        13,
-        7,
-        19
-      ]
-    },
-    {
-      "query": "does champion run large or small",
-      "expected": "champion",
-      "reference_chunk_id": 10,
-      "direct_top_ids": [
-        10,
-        9,
         14
-      ],
-      "hyp_top_ids": [
-        10,
-        11,
-        9
-      ],
-      "hybrid_top_ids": [
-        10,
-        9,
-        7
       ]
     },
     {
       "query": "levis 501 sama 505 beda apa",
       "expected": "levi",
-      "reference_chunk_id": 8,
+      "reference_chunk_id": 15,
       "direct_top_ids": [
-        14,
-        8,
-        2
+        22,
+        15,
+        12
       ],
       "hyp_top_ids": [
-        14,
-        13,
-        4
+        22,
+        21,
+        18
       ],
       "hybrid_top_ids": [
-        14,
-        8,
-        13
+        22,
+        15,
+        21
       ]
     },
     {
       "query": "birkenstock mending naik atau turun size",
       "expected": "birkenstock",
-      "reference_chunk_id": 11,
+      "reference_chunk_id": 18,
       "direct_top_ids": [
-        9,
-        11,
-        10
+        18,
+        16,
+        17
       ],
       "hyp_top_ids": [
-        11,
-        7,
-        9
+        18,
+        14,
+        16
       ],
       "hybrid_top_ids": [
-        11,
-        9,
-        7
+        18,
+        4,
+        16
       ]
     },
     {
@@ -249,19 +249,19 @@
       "expected": "tops",
       "reference_chunk_id": 3,
       "direct_top_ids": [
-        4,
+        10,
+        23,
+        6
+      ],
+      "hyp_top_ids": [
+        8,
         13,
         3
       ],
-      "hyp_top_ids": [
-        6,
-        1,
-        2
-      ],
       "hybrid_top_ids": [
-        3,
         4,
-        5
+        3,
+        9
       ]
     },
     {
@@ -269,19 +269,19 @@
       "expected": "bottoms",
       "reference_chunk_id": 4,
       "direct_top_ids": [
-        8,
-        7,
-        4
+        4,
+        15,
+        14
       ],
       "hyp_top_ids": [
-        6,
-        3,
-        2
+        4,
+        5,
+        7
       ],
       "hybrid_top_ids": [
         4,
-        3,
-        5
+        23,
+        24
       ]
     }
   ]

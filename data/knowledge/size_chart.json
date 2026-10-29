@@ -1,0 +1,799 @@
+{
+  "_meta": {
+    "version": "3.0",
+    "label": "panduan umum toko",
+    "disclaimer": "Panduan ukuran ini adalah estimasi umum Toko Marcell. Bukan chart resmi dari brand. Selalu cek detail produk dan ukur tubuh dengan benar.",
+    "generated_from": "api/knowledge/size_charts.md (authored store sizing guide)",
+    "data_policy": "Tops, bottoms, and dress are authored store estimates. Footwear, waist conversion, belt length, and headwear use cited standard formulas. Brand offsets are demo data, not measured from the catalog.",
+    "brand_offsets_note": "The six brand offsets are demo data for the portfolio and must not be presented as measured fit data."
+  },
+  "sources": {
+    "footwear": {
+      "standard": "Mondopoint ISO 9407 foot-length measurement with standard men’s/women’s US/UK/EU retail conversion tables; kids excluded.",
+      "formula": "Foot length is measured in cm; the nearest 0.5 cm row is used. US/UK/EU values are standard retail conversions, not brand lasts."
+    },
+    "waist": {
+      "standard": "International inch-centimetre conversion (1 in = 2.54 cm).",
+      "formula": "waist_cm = waist_in × 2.54; rows show nominal waist labels."
+    },
+    "belt": {
+      "standard": "Common belt-sizing rule of thumb (belt length ≈ waist + 2 in).",
+      "formula": "belt_length_in = waist_in + 2; belt_length_cm = belt_length_in × 2.54."
+    },
+    "headwear": {
+      "standard": "Common adult head-circumference bands for S/M/L/XL hats.",
+      "formula": "S 54–55 cm, M 56–57 cm, L 58–59 cm, XL 60–61 cm."
+    }
+  },
+  "tops": {
+    "description": "Tops & outerwear — height (TB) and weight (BB) guidelines.",
+    "unit_height": "cm",
+    "unit_weight": "kg",
+    "unit_chest": "cm",
+    "rule": "Jika TB dan BB menunjuk ke dua ukuran berbeda, prioritaskan lingkar dada/bahu.",
+    "men": {
+      "sizes": [
+        {
+          "size": "S",
+          "height_min": 150,
+          "height_max": 167.9,
+          "weight_min": 45,
+          "weight_max": 57.9,
+          "chest_min": 88,
+          "chest_max": 93.9,
+          "feel": "Fitted / Slim",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "size": "M",
+          "height_min": 168,
+          "height_max": 173.9,
+          "weight_min": 58,
+          "weight_max": 67.9,
+          "chest_min": 94,
+          "chest_max": 99.9,
+          "feel": "Regular / Ideal daily fit",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "size": "L",
+          "height_min": 174,
+          "height_max": 179.9,
+          "weight_min": 68,
+          "weight_max": 77.9,
+          "chest_min": 100,
+          "chest_max": 107.9,
+          "feel": "Regular / Comfortable drape",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "size": "XL",
+          "height_min": 180,
+          "height_max": 185.9,
+          "weight_min": 78,
+          "weight_max": 87.9,
+          "chest_min": 108,
+          "chest_max": 115.9,
+          "feel": "Relaxed / Roomy",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "size": "XXL",
+          "height_min": 186,
+          "height_max": 200,
+          "weight_min": 88,
+          "weight_max": 120,
+          "chest_min": 116,
+          "chest_max": 130,
+          "feel": "Oversized / Big & Tall",
+          "source": "store_estimate",
+          "confidence": "medium"
+        }
+      ]
+    },
+    "women": {
+      "sizes": [
+        {
+          "size": "S",
+          "height_min": 150,
+          "height_max": 157.9,
+          "weight_min": 42,
+          "weight_max": 49.9,
+          "chest_min": 78,
+          "chest_max": 83.9,
+          "feel": "Fitted / Slim",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "size": "M",
+          "height_min": 158,
+          "height_max": 164.9,
+          "weight_min": 50,
+          "weight_max": 57.9,
+          "chest_min": 84,
+          "chest_max": 89.9,
+          "feel": "Regular / Ideal daily fit",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "size": "L",
+          "height_min": 165,
+          "height_max": 171.9,
+          "weight_min": 58,
+          "weight_max": 67.9,
+          "chest_min": 90,
+          "chest_max": 97.9,
+          "feel": "Regular / Comfortable drape",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "size": "XL",
+          "height_min": 172,
+          "height_max": 179.9,
+          "weight_min": 68,
+          "weight_max": 79.9,
+          "chest_min": 98,
+          "chest_max": 107.9,
+          "feel": "Relaxed / Roomy",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "size": "XXL",
+          "height_min": 180,
+          "height_max": 195,
+          "weight_min": 80,
+          "weight_max": 110,
+          "chest_min": 108,
+          "chest_max": 125,
+          "feel": "Oversized / Big & Tall",
+          "source": "store_estimate",
+          "confidence": "medium"
+        }
+      ]
+    }
+  },
+  "bottoms": {
+    "description": "Bottoms — waist sizing with height/weight store estimates.",
+    "unit_waist": "cm",
+    "unit_waist_size": "inches",
+    "men": {
+      "sizes": [
+        {
+          "waist_size": 28,
+          "height_min": 160,
+          "height_max": 167.9,
+          "weight_min": 50,
+          "weight_max": 59.9,
+          "waist_min": 71.1,
+          "waist_max": 73.0,
+          "asian_size": "XS / S",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "waist_size": 30,
+          "height_min": 168,
+          "height_max": 173.9,
+          "weight_min": 60,
+          "weight_max": 69.9,
+          "waist_min": 76.2,
+          "waist_max": 78.0,
+          "asian_size": "S / M",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "waist_size": 32,
+          "height_min": 174,
+          "height_max": 179.9,
+          "weight_min": 70,
+          "weight_max": 79.9,
+          "waist_min": 81.3,
+          "waist_max": 83.1,
+          "asian_size": "M / L",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "waist_size": 34,
+          "height_min": 180,
+          "height_max": 185.9,
+          "weight_min": 80,
+          "weight_max": 89.9,
+          "waist_min": 86.4,
+          "waist_max": 88.2,
+          "asian_size": "L / XL",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "waist_size": 36,
+          "height_min": 186,
+          "height_max": 200,
+          "weight_min": 90,
+          "weight_max": 120,
+          "waist_min": 91.4,
+          "waist_max": 93.2,
+          "asian_size": "XL / XXL",
+          "source": "store_estimate",
+          "confidence": "medium"
+        }
+      ]
+    },
+    "women": {
+      "sizes": [
+        {
+          "waist_size": 26,
+          "height_min": 150,
+          "height_max": 157.9,
+          "weight_min": 42,
+          "weight_max": 49.9,
+          "waist_min": 66.0,
+          "waist_max": 67.9,
+          "asian_size": "XS",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "waist_size": 28,
+          "height_min": 158,
+          "height_max": 164.9,
+          "weight_min": 50,
+          "weight_max": 57.9,
+          "waist_min": 71.1,
+          "waist_max": 73.0,
+          "asian_size": "S",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "waist_size": 30,
+          "height_min": 165,
+          "height_max": 171.9,
+          "weight_min": 58,
+          "weight_max": 67.9,
+          "waist_min": 76.2,
+          "waist_max": 78.0,
+          "asian_size": "M",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "waist_size": 32,
+          "height_min": 172,
+          "height_max": 179.9,
+          "weight_min": 68,
+          "weight_max": 79.9,
+          "waist_min": 81.3,
+          "waist_max": 83.1,
+          "asian_size": "L",
+          "source": "store_estimate",
+          "confidence": "medium"
+        },
+        {
+          "waist_size": 34,
+          "height_min": 180,
+          "height_max": 195,
+          "weight_min": 80,
+          "weight_max": 110,
+          "waist_min": 86.4,
+          "waist_max": 88.2,
+          "asian_size": "XL",
+          "source": "store_estimate",
+          "confidence": "medium"
+        }
+      ]
+    }
+  },
+  "dress": {
+    "description": "Dresses and one-piece garments — height/weight estimate with bust-waist-hip guidance.",
+    "unit_height": "cm",
+    "unit_weight": "kg",
+    "guidance": "Gunakan ukuran bust, waist, dan hip di detail produk sebagai pemeriksaan utama. Chart ini hanya titik awal; potongan dress bisa berbeda antar model.",
+    "sizes": [
+      {
+        "size": "S",
+        "height_min": 150,
+        "height_max": 157.9,
+        "weight_min": 42,
+        "weight_max": 49.9,
+        "chest_min": 78,
+        "chest_max": 83.9,
+        "feel": "Fitted",
+        "source": "store_estimate",
+        "confidence": "medium"
+      },
+      {
+        "size": "M",
+        "height_min": 158,
+        "height_max": 164.9,
+        "weight_min": 50,
+        "weight_max": 57.9,
+        "chest_min": 84,
+        "chest_max": 89.9,
+        "feel": "Regular",
+        "source": "store_estimate",
+        "confidence": "medium"
+      },
+      {
+        "size": "L",
+        "height_min": 165,
+        "height_max": 171.9,
+        "weight_min": 58,
+        "weight_max": 67.9,
+        "chest_min": 90,
+        "chest_max": 97.9,
+        "feel": "Regular",
+        "source": "store_estimate",
+        "confidence": "medium"
+      },
+      {
+        "size": "XL",
+        "height_min": 172,
+        "height_max": 179.9,
+        "weight_min": 68,
+        "weight_max": 79.9,
+        "chest_min": 98,
+        "chest_max": 107.9,
+        "feel": "Relaxed",
+        "source": "store_estimate",
+        "confidence": "medium"
+      },
+      {
+        "size": "XXL",
+        "height_min": 180,
+        "height_max": 195,
+        "weight_min": 80,
+        "weight_max": 110,
+        "chest_min": 108,
+        "chest_max": 125,
+        "feel": "Relaxed",
+        "source": "store_estimate",
+        "confidence": "medium"
+      }
+    ]
+  },
+  "footwear": {
+    "description": "Standard footwear conversion by foot length; kids are not covered.",
+    "unit_foot_length": "cm",
+    "men": {
+      "sizes": [
+        {
+          "foot_length_cm": 24.0,
+          "us": 6.0,
+          "uk": 5.5,
+          "eu": 38,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 24.5,
+          "us": 6.5,
+          "uk": 6.0,
+          "eu": 39,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 25.0,
+          "us": 7.0,
+          "uk": 6.0,
+          "eu": 40,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 25.5,
+          "us": 7.5,
+          "uk": 6.5,
+          "eu": 40.5,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 26.0,
+          "us": 8.0,
+          "uk": 7.0,
+          "eu": 41,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 26.5,
+          "us": 8.5,
+          "uk": 7.5,
+          "eu": 42,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 27.0,
+          "us": 9.0,
+          "uk": 8.0,
+          "eu": 42.5,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 27.5,
+          "us": 9.5,
+          "uk": 8.5,
+          "eu": 43,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 28.0,
+          "us": 10.0,
+          "uk": 9.0,
+          "eu": 44,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 28.5,
+          "us": 10.5,
+          "uk": 9.5,
+          "eu": 44.5,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 29.0,
+          "us": 11.0,
+          "uk": 10.0,
+          "eu": 45,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 29.5,
+          "us": 11.5,
+          "uk": 10.5,
+          "eu": 46,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 30.0,
+          "us": 12.0,
+          "uk": 11.0,
+          "eu": 46.5,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 30.5,
+          "us": 12.5,
+          "uk": 11.5,
+          "eu": 47,
+          "source": "standard",
+          "confidence": "high"
+        }
+      ]
+    },
+    "women": {
+      "sizes": [
+        {
+          "foot_length_cm": 22.0,
+          "us": 4.5,
+          "uk": 2.5,
+          "eu": 35,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 22.5,
+          "us": 5.0,
+          "uk": 3.0,
+          "eu": 35.5,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 23.0,
+          "us": 5.5,
+          "uk": 3.5,
+          "eu": 36,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 23.5,
+          "us": 6.0,
+          "uk": 4.0,
+          "eu": 36.5,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 24.0,
+          "us": 6.5,
+          "uk": 4.5,
+          "eu": 37,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 24.5,
+          "us": 7.0,
+          "uk": 5.0,
+          "eu": 38,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 25.0,
+          "us": 7.5,
+          "uk": 5.5,
+          "eu": 38.5,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 25.5,
+          "us": 8.0,
+          "uk": 6.0,
+          "eu": 39,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 26.0,
+          "us": 8.5,
+          "uk": 6.5,
+          "eu": 40,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 26.5,
+          "us": 9.0,
+          "uk": 7.0,
+          "eu": 40.5,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 27.0,
+          "us": 9.5,
+          "uk": 7.5,
+          "eu": 41,
+          "source": "standard",
+          "confidence": "high"
+        },
+        {
+          "foot_length_cm": 27.5,
+          "us": 10.0,
+          "uk": 8.0,
+          "eu": 42,
+          "source": "standard",
+          "confidence": "high"
+        }
+      ]
+    }
+  },
+  "waist": {
+    "description": "Standard waist inch-to-cm conversion.",
+    "sizes": [
+      {
+        "waist_size": 26,
+        "waist_cm": 66.0,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 28,
+        "waist_cm": 71.1,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 30,
+        "waist_cm": 76.2,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 32,
+        "waist_cm": 81.3,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 34,
+        "waist_cm": 86.4,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 36,
+        "waist_cm": 91.4,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 38,
+        "waist_cm": 96.5,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 40,
+        "waist_cm": 101.6,
+        "source": "standard",
+        "confidence": "high"
+      }
+    ]
+  },
+  "belt": {
+    "description": "Belt length from waist measurement.",
+    "sizes": [
+      {
+        "waist_size": 26,
+        "waist_cm": 66.0,
+        "belt_length_in": 28,
+        "belt_length_cm": 71.1,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 28,
+        "waist_cm": 71.1,
+        "belt_length_in": 30,
+        "belt_length_cm": 76.2,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 30,
+        "waist_cm": 76.2,
+        "belt_length_in": 32,
+        "belt_length_cm": 81.3,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 32,
+        "waist_cm": 81.3,
+        "belt_length_in": 34,
+        "belt_length_cm": 86.4,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 34,
+        "waist_cm": 86.4,
+        "belt_length_in": 36,
+        "belt_length_cm": 91.4,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 36,
+        "waist_cm": 91.4,
+        "belt_length_in": 38,
+        "belt_length_cm": 96.5,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 38,
+        "waist_cm": 96.5,
+        "belt_length_in": 40,
+        "belt_length_cm": 101.6,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "waist_size": 40,
+        "waist_cm": 101.6,
+        "belt_length_in": 42,
+        "belt_length_cm": 106.7,
+        "source": "standard",
+        "confidence": "high"
+      }
+    ]
+  },
+  "headwear": {
+    "description": "Adult hat sizing by head circumference.",
+    "unit_head_circumference": "cm",
+    "sizes": [
+      {
+        "size": "S",
+        "head_circumference_min": 54,
+        "head_circumference_max": 55,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "size": "M",
+        "head_circumference_min": 56,
+        "head_circumference_max": 57,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "size": "L",
+        "head_circumference_min": 58,
+        "head_circumference_max": 59,
+        "source": "standard",
+        "confidence": "high"
+      },
+      {
+        "size": "XL",
+        "head_circumference_min": 60,
+        "head_circumference_max": 61,
+        "source": "standard",
+        "confidence": "high"
+      }
+    ]
+  },
+  "one_size": {
+    "description": "Accessories sold as one size.",
+    "message": "Produk ini ukuran tunggal (one size)."
+  },
+  "dimensions": {
+    "description": "Luggage, bags, and travel gear are specified by dimensions and capacity, not body size.",
+    "message": "Ini bukan pertanyaan ukuran badan. Baca dimensi dan kapasitas produk di halaman detail."
+  },
+  "unsupported": {
+    "description": "Categories without a defensible sizing basis in this demo.",
+    "message": "Kategori ini belum punya dasar ukuran yang bisa dipertanggungjawabkan. Cek detail produk atau tanya lewat chat."
+  },
+  "brand_offsets": {
+    "_note": "DEMO DATA. Authored brand cut rules from size_charts.md §3; these override the generic baseline for the brands listed here. They are not measured from catalog fit.",
+    "brands": {
+      "Dickies": {
+        "fit_label": "runs_small",
+        "offset_note": "Runs 1–2 sizes smaller than standard denim. Non-stretch 8.5 oz twill, sits at natural waist.",
+        "action": "Size up 1–2 inches from standard jeans size. For oversized/baggy look, size up 2.",
+        "source": "demo",
+        "confidence": "low"
+      },
+      "Levi's": {
+        "fit_label": "true_to_size",
+        "offset_note": "True to American denim size. Cut varies by model: 501 = straight/button-fly, 505 = roomier seat/thigh/zip. Truckers are snug in shoulders — size up 1 for layering.",
+        "action": "Order standard size. For 501 vs 505, recommend 505 for athletic/muscular thighs.",
+        "source": "demo",
+        "confidence": "low"
+      },
+      "Carhartt": {
+        "fit_label": "true_to_size",
+        "offset_note": "Slightly roomier than standard but NOT a full size large. US workwear cut with moderate shoulder drop. Data shows near-balanced fit, leaning marginally large.",
+        "action": "Order standard size for a comfortable workwear fit. Only size down if you want a slim/fitted look.",
+        "source": "demo",
+        "confidence": "low"
+      },
+      "Champion": {
+        "fit_label": "true_to_size",
+        "offset_note": "NOT runs large as commonly assumed. Data shows Champion actually leans slightly small (25.4% small vs 19.5% large). Standard US athletic cut.",
+        "action": "Order standard size. If between sizes, consider sizing up rather than down.",
+        "source": "demo",
+        "confidence": "low"
+      },
+      "Birkenstock": {
+        "fit_label": "runs_large",
+        "offset_note": "European sizing with contoured cork-latex footbed. Toes and heels must sit within the rim. If between sizes, size down.",
+        "action": "Use foot length in cm or EU size. If between sizes (e.g., 41.5), take EU 41. Break-in period 7–10 days.",
+        "source": "demo",
+        "confidence": "low"
+      },
+      "TOMS": {
+        "fit_label": "true_to_size",
+        "offset_note": "True to US size. Canvas stretches slightly after 3–5 wears. Data shows near-balanced with slight small lean.",
+        "action": "Order standard size. For wide feet or wearing with socks, consider half size up.",
+        "source": "demo",
+        "confidence": "low"
+      }
+    }
+  }
+}

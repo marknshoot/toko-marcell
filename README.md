@@ -44,7 +44,7 @@ revenue and copilot-vs-non-copilot cohorts are now computed from server-confirme
 | # | Problem | Feature | KPI it moves | Measured impact (committed artifact) |
 |---|---|---|---|---|
 | 1 | Mixed Indonesian/English or casual queries return nothing or the wrong products | Tri-modal bilingual retrieval: BM25 + multilingual MiniLM + CLIP → RRF, optional reranker | **zero-result rate ↓**, **search-to-PDP ↑** | **Offline:** overall nDCG@10 **0.794 → 0.894**, Indonesian nDCG@10 **0.334 → 0.765**, HR@10 **100%** ([multilingual eval](./pipelines/results/search_eval_multilingual.json)) |
-| 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic `recommend_size` (category-aware in phase 10b) + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.9167** ([RAG eval](./pipelines/results/rag_eval.json)); assisted-add and copilot quality are live (phase 9); sizing has no fit-accuracy benchmark yet |
+| 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic category-aware `recommend_size` + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.8750** ([RAG eval](./pipelines/results/rag_eval.json)); assisted-add and copilot quality are live (phase 9); sizing has no fit-accuracy benchmark yet |
 | 3 | Repetitive shipping/returns/payment questions consume the owner's time | `lookup_store_policy`: hypothetical-question + chunk + IDF lexical RRF | **deflection ↑**, **unanswered rate ↓** | Same RAGAS artifact for retrieval; unanswered logging is live (phase 10), deflection is planned (phase 12), and there is no human handoff, so it means resolved in-copilot vs an honest “can't answer” |
 | 4 | One-item baskets | Session-aware item-to-item CF + `build_outfit` with `total ≤ budget` enforced in code | **AOV ↑**, **copilot assisted-add rate ↑** | **Offline:** HR@10 **7.96% vs 0.18%** for popularity — **+4,322% relative** ([recommendation eval](./pipelines/results/recs_eval.json)); AOV from server-confirmed orders is live (phase 9) |
 | 5 | Ungrounded AI answers and token-cost exposure | Guardrail short-circuit, rate limits, 7-tool whitelist, server-validated cart actions | **cost per conversation ↓**, **cost per assisted order ↓** | Guardrail/tool behaviour is unit-tested in CI; **no cost figure is claimed** — tokens are logged in phase 9, unit economics in phase 13 |
@@ -73,7 +73,7 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 | # | What | Result | Where |
 |---|---|---|---|
 | 1 | **Bilingual hybrid retrieval** — BM25 + multilingual MiniLM (`paraphrase-multilingual-MiniLM-L12-v2`, 384-d) + pre-trained CLIP (`fastembed`, 512-d) → RRF (`k=60`) + optional ONNX cross-encoder reranker | lifts overall hybrid **nDCG@10 0.794 → 0.894** (`100%` HR@10) and Indonesian **nDCG@10 0.334 → 0.765** | [API internals](./api/README.md#search--how-it-ranks) |
-| 2 | **RAGAS-evaluated store policy & sizing RAG** — hypothetical-question vectors + direct-chunk vectors + IDF-weighted bilingual lexical RRF | **1.0000 Context Recall** & **0.9167 Context Precision** on 12 bilingual ID+EN queries (`ragas.evaluate`) | [`pipelines/eval_rag.py`](./pipelines/eval_rag.py) |
+| 2 | **RAGAS-evaluated store policy & sizing RAG** — hypothetical-question vectors + direct-chunk vectors + IDF-weighted bilingual lexical RRF | **1.0000 Context Recall** & **0.8750 Context Precision** on 12 bilingual ID+EN queries (`ragas.evaluate`) | [`pipelines/eval_rag.py`](./pipelines/eval_rag.py) |
 | 3 | **Hardened agentic copilot** — LangChain v1 `create_agent` + OpenRouter, LLM guardrail with 3-turn history window (3 user + 3 assistant), `<store_context>` indirect prompt-injection defense, 7 tools, LangGraph Postgres memory | answers only from tool evidence; blocks off-topic and multi-turn injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
 | 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe (**+4,322% HR@10** vs popularity) | [recommendation engine](./README.md#-recommendation-engine) |
 | 5 | **Raw `psycopg` v3 backend engineering** — connection pooling (`psycopg_pool`), zero ORM, 100% parameterized SQL (`psycopg.sql.Identifier`), bounded sliding-window rate limiting, and non-blocking async I/O | zero SQL injection vectors, bounded memory under IP churn, non-blocking ONNX inference | [backend security](./README.md#-production-reliability-caching--defensive-security) |
@@ -94,13 +94,13 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 
 | RAGAS Policy & Sizing RAG (12 ID+EN queries, k=3) | ID Precision@3 | ID Recall@3 | Context Precision | Context Recall |
 |---|:---:|:---:|:---:|:---:|
-| `direct_chunk` | 0.2500 | 0.7500 | 0.4722 | 0.7500 |
-| `hypothetical_question` | 0.2500 | 0.7500 | 0.6944 | 0.7500 |
-| **`hybrid_rrf` (`lookup_store_policy`)** | **0.3333** | **1.0000** | **0.9167** | **1.0000** |
+| `direct_chunk` | 0.2222 | 0.6667 | 0.5417 | 0.6667 |
+| `hypothetical_question` | 0.3056 | 0.9167 | 0.7222 | 0.9167 |
+| **`hybrid_rrf` (`lookup_store_policy`)** | **0.3333** | **1.0000** | **0.8750** | **1.0000** |
 
 Combining bilingual hypothetical-question embeddings (`store_knowledge_questions`), direct chunk
 embeddings (`store_knowledge`), and IDF-weighted lexical keyword matching via Reciprocal Rank Fusion
-achieves **1.0000 Context Recall** and **0.9167 Context Precision** in RAGAS evaluation
+achieves **1.0000 Context Recall** and **0.8750 Context Precision** in RAGAS evaluation
 (artifacts: [`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json),
 [`pipelines/eval_rag.py`](./pipelines/eval_rag.py)).
 
@@ -218,7 +218,7 @@ flowchart TD
         subgraph Orchestration["Agentic copilot (LangChain v1 create_agent + OpenRouter)"]
             Guard["Deterministic guardrail node<br/>(greeting / off-topic / injection → 0 LLM calls)"]
             Agent["create_agent loop<br/>+ middleware (context injection,<br/>history trim, 3-call cap)"]
-            Tools6["6 grounding tools"]
+            Tools6["7 grounding tools"]
         end
     end
 
@@ -358,8 +358,8 @@ captures relevance a bi-encoder cannot — the standard two-stage retrieve-then-
    `NonLLMContextRecall`) on **12 bilingual ID+EN shopper queries**
    ([`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json)). Fusing hypothetical
    questions (`store_knowledge_questions`), direct chunks (`store_knowledge`), and IDF-weighted
-   bilingual lexical keywords via RRF (`hybrid_rrf`) lifts Context Precision from **0.4722 → 0.9167**
-   and Context Recall from **0.7500 → 1.0000** (`12/12` queries).
+   bilingual lexical keywords via RRF (`hybrid_rrf`) lifts Context Precision from **0.5417 → 0.8750**
+   and Context Recall from **0.6667 → 1.0000** (`12/12` queries).
 
 ---
 
@@ -433,25 +433,42 @@ Sizing is the single biggest driver of fashion returns, and most "size chart" AI
 one. Toko Marcell answers sizing questions from an **authored, versioned knowledge base** — nothing is
 mined per product, and nothing is invented at answer time.
 
-### The two artefacts
+### The artefacts
 
 | File | Role |
 |---|---|
-| [`api/knowledge/size_charts.md`](./api/knowledge/size_charts.md) | the human-readable guide: TB/BB tops chart, waist-inches bottoms chart, footwear conversion, and the per-brand cut rules |
-| [`api/knowledge/size_chart.json`](./api/knowledge/size_chart.json) | the same values machine-readable, read directly by `api/sizing.py` |
+| [`api/knowledge/size_charts.md`](./api/knowledge/size_charts.md) | the human-readable guide: men's/women's tops, bottoms, dress, footwear, waist/belt, headwear, one-size/dimensions/unsupported, and the demo brand cut rules |
+| [`api/knowledge/size_chart.json`](./api/knowledge/size_chart.json) | the same values machine-readable, with per-row `source` + `confidence`, read directly by `api/sizing.py` |
+| [`api/knowledge/catalog_categories.json`](./api/knowledge/catalog_categories.json) | every distinct `(department, category)` pair in the seed catalog, produced by [`pipelines/extract_categories.py`](./pipelines/extract_categories.py) |
+| [`api/knowledge/size_kind_map.json`](./api/knowledge/size_kind_map.json) | the explicit pair → size-kind map; unknown pairs fall back to `unsupported`, never `tops` |
 
-Both are labelled **"panduan umum toko"** — a store rule-of-thumb, explicitly *not* an official brand
+All are labelled **"panduan umum toko"** — a store rule-of-thumb, explicitly *not* an official brand
 chart. `size_charts.md` is also split by section header, embedded with MiniLM and ingested into
 `store_knowledge`, so the RAG index and the deterministic tool answer from **the same source**.
 
 ### Two consumers, one source of truth
 
-1. **`recommend_size` — deterministic, 2-layer.** `api/sizing.py` maps TB/BB to a baseline tops size
-   (and weight → waist inches for bottoms), then applies the brand cut rule if the brand is
-   documented. It returns a structured breakdown plus Indonesian phrasing, always framed as
+1. **`recommend_size` — deterministic, category-aware.** `api/sizing.py` dispatches on the product's
+   size kind. Tops/bottoms/dress use TB/BB (bottoms can take an actual waist too), footwear uses foot
+   length, belts use waist, and headwear uses head circumference. Unsupported categories return
+   `applicable=false` with an honest reason; missing measurements return `required_inputs` instead of
+   a guess. The brand cut rule is applied only after the category baseline. Every answer is framed as
    *"coba ukuran X dulu, ini perkiraan"* with a disclaimer — never a guarantee.
 2. **`lookup_store_policy` — RAG.** The same guide is retrievable in prose, so "kalau tinggi 175 berat
    70 ambil apa di Dickies 874?" can be answered conversationally without the tool path.
+
+### No-LLM sizing API
+
+The product page does not need the copilot to get an honest answer:
+
+- `GET /sizing/{asin}` → `{asin, size_kind, applicable, required_inputs, reason}` so the UI knows
+  whether to ask for height+weight, foot length, waist, head circumference, or show a
+  dimensions/unsupported/one-size note.
+- `POST /sizing/recommend` with `{asin, height_cm?, weight_kg?, foot_length_cm?, waist_cm?,
+  head_circumference_cm?}` (`extra="forbid"`, body-plausible bounds) → the same core result as the
+  tool. Unknown ASIN is `404`; writes are rate-limited.
+- The storefront component `shop/src/components/SizeAdvisor.js` renders adaptive inputs and shows a
+  source/confidence badge plus the disclaimer.
 
 ### Why authored, not mined
 
@@ -539,7 +556,7 @@ Seven tools are bound to the agent (`GET /copilot/tools` lists them):
 |---|---|---|
 | `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, real category enum + budget filters | "do you have…", style, outfit, budget |
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
-| `recommend_size` | `size_chart.json` + brand cut rules, 2-layer (store baseline → brand offset) | TB/BB sizing advisory, never a certainty |
+| `recommend_size` | `size_kind_map.json` + `size_chart.json` + demo brand cut rules | category-aware sizing (TB/BB, foot length, waist, head); `applicable=false` when the category has no defensible basis |
 | `build_outfit` | catalog search; total summed and verified ≤ budget **in code** | top + bottom + shoes within budget |
 | `lookup_store_policy` | `store_knowledge` / `store_knowledge_questions` (hypothetical-question RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
 | `add_to_cart` | re-reads the price from the DB, returns a `ui_action` the browser executes through `CartProvider` (localStorage) | "add this to my cart" |
@@ -555,6 +572,10 @@ order-status tool**, because checkout is a demo simulation with no fulfillment t
 
 - Every product mentioned must come from a tool result. No invented brands, ASINs, stock, or discounts.
 - Prices are always formatted as Indonesian Rupiah and always taken from the database.
+- Sizing answers first ask for the measurement the category needs — TB/BB for tops/bottoms/dress,
+  foot length for shoes, waist for belts, head circumference for hats — and never default to a tops
+  size. Shoes, luggage, lingerie and other unsupported categories get an honest "cannot answer"
+  rather than an invented S/M/L.
 - Sizing answers apply the **authored brand cut rules** in the store's sizing guide — e.g. Dickies
   874's rigid 8.5 oz twill (and that **Dickies runs small**), Levi's 505 vs 501 fit differences
   (Levi's **true to size**), that **Champion and Carhartt are true to size** (not "runs large"), and
@@ -601,12 +622,16 @@ In the storefront (`CopilotChat.js`), shoppers can search and attach up to 3 pro
 `api/knowledge_seed.py` chunks the two hand-written markdown sources
 ([`size_charts.md`](./api/knowledge/size_charts.md),
 [`store_policies.md`](./api/knowledge/store_policies.md)) by section header, embeds each chunk with
-MiniLM, and upserts them into `store_knowledge` (**23 chunks** in the seed). It also generates **82
+MiniLM, and upserts them into `store_knowledge` (**34 chunks** in the seed). It also generates **120
 hypothetical questions** (3–5 ID+EN per chunk) into `store_knowledge_questions` and indexes those —
 embedding questions a shopper would actually ask rather than the raw policy text improves retrieval
 quality on the committed [RAGAS evaluation](./pipelines/results/rag_eval.json). Nothing here is
 scraped; it is authored store policy, which is why the copilot can be trusted about shipping, returns
 and sizing.
+
+> `seed_knowledge()` is idempotent: it returns early when `sizing_example` rows already exist. After
+> editing `size_charts.md`, run `python -m knowledge_seed` from `api/` (its `__main__` forces a
+> reload) so the database does not keep serving the previous guide.
 
 ---
 
@@ -843,7 +868,7 @@ message instead of crashing, and the copilot panel simply can't produce answers.
 
 > **How the auto-seed works.** The Postgres container mounts `data/seed/init.sql.gz` (~33 MB) into
 > `/docker-entrypoint-initdb.d/`, so the official image restores the complete schema, 4,670 products,
-> HNSW indexes, 46,700 reviews, 23 knowledge chunks (plus 82 hypothetical questions),
+> HNSW indexes, 46,700 reviews, 34 knowledge chunks (plus 120 hypothetical questions),
 > recommendations and a small demo funnel
 > (~357 events, ~106 orders) in seconds on first boot. The ephemeral LangGraph checkpoint tables are
 > excluded from the dump and recreated at startup.
@@ -889,14 +914,14 @@ manual/
 │   ├── search.py                 #   BM25 + multilingual embeddings + RRF + fastembed CLIP encoders
 │   ├── reranker.py               #   Stage-2 ONNX cross-encoder
 │   ├── copilot_agent.py          #   LangChain v1 create_agent loop + middleware
-│   ├── copilot_tools.py          #   the 6 grounding tools (schema bound to the agent)
+│   ├── copilot_tools.py          #   the 7 grounding tools (schema bound to the agent)
 │   ├── copilot_llm.py            #   provider chain (.with_fallbacks) + COPILOT_FAKE_LLM
 │   ├── copilot_memory.py         #   LangGraph PostgresSaver + thread activity / TTL
 │   ├── guardrail.py              #   LLM-based 3-turn guardrail + deterministic regex fallback
-│   ├── sizing.py                 #   2-layer recommend_size (store chart → brand offset)
+│   ├── sizing.py                 #   category-aware recommend_size (size_kind dispatch)
 │   ├── rate_limiter.py           #   bounded sliding-window per-IP rate limiter
 │   ├── knowledge_seed.py         #   markdown → embedded store_knowledge + hypothetical questions
-│   ├── knowledge/                #   authored size_charts.md + size_chart.json + policies (RAG source)
+│   ├── knowledge/                #   authored size_charts.md, size_chart.json, size_kind_map.json, policies
 │   └── tests/                    #   pytest suite (unit + RAGAS + live API, fake-LLM copilot)
 ├── docs/                         # business framing, no code
 │   ├── BUSINESS_CASE.md          #   personas, problems → features → KPIs, hypotheses, KPI tree
@@ -1019,10 +1044,13 @@ This section exists because a portfolio that hides its edges is less useful than
   512 MB deployments, `ENABLE_TRIMODAL` and `ENABLE_RERANKER` are off by default, and
   `TEXT_EMBED_MODEL=sentence-transformers/all-MiniLM-L6-v2` (`TEXT_EMBED_COLUMN=embedding`) can be set
   if lower resident memory is required.
-- **Sizing is authored, deterministic and advisory only.** `api/sizing.py` maps TB/BB to a size using
-  the store's own chart and applies the documented brand cut rules; there is no per-product fit
-  signal and no ML model in the loop. The copilot always frames sizing as an advisory, never a
-  certainty, because the guide is a store rule-of-thumb rather than an official brand chart.
+- **Sizing is authored, deterministic and advisory only.** `api/sizing.py` maps each catalog
+  `(department, category)` to a size kind and uses the matching chart: men's/women's TB/BB for
+  tops/bottoms/dress, foot length for footwear, waist for belts, head circumference for headwear.
+  Lingerie, kids, swimwear, costumes and unknown/mixed categories return `applicable=false`; they are
+  never forced into a tops size. There is no per-product fit signal and no ML model in the loop. The
+  copilot always frames sizing as an advisory, never a certainty, because the guide is a store
+  rule-of-thumb rather than an official brand chart.
 - **Live copilot quality depends on the free OpenRouter model.** The grounding, tools and guardrail
   are deterministic in CI (`COPILOT_FAKE_LLM=1`), while the live demo rides on whichever free model
   the OpenRouter pool routes to.

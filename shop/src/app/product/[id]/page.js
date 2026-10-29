@@ -1,12 +1,13 @@
 import Link from "next/link";
 import { notFound } from "next/navigation";
 import { formatRp } from "../../../lib/formatRp";
-import { getProduct, getItemRecs, getProductReviews } from "../../../lib/api";
+import { getProduct, getItemRecs, getProductReviews, getSizingInfo } from "../../../lib/api";
 import AddToCartButton from "@/components/AddToCartButton";
 import ProductImage from "@/components/ProductImage";
 import ProductCard from "@/components/ProductCard";
 import ProductReviews from "@/components/ProductReviews";
 import ProductCopilotEntry from "@/components/ProductCopilotEntry";
+import SizeAdvisor from "@/components/SizeAdvisor";
 import TrackView from "@/components/TrackView";
 
 // Incremental Static Regeneration (ISR): Cache at Edge CDN and revalidate in background every 5 minutes.
@@ -40,9 +41,10 @@ export default async function ProductPage({ params }) {
         notFound();
     }
 
-    const [recsData, reviewsData] = await Promise.all([
+    const [recsData, reviewsData, sizingInfo] = await Promise.all([
         getItemRecs(product.asin, 4),
         getProductReviews(product.id, 10),
+        getSizingInfo(product.asin),
     ]);
 
     const breadcrumb = (product.categoryPath || []).join(" › ");
@@ -89,6 +91,8 @@ export default async function ProductPage({ params }) {
                         <div className="mt-4">
                             <ProductCopilotEntry asin={product.asin} title={product.title} />
                         </div>
+
+                        <SizeAdvisor asin={product.asin} info={sizingInfo} />
                     </div>
                 </div>
 
