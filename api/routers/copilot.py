@@ -5,7 +5,7 @@ import logging
 import os
 
 from config import get_settings
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from rate_limiter import check_copilot_rate_limit
 from schemas import CopilotChatV2In
@@ -138,7 +138,7 @@ def copilot_tools():
 # ── Thread memory (v2, design §2) ────────────────────────────────────────────
 
 @router.get("/copilot/threads/{thread_id}")
-def get_thread(thread_id: str):
+def get_thread(thread_id: str = Path(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")):
     """Return the display messages for a conversation thread (may be empty)."""
     from copilot_memory import get_thread_messages
     messages = get_thread_messages(thread_id)
@@ -146,7 +146,7 @@ def get_thread(thread_id: str):
 
 
 @router.delete("/copilot/threads/{thread_id}", status_code=204)
-def delete_thread_endpoint(thread_id: str):
+def delete_thread_endpoint(thread_id: str = Path(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")):
     """Reset a conversation: delete all persisted checkpointer state for it."""
     from copilot_memory import delete_thread
     delete_thread(thread_id)

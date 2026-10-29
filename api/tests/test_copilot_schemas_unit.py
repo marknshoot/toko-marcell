@@ -55,6 +55,10 @@ class TestRequestV2:
         with pytest.raises(ValidationError):
             CopilotChatV2In(message="hi")
 
+    def test_thread_id_rejects_invalid_chars(self):
+        with pytest.raises(ValidationError):
+            CopilotChatV2In(thread_id="../bad thread", message="hi")
+
 
 class TestResponseV2:
     def test_minimal_response(self):
