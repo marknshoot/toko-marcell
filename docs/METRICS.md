@@ -24,6 +24,10 @@ the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`
 - **Rates are `null`, never `0.0`, when the denominator is empty.** Do not read a missing denominator
   as zero conversion.
 - **Rates are rounded to 4 decimals** by the API. Raw SQL should report numerator and denominator.
+- **Dashboard parity.** `GET /admin/kpi` uses the same window and returns the same underlying
+  `events`, `orders`, `copilot_turns` and `copilot_feedback` aggregates as `/events/summary` and
+  `/search/insights`, reshaped for the operations page. Its `metadata.synthetic=true` label is
+  mandatory: these are seeded/simulated demo rows, not real customer revenue.
 - **Session.** An anonymous `session_id` generated in the browser (`sessionStorage` +
   `crypto.randomUUID()`). No accounts, no PII, no cross-device identity. A new tab is a new session.
 - **Event vs session.** State clearly which one a metric counts. Event-level metrics are weighted by
@@ -37,23 +41,24 @@ the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`
 
 | Metric | Status | Primary source |
 |---|---|---|
-| [Conversion rates](#conversion-rates) | Live | `events` → `GET /events/summary` |
-| [AOV](#aov) | Live (phase 9) | `orders` → `GET /events/summary.revenue` |
-| [Zero-result rate](#zero-result-rate) | Live | `events` (`search`) → `GET /events/summary`, `GET /search/insights` |
-| [Search-to-PDP](#search-to-pdp) | Live (proxy) | `events` → `GET /events/summary`, `GET /search/insights` |
+| [Conversion rates](#conversion-rates) | Live | `events` → `GET /events/summary`, `GET /admin/kpi` |
+| [AOV](#aov) | Live (phase 9) | `orders` → `GET /events/summary`, `GET /admin/kpi.revenue` |
+| [Zero-result rate](#zero-result-rate) | Live | `events` (`search`) → `GET /events/summary`, `GET /search/insights`, `GET /admin/kpi` |
+| [Search-to-PDP](#search-to-pdp) | Live (proxy) | `events` → `GET /events/summary`, `GET /search/insights`, `GET /admin/kpi` |
 | [Copilot assisted-add rate](#copilot-assisted-add-rate) | Live (proxy) | `events` → `GET /events/summary` |
-| [Deflection](#deflection) | Planned (phase 12) | `copilot_turns` (outcomes + fallback live in phase 10), `/admin/kpi` (phase 12) |
-| [Unanswered rate](#unanswered-rate) | Live (phase 10) | `copilot_turns.outcome` + `unanswered_question` → `GET /events/summary.copilot_quality` |
-| [Thumbs-up rate](#thumbs-up-rate) | Live (phase 9) | `copilot_feedback` → `GET /events/summary.copilot_quality` |
+| [Deflection](#deflection) | Live (phase 12) | `copilot_turns` final turn → `GET /admin/kpi.copilot_quality` |
+| [Unanswered rate](#unanswered-rate) | Live (phase 10) | `copilot_turns.outcome` + `unanswered_question` → `GET /events/summary`, `GET /admin/kpi` |
+| [Thumbs-up rate](#thumbs-up-rate) | Live (phase 9) | `copilot_feedback` → `GET /events/summary`, `GET /admin/kpi` |
 | [Cost per conversation](#cost-per-conversation) | Planned (phase 13) | `copilot_turns` tokens × configured prices |
 | [Cost per assisted order](#cost-per-assisted-order) | Planned (phase 13) | `copilot_turns` + `orders` |
-| [Latency p50 and p95](#latency-p50-and-p95) | Live (phase 9); dashboard surface phase 12 | `copilot_turns.latency_ms` → `GET /events/summary.copilot_quality` |
+| [Latency p50 and p95](#latency-p50-and-p95) | Live (phase 9; dashboard phase 12) | `copilot_turns.latency_ms` → `GET /events/summary`, `GET /admin/kpi` |
 
 ---
 
 ## Conversion rates
 
-**Status:** Live. Returned by `GET /events/summary` in the `rates` object.
+**Status:** Live. Returned by `GET /events/summary` in the `rates` object and by
+`GET /admin/kpi` in the `funnel.rates` object.
 
 **Definition:** Session-level shares of distinct sessions that reached a step. These are not
 user-level or order-level conversion rates, and they are not a strict first-touch funnel.
@@ -64,6 +69,12 @@ user-level or order-level conversion rates, and they are not a strict first-touc
 | `cart_to_checkout` | `COUNT(DISTINCT session_id WHERE event_type='checkout_start') / COUNT(DISTINCT session_id WHERE event_type='add_to_cart')` |
 | `checkout_to_purchase` | `COUNT(DISTINCT session_id WHERE event_type='purchase_mock') / COUNT(DISTINCT session_id WHERE event_type='checkout_start')` |
 | `view_to_purchase` | `COUNT(DISTINCT session_id WHERE event_type='purchase_mock') / COUNT(DISTINCT session_id WHERE event_type='view_product')` |
+
+The phase-12 dashboard exposes a deliberately different, order-linked funnel:
+`/admin/kpi.funnel.order_sessions` counts distinct `session_id` values on **paid `orders`**, and
+`checkout_to_order` / `overall_conversion` use that count. The step counts are independent distinct
+sessions, not a sequential cohort, so a session can enter mid-funnel and a raw ratio can exceed 1.
+Read it as operational telemetry, not a monotonic conversion funnel.
 
 **Source:** `events` table; implementation in
 [`api/routers/events.py`](../api/routers/events.py) (`sessions_by_step`, `rate()`); event schema in
@@ -89,8 +100,8 @@ user-level or order-level conversion rates, and they are not a strict first-touc
 
 ## AOV
 
-**Status:** Live (phase 9). Returned by `GET /events/summary` in the `revenue` block, alongside
-`order_count` and `revenue_idr`.
+**Status:** Live (phase 9). Returned by `GET /events/summary` in the `revenue` block and by
+`GET /admin/kpi` as `revenue.aov_idr`, alongside `order_count` / `total_revenue_idr`.
 
 **Definition:** Average value of server-confirmed orders created in the window, in IDR.
 
@@ -127,7 +138,8 @@ server-side from `products.price_idr`; the client sends only `{asin, qty}` and c
 ## Zero-result rate
 
 **Status:** Live. Returned by `GET /events/summary` as `search.zero_result_rate` and by
-`GET /search/insights` as `zero_result_rate`.
+`GET /search/insights` as `zero_result_rate`, and by `GET /admin/kpi` as
+`search_health.zero_result_rate`.
 
 **Definition:** Share of search events whose result count was zero.
 
@@ -164,8 +176,9 @@ empty result set once with the deterministic ID→EN query rewriter in
 
 ## Search-to-PDP
 
-**Status:** Live (proxy). Returned by `GET /events/summary` as `rates.search_to_pdp` and by
-`GET /search/insights` as `search_to_pdp_rate`.
+**Status:** Live (proxy). Returned by `GET /events/summary` as `rates.search_to_pdp`, by
+`GET /search/insights` as `search_to_pdp_rate`, and by `GET /admin/kpi` as
+`search_health.search_to_pdp_rate`.
 
 **Definition:** Share of search sessions that also viewed a product in the same session.
 
@@ -232,8 +245,10 @@ aggregated in [`api/routers/events.py`](../api/routers/events.py). Phase 9 adds
 
 ## Deflection
 
-**Status:** Planned (phase 12). Outcomes and the honest fallback are logged now (phase 10); the
-conversation-level deflection view is surfaced by `GET /admin/kpi` in phase 12.
+**Status:** Live (phase 12). Outcomes and the honest fallback are logged since phase 10; the
+conversation-level deflection view is exposed by `GET /admin/kpi.copilot_quality` as
+`deflection_rate`, with `deflection_eligible_conversations` and
+`deflection_answered_conversations` alongside it.
 
 **Definition:** Share of copilot conversations resolved inside the copilot with a grounded answer,
 rather than ending in an explicit "I can't answer that" turn.
@@ -251,7 +266,9 @@ deflection = COUNT(deflected) / COUNT(eligible)
 
 **Source:** `copilot_turns` (`thread_id`, `session_id`, `outcome`, `created_at` — phase 9);
 `flag_unanswered` sets `outcome='unanswered'` (live in phase 10); aggregated by `/admin/kpi`
-(phase 12). The committed schema uses the column names above.
+(phase 12). The committed schema uses the column names above. The dashboard takes the **last turn per
+thread inside the window** (`DISTINCT ON (thread_id) … ORDER BY created_at DESC, id DESC`), then
+counts eligible final outcomes.
 
 **Caveats:**
 
@@ -262,15 +279,16 @@ deflection = COUNT(deflected) / COUNT(eligible)
 - **Final-turn heuristic.** A conversation can contain both unanswered and answered turns; only the
   last one decides. Thread rotation creates a new conversation.
 - **Guardrail-blocked-only threads are excluded.** Off-topic/injection blocks are a separate signal.
-- **Conversation-level vs turn-level.** At conversation level, deflection is the complement of the
-  unanswered rate by construction (`deflection = 1 − unanswered` on the same denominator). Do not
-  present the two as independent signals.
+- **Conversation-level vs turn-level.** Deflection is conversation-level (one final turn per
+  thread); the `unanswered_rate` exposed beside it on the dashboard is turn-level over all turns.
+  They do not share a denominator, so do not present them as complements or as independent signals.
 
 ---
 
 ## Unanswered rate
 
-**Status:** Live (phase 10). `GET /events/summary` returns `copilot_quality.unanswered_rate`.
+**Status:** Live (phase 10). `GET /events/summary` and `GET /admin/kpi` return
+`copilot_quality.unanswered_rate` (the dashboard also returns the raw turn counts).
 
 **Definition:** Share of logged copilot turns where the model called `flag_unanswered` because it
 could not answer from tool evidence, and did not complete a cart action.
@@ -287,7 +305,7 @@ concrete server-validated outcome.
 
 **Source:** `copilot_turns.outcome`; the tool's `question` argument is stored in
 `copilot_turns.unanswered_question` (trimmed to 300 characters) for audit and future query analysis;
-`GET /events/summary.copilot_quality`; dashboard in phase 12.
+`GET /events/summary.copilot_quality`; `GET /admin/kpi.copilot_quality`.
 
 **Caveats:**
 
@@ -311,7 +329,7 @@ concrete server-validated outcome.
 ## Thumbs-up rate
 
 **Status:** Live (phase 9). `POST /copilot/feedback` writes a `copilot_feedback` row; the aggregate is
-in `GET /events/summary.copilot_quality`.
+in `GET /events/summary.copilot_quality` and `GET /admin/kpi.copilot_quality`.
 
 **Definition:** Share of explicit copilot feedback votes that are positive.
 
@@ -421,9 +439,10 @@ phase 13; `GET /admin/kpi` (phase 12/13). Orders remain the only revenue-grade s
 
 ## Latency p50 and p95
 
-**Status:** Live (phase 9). `copilot_turns.latency_ms` is written per turn; `GET /events/summary`
-returns `copilot_quality.avg_latency_ms`, `p50_latency_ms` and `p95_latency_ms`. The phase-12
-dashboard reuses the same aggregation.
+**Status:** Live (phase 9; dashboard phase 12). `copilot_turns.latency_ms` is written per turn;
+`GET /events/summary` returns `copilot_quality.avg_latency_ms`, `p50_latency_ms` and
+`p95_latency_ms`; `GET /admin/kpi` returns `latency_p50_ms` and `latency_p95_ms` from the same
+aggregation.
 
 **Definition:** Mean, median and 95th-percentile server-side wall-clock duration of a copilot turn.
 
@@ -438,7 +457,8 @@ WHERE created_at > now() - make_interval(days => :since_days);
 ```
 
 **Source:** `copilot_turns.latency_ms` (phase 9); `GET /events/summary.copilot_quality` (phase 9);
-`GET /admin/kpi` (phase 12); SLO targets and alert thresholds are documented in phase 13.
+`GET /admin/kpi.copilot_quality` (phase 12); SLO targets and alert thresholds are documented in
+phase 13.
 
 **Caveats:**
 
@@ -459,7 +479,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 
 | Metric | Status | Definition / formula | Source | Caveat |
 |---|---|---|---|---|
-| Guardrail short-circuit rate | Live (phase 9) | `turns with outcome='guardrail' / all copilot turns` | `copilot_turns.outcome` → `copilot_quality.guardrail_rate` | Counts every deterministic label, including greetings; it is not only unsafe blocks. False positives need the phase-14 golden set. |
+| Guardrail short-circuit rate | Live (phase 9) | `turns with outcome='guardrail' / all copilot turns` | `copilot_turns.outcome` → `copilot_quality.guardrail_rate`, `/admin/kpi.copilot_quality.guardrail_turns` | Counts every deterministic label, including greetings; it is not only unsafe blocks. False positives need the phase-14 golden set. |
 | Items per order | Computable now, not exposed | `SUM(orders.item_count) / COUNT(orders)` or `SUM(order_items.qty) / COUNT(DISTINCT order_id)` | `orders.item_count`, `order_items.qty` | Same simulation caveats as AOV; no cancellation model. |
 | Offline retrieval quality | Live (offline) | nDCG@10, MRR@10, HR@10, P@10 over a fixed query set | [`search_eval_multilingual.json`](../pipelines/results/search_eval_multilingual.json), [`search_eval.json`](../pipelines/results/search_eval.json) | 32 queries, authored relevance labels; a proxy, not online behaviour. |
 | Offline policy/size-guide RAG | Live (offline) | RAGAS Context Precision / Recall at k=3 | [`rag_eval.json`](../pipelines/results/rag_eval.json) | 12 bilingual queries; measures retrieval, not answer correctness or fit accuracy. Current committed run: recall 1.0000, context precision 0.8750. |
@@ -477,7 +497,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | 10 (shipped) | `outcome='unanswered'` logging through `flag_unanswered` (question stored, 300-char cap); copilot refocused on sizing, policy and outfit jobs. |
 | 10b (shipped) | Category-aware sizing: every seed `(department, category)` pair mapped to an explicit size kind; tops/bottoms/dress use authored men's/women's TB/BB charts, footwear/waist/belt/headwear use cited standards, brand offsets marked `source=demo`; `GET /sizing/{asin}` + `POST /sizing/recommend` and a no-LLM product-page advisor. **No fit-accuracy metric** — coverage is structural, not a quality claim. |
 | 11 (shipped) | `GET /search/insights`: top queries, top zero-result queries, zero-result rate and session-level search-to-PDP; deterministic ID→EN rewrite retry on zero-result `/search` and `search_catalog`. |
-| 12 | `GET /admin/kpi`: funnel, cohorts, deflection, unanswered, search health, cost, p50/p95; `synthetic` badge. |
+| 12 (shipped) | Token-gated `GET /admin/kpi` and `/admin/kpi` page: confirmed-order revenue/AOV, session funnel, copilot vs non-copilot cohorts, conversation-level deflection, turn outcomes, search health, p50/p95 and a mandatory `synthetic` badge. Cost remains phase 13. |
 | 13 | Cost per turn, cost per conversation, cost per resolved conversation and cost per assisted order; SLOs and cache. |
 | 14 | Golden-set evaluation in CI: sizing exact asserts, outfit budget invariant, guardrail labels, policy RAGAS. |
 | 15 | Seeded traffic simulator and case study; every simulated metric must carry a `synthetic` label. |
