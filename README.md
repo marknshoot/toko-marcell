@@ -43,7 +43,7 @@ revenue and copilot-vs-non-copilot cohorts are now computed from server-confirme
 
 | # | Problem | Feature | KPI it moves | Measured impact (committed artifact) |
 |---|---|---|---|---|
-| 1 | Mixed Indonesian/English or casual queries return nothing or the wrong products | Tri-modal bilingual retrieval: BM25 + multilingual MiniLM + CLIP → RRF, optional reranker | **zero-result rate ↓**, **search-to-PDP ↑** | **Offline:** overall nDCG@10 **0.794 → 0.894**, Indonesian nDCG@10 **0.334 → 0.765**, HR@10 **100%** ([multilingual eval](./pipelines/results/search_eval_multilingual.json)) |
+| 1 | Mixed Indonesian/English or casual queries return nothing or the wrong products | Tri-modal bilingual retrieval: BM25 + multilingual MiniLM + CLIP → RRF, optional reranker, plus a deterministic ID→EN zero-result retry | **zero-result rate ↓**, **search-to-PDP ↑** | **Offline:** overall nDCG@10 **0.794 → 0.894**, Indonesian nDCG@10 **0.334 → 0.765**, HR@10 **100%** ([multilingual eval](./pipelines/results/search_eval_multilingual.json)); live search health is in `GET /search/insights` |
 | 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic category-aware `recommend_size` + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.8750** ([RAG eval](./pipelines/results/rag_eval.json)); assisted-add and copilot quality are live (phase 9); sizing has no fit-accuracy benchmark yet |
 | 3 | Repetitive shipping/returns/payment questions consume the owner's time | `lookup_store_policy`: hypothetical-question + chunk + IDF lexical RRF | **deflection ↑**, **unanswered rate ↓** | Same RAGAS artifact for retrieval; unanswered logging is live (phase 10), deflection is planned (phase 12), and there is no human handoff, so it means resolved in-copilot vs an honest “can't answer” |
 | 4 | One-item baskets | Session-aware item-to-item CF + `build_outfit` with `total ≤ budget` enforced in code | **AOV ↑**, **copilot assisted-add rate ↑** | **Offline:** HR@10 **7.96% vs 0.18%** for popularity — **+4,322% relative** ([recommendation eval](./pipelines/results/recs_eval.json)); AOV from server-confirmed orders is live (phase 9) |
@@ -340,7 +340,28 @@ similarities are bounded in [-1, 1]; RRF needs only *ranks*, so the heterogeneou
 combined with no calibration and no per-query tuning. `k=60` is the constant from
 Cormack, Clarke & Buettcher (2009).
 
-### 5. Stage-2 cross-encoder reranking (`ENABLE_RERANKER`)
+### 5. Zero-result recovery + search insights
+
+When `GET /search` produces no ranked rows, it makes **one** deterministic second attempt with
+`rewrite_id_to_en()` from `api/search.py`. The rewriter is a hand-maintained Indonesian→English
+shopping dictionary — multi-word phrases first (`celana jeans → jeans`, `sepatu lari → running
+shoes`, `jaket kulit → leather jacket`, `kaos kaki → socks`, `tahan air → waterproof`) then single
+terms (`sepatu → shoes`, `hitam → black`, `pria → men`, `wanita → women`). Unknown words are preserved;
+English or unchanged queries return `None`. The fallback keeps the same mode, department, category and
+allowed facets. The response is backwards-compatible and adds:
+
+```json
+{ "rewritten": true, "fallback_query": "running shoes men", "original_query": "sepatu lari pria" }
+```
+
+`true`/strings only when the retry actually found products; otherwise `false`/`null`. The copilot's
+`search_catalog` tool runs the same single retry on an empty result. `GET /search/insights?since_days=30`
+turns the logged `search` events into `total_searches`, `zero_result_searches`, `zero_result_rate`,
+`top_zero_result_queries`, `top_queries` (with a `zero_result` flag) and the session-level
+`search_to_pdp_rate`. It reports the data it has: no fabricated by-mode breakdown, because the event
+row does not carry the search mode.
+
+### 6. Stage-2 cross-encoder reranking (`ENABLE_RERANKER`)
 
 Top candidates can be re-scored by `Xenova/ms-marco-MiniLM-L-6-v2` run through **ONNX Runtime**
 (~15–25 ms for ~20 candidates). A cross-encoder sees the query and document *together*, so it
@@ -554,7 +575,7 @@ Seven tools are bound to the agent (`GET /copilot/tools` lists them):
 
 | Tool | Reads from | Answers |
 |---|---|---|
-| `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, real category enum + budget filters | "do you have…", style, outfit, budget |
+| `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, real category enum + budget filters; one ID→EN retry on empty | "do you have…", style, outfit, budget |
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
 | `recommend_size` | `size_kind_map.json` + `size_chart.json` + demo brand cut rules | category-aware sizing (TB/BB, foot length, waist, head); `applicable=false` when the category has no defensible basis |
 | `build_outfit` | catalog search; total summed and verified ≤ budget **in code** | top + bottom + shoes within budget |
@@ -698,8 +719,8 @@ numbers cannot be read as more precise than they are:
 
 1. `search_to_pdp` is a **session-level proxy** (a session that both searched and viewed a product),
    not a click-through rate — the click is not its own event yet.
-2. `results_count` for `search` counts matches among currently loaded products, because filtering is
-   client-side; zero-result rate becomes a true metric only when search moves fully server-side.
+2. `results_count` for `search` is client-supplied, so zero-result rate is only as trustworthy as the
+   event stream. `GET /search/insights` surfaces the raw top queries instead of pretending otherwise.
 3. Rates are `null`, never `0.0`, when a denominator is missing — an empty events table must not
    produce a fake "0% conversion".
 
@@ -905,13 +926,13 @@ manual/
 │   ├── routers/                  #   one module per domain
 │   │   ├── health.py             #     GET /health
 │   │   ├── catalog.py            #     categories, products, product detail + row_to_product
-│   │   ├── search.py             #     text search, image search, reindex
+│   │   ├── search.py             #     text search, insights, image search, reindex
 │   │   ├── recs.py               #     popular, item-to-item, session recommendations
 │   │   ├── reviews.py            #     product reviews
 │   │   ├── events.py             #     funnel events + summary
 │   │   ├── checkout.py           #     confirm checkout, order lookup
 │   │   └── copilot.py            #     AI copilot chat + tool listing
-│   ├── search.py                 #   BM25 + multilingual embeddings + RRF + fastembed CLIP encoders
+│   ├── search.py                 #   BM25 + embeddings + RRF + CLIP; ID→EN rewriter
 │   ├── reranker.py               #   Stage-2 ONNX cross-encoder
 │   ├── copilot_agent.py          #   LangChain v1 create_agent loop + middleware
 │   ├── copilot_tools.py          #   the 7 grounding tools (schema bound to the agent)

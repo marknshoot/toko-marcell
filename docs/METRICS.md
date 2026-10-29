@@ -39,8 +39,8 @@ the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`
 |---|---|---|
 | [Conversion rates](#conversion-rates) | Live | `events` → `GET /events/summary` |
 | [AOV](#aov) | Live (phase 9) | `orders` → `GET /events/summary.revenue` |
-| [Zero-result rate](#zero-result-rate) | Live | `events` (`search`) → `GET /events/summary` |
-| [Search-to-PDP](#search-to-pdp) | Live (proxy) | `events` → `GET /events/summary`; by mode planned (phase 11) |
+| [Zero-result rate](#zero-result-rate) | Live | `events` (`search`) → `GET /events/summary`, `GET /search/insights` |
+| [Search-to-PDP](#search-to-pdp) | Live (proxy) | `events` → `GET /events/summary`, `GET /search/insights` |
 | [Copilot assisted-add rate](#copilot-assisted-add-rate) | Live (proxy) | `events` → `GET /events/summary` |
 | [Deflection](#deflection) | Planned (phase 12) | `copilot_turns` (outcomes + fallback live in phase 10), `/admin/kpi` (phase 12) |
 | [Unanswered rate](#unanswered-rate) | Live (phase 10) | `copilot_turns.outcome` + `unanswered_question` → `GET /events/summary.copilot_quality` |
@@ -126,7 +126,8 @@ server-side from `products.price_idr`; the client sends only `{asin, qty}` and c
 
 ## Zero-result rate
 
-**Status:** Live. Returned by `GET /events/summary` as `search.zero_result_rate`.
+**Status:** Live. Returned by `GET /events/summary` as `search.zero_result_rate` and by
+`GET /search/insights` as `zero_result_rate`.
 
 **Definition:** Share of search events whose result count was zero.
 
@@ -139,8 +140,11 @@ zero_result_rate = COUNT(search events WHERE results_count = 0)
 
 **Source:** `events` (`event_type='search'`, `results_count`), written by the catalog after a search
 response in [`shop/src/components/Catalog.js`](../shop/src/components/Catalog.js); aggregated in
-[`api/routers/events.py`](../api/routers/events.py). Phase 11 adds top zero-result queries and a
-deterministic ID→EN rewrite fallback via `GET /search/insights`.
+[`api/routers/events.py`](../api/routers/events.py) and
+[`api/routers/search.py`](../api/routers/search.py). `GET /search/insights` also returns the top 20
+zero-result queries and the top 20 queries with a `zero_result` flag. `GET /search` now retries an
+empty result set once with the deterministic ID→EN query rewriter in
+[`api/search.py`](../api/search.py).
 
 **Caveats:**
 
@@ -151,15 +155,17 @@ deterministic ID→EN rewrite fallback via `GET /search/insights`.
 - **`results_count` is the API total at event time**, after duplicate-title suppression and any
   department/category facet. Historic rows may predate server-side changes, so compare like with like.
 - **Zero results is not always failure.** It can mean a genuine catalog gap, a typo, an unsupported
-  SKU, or a stopword-only query; pair the rate with the top-query list (phase 11).
+  SKU, or a stopword-only query; pair the rate with `top_zero_result_queries` / `top_queries` from `GET /search/insights`.
 - **Spoofable.** Any client can post a `search` event with an arbitrary `results_count`.
+- **`top_queries` groups exact strings.** No case folding or typo clustering; "Sepatu" and "sepatu"
+  are different rows. The rewrite fallback helps retrieval but does not rewrite the logged event.
 
 ---
 
 ## Search-to-PDP
 
-**Status:** Live (proxy). Returned by `GET /events/summary` as `rates.search_to_pdp`. A by-mode
-breakdown is planned (phase 11, `GET /search/insights`).
+**Status:** Live (proxy). Returned by `GET /events/summary` as `rates.search_to_pdp` and by
+`GET /search/insights` as `search_to_pdp_rate`.
 
 **Definition:** Share of search sessions that also viewed a product in the same session.
 
@@ -171,8 +177,8 @@ search_to_pdp = |sessions(event_type='search') ∩ sessions(event_type='view_pro
 ```
 
 **Source:** `events` (distinct `session_id` intersection), implemented in
-[`api/routers/events.py`](../api/routers/events.py); served by `GET /events/summary`. Planned
-phase-11 variant: search-to-PDP by search mode from `GET /search/insights`.
+[`api/routers/events.py`](../api/routers/events.py) and
+[`api/routers/search.py`](../api/routers/search.py); served by both endpoints.
 
 **Caveats:**
 
@@ -184,7 +190,8 @@ phase-11 variant: search-to-PDP by search mode from `GET /search/insights`.
   roadmap item, not part of the current phase plan.
 - **Event loss and duplicate views.** Fire-and-forget events can be lost; repeated views collapse to
   one session.
-- **The phase-11 by-mode view is still session-level**, not a per-result CTR.
+- **The `/search/insights` view is still session-level**, not a per-result CTR; the event schema
+  does not carry the search mode, so a by-mode breakdown is not claimed.
 - **Null when there are no search sessions.**
 
 ---
@@ -469,7 +476,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | 9 (shipped) | AOV/revenue from `orders`; `copilot_turns` logging (latency, tools, guardrail, outcome, tokens); `copilot_feedback` + thumbs UI; copilot-user vs non-user cohorts (descriptive); `copilot_quality` aggregate (unanswered/guardrail/latency/thumbs). |
 | 10 (shipped) | `outcome='unanswered'` logging through `flag_unanswered` (question stored, 300-char cap); copilot refocused on sizing, policy and outfit jobs. |
 | 10b (shipped) | Category-aware sizing: every seed `(department, category)` pair mapped to an explicit size kind; tops/bottoms/dress use authored men's/women's TB/BB charts, footwear/waist/belt/headwear use cited standards, brand offsets marked `source=demo`; `GET /sizing/{asin}` + `POST /sizing/recommend` and a no-LLM product-page advisor. **No fit-accuracy metric** — coverage is structural, not a quality claim. |
-| 11 | `GET /search/insights`: top zero-result queries and search-to-PDP by mode; ID→EN rewrite fallback. |
+| 11 (shipped) | `GET /search/insights`: top queries, top zero-result queries, zero-result rate and session-level search-to-PDP; deterministic ID→EN rewrite retry on zero-result `/search` and `search_catalog`. |
 | 12 | `GET /admin/kpi`: funnel, cohorts, deflection, unanswered, search health, cost, p50/p95; `synthetic` badge. |
 | 13 | Cost per turn, cost per conversation, cost per resolved conversation and cost per assisted order; SLOs and cache. |
 | 14 | Golden-set evaluation in CI: sizing exact asserts, outfit budget invariant, guardrail labels, policy RAGAS. |

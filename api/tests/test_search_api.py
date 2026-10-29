@@ -199,3 +199,45 @@ def test_search_reindex_wrong_token_rejected():
     """Reindex with an incorrect token is rejected with 403."""
     status, body = api_request("POST", "/search/reindex", headers={"X-Admin-Token": "wrong-token-value"})
     assert status == 403
+
+# ── Search insights ──────────────────────────────────────────────────────────
+
+def test_search_insights_shape():
+    status, body = api_request("GET", "/search/insights?since_days=30")
+    assert status == 200
+    for key in (
+        "total_searches",
+        "zero_result_searches",
+        "zero_result_rate",
+        "top_zero_result_queries",
+        "top_queries",
+        "search_to_pdp_rate",
+    ):
+        assert key in body
+
+    assert isinstance(body["total_searches"], int)
+    assert isinstance(body["zero_result_searches"], int)
+    assert body["zero_result_searches"] <= body["total_searches"]
+    assert body["zero_result_rate"] is None or 0.0 <= body["zero_result_rate"] <= 1.0
+    assert body["search_to_pdp_rate"] is None or 0.0 <= body["search_to_pdp_rate"] <= 1.0
+    assert isinstance(body["top_zero_result_queries"], list)
+    assert len(body["top_zero_result_queries"]) <= 20
+    assert isinstance(body["top_queries"], list)
+    assert len(body["top_queries"]) <= 20
+
+    for row in body["top_zero_result_queries"]:
+        assert set(row) == {"query", "count"}
+        assert isinstance(row["query"], str)
+        assert isinstance(row["count"], int)
+    for row in body["top_queries"]:
+        assert set(row) == {"query", "count", "zero_result"}
+        assert isinstance(row["query"], str)
+        assert isinstance(row["count"], int)
+        assert isinstance(row["zero_result"], bool)
+
+
+def test_search_insights_parameter_validation():
+    status, _ = api_request("GET", "/search/insights?since_days=0")
+    assert status == 422
+    status, _ = api_request("GET", "/search/insights?since_days=366")
+    assert status == 422
