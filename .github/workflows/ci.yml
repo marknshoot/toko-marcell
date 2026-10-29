@@ -75,7 +75,7 @@ jobs:
         run: pip install ruff
 
       - name: Ruff lint check
-        run: ruff check api/ pipelines/ --fix && ruff check api/ pipelines/
+        run: ruff check api/ pipelines/ scripts/ --fix && ruff check api/ pipelines/ scripts/
 
       - name: Restore database from seed
         run: |
@@ -91,7 +91,10 @@ jobs:
 
       - name: Run unit tests (no DB)
         run: |
-          python -m pytest api/tests/test_search_unit.py pipelines/tests/test_pipeline_math.py -v
+          python -m pytest api/tests/test_search_unit.py pipelines/tests/test_pipeline_math.py pipelines/tests/test_simulate_traffic.py -v
+
+      - name: Validate traffic simulator in dry-run mode
+        run: python scripts/simulate_traffic.py --dry-run --sessions 100 --seed 42
 
       - name: Run guardrails, rate limiter & copilot unit tests
         run: |
