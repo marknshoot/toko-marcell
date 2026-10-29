@@ -41,6 +41,70 @@ logger = logging.getLogger(__name__)
 
 TOKEN_RE = re.compile(r"[a-z0-9]+")
 
+# Deterministic Indonesian → English shopping vocabulary. Multi-word phrases are
+# checked before single tokens so "celana jeans" cannot become "pants jeans".
+_ID_EN_MULTI = {
+    ("celana", "jeans"): "jeans",
+    ("celana", "pendek"): "shorts",
+    ("celana", "panjang"): "trousers",
+    ("kaos", "kaki"): "socks",
+    ("sepatu", "lari"): "running shoes",
+    ("jaket", "kulit"): "leather jacket",
+    ("ikat", "pinggang"): "belt",
+    ("pakaian", "dalam"): "underwear",
+    ("merah", "muda"): "pink",
+    ("abu", "abu"): "gray",
+    ("tahan", "air"): "waterproof",
+}
+
+_ID_EN_SINGLE = {
+    # Garments / categories
+    "sepatu": "shoes",
+    "sandal": "sandals",
+    "sendal": "sandals",
+    "baju": "t-shirt",
+    "kaos": "t-shirt",
+    "kaus": "t-shirt",
+    "kemeja": "shirt",
+    "celana": "pants",
+    "jaket": "jacket",
+    "jas": "blazer",
+    "gaun": "dress",
+    "rok": "skirt",
+    "topi": "hat",
+    "kacamata": "sunglasses",
+    "dompet": "wallet",
+    "tas": "bag",
+    "sabuk": "belt",
+    # Colours
+    "hitam": "black",
+    "putih": "white",
+    "merah": "red",
+    "biru": "blue",
+    "hijau": "green",
+    "kuning": "yellow",
+    "abu": "gray",
+    "coklat": "brown",
+    # Attributes / modifiers
+    "pria": "men",
+    "cowok": "men",
+    "wanita": "women",
+    "cewek": "women",
+    "anak": "kids",
+    "lari": "running",
+    "olahraga": "athletic",
+    "kerja": "work",
+    "kantor": "work",
+    "santai": "casual",
+    "kasual": "casual",
+    "hangat": "warm",
+    "katun": "cotton",
+    "kulit": "leather",
+    "denim": "denim",
+}
+
+_ID_EN_PHRASES = sorted(_ID_EN_MULTI.items(), key=lambda item: len(item[0]), reverse=True)
+
 STOPWORDS = frozenset(
     "a an and are as at be by for from has have in is it its of on or that the "
     "this to was were will with you your".split()
@@ -76,6 +140,57 @@ def tokenize(text: str) -> list[str]:
     normalized = unicodedata.normalize("NFKD", text.lower())
     tokens = TOKEN_RE.findall(normalized)
     return [stem(t) for t in tokens if t not in STOPWORDS and len(t) > 1]
+
+
+def rewrite_id_to_en(query: str) -> str | None:
+    """Deterministically translate common Indonesian shopping terms to English.
+
+    Multi-word phrases win over single tokens, and unknown words are preserved in
+    order. Returns ``None`` when no Indonesian term was translated, or when the
+    translated query is identical to the original input. This deliberately has no
+    model dependency: it is the cheap second chance after a zero-result search.
+    """
+    if not query or not query.strip():
+        return None
+
+    normalized = unicodedata.normalize("NFKD", query.lower())
+    normalized = normalized.replace("’", "'").replace("-", " ")
+    words = TOKEN_RE.findall(normalized)
+    if not words:
+        return None
+
+    out: list[str] = []
+    translated = False
+    index = 0
+    while index < len(words):
+        match = None
+        for phrase, target in _ID_EN_PHRASES:
+            size = len(phrase)
+            if tuple(words[index:index + size]) == phrase:
+                match = (size, target)
+                break
+
+        if match:
+            size, target = match
+            out.extend(target.split())
+            translated = True
+            index += size
+            continue
+
+        word = words[index]
+        target = _ID_EN_SINGLE.get(word)
+        if target is None:
+            out.append(word)
+        else:
+            out.extend(target.split())
+            if target != word:
+                translated = True
+        index += 1
+
+    if not translated:
+        return None
+    rewritten = " ".join(out)
+    return rewritten if rewritten != query.strip() else None
 
 
 class BM25Index:

@@ -22,6 +22,7 @@ from search import (
     embed_query,
     get_index,
     reciprocal_rank_fusion,
+    rewrite_id_to_en,
     tokenize,
 )
 
@@ -51,7 +52,7 @@ def _connect(db_url: str | None):
         return psycopg.connect(url)
 
 
-def search_catalog(
+def _search_catalog_once(
     query: str,
     category: str | None = None,
     department: str | None = None,
@@ -59,7 +60,7 @@ def search_catalog(
     limit: int = 4,
     db_url: str | None = None,
 ) -> list[dict[str, Any]]:
-    """Hybrid BM25 + pgvector search, optionally reranked."""
+    """One hybrid BM25 + pgvector search, optionally reranked."""
     clean_tokens = tokenize(query)
     if not clean_tokens:
         return []
@@ -139,6 +140,44 @@ def search_catalog(
     candidates = [by_id[cid] for cid in candidate_ids if cid in by_id]
     reranked = rerank(query=query, candidates=candidates, text_key="title", limit=limit)
     return reranked
+
+
+def search_catalog(
+    query: str,
+    category: str | None = None,
+    department: str | None = None,
+    price_max: int | None = None,
+    limit: int = 4,
+    db_url: str | None = None,
+) -> list[dict[str, Any]]:
+    """Hybrid search with one deterministic Indonesian→English retry on empty.
+
+    The retry keeps the same category, department, price and limit constraints;
+    it only substitutes the query text.
+    """
+    results = _search_catalog_once(
+        query,
+        category=category,
+        department=department,
+        price_max=price_max,
+        limit=limit,
+        db_url=db_url,
+    )
+    if results:
+        return results
+
+    rewritten = rewrite_id_to_en(query)
+    if not rewritten:
+        return results
+
+    return _search_catalog_once(
+        rewritten,
+        category=category,
+        department=department,
+        price_max=price_max,
+        limit=limit,
+        db_url=db_url,
+    )
 
 
 def get_product_details(asin_or_id: str | int, db_url: str | None = None) -> dict[str, Any]:

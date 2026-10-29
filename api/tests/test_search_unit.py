@@ -5,7 +5,7 @@ from pathlib import Path
 API_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API_DIR))
 
-from search import BM25Index, stem, tokenize
+from search import BM25Index, rewrite_id_to_en, stem, tokenize
 
 # ── Tokenizer & Stemmer Edge Cases ──────────────────────────────────────────
 
@@ -73,6 +73,62 @@ def test_tokenize_stopwords_and_single_chars():
     # Mixed sentence
     tokens = tokenize("A warm coat for the winter")
     assert tokens == ["warm", "coat", "winter"]
+
+
+# ── Indonesian → English query rewriter ─────────────────────────────────────
+
+def test_rewrite_single_words():
+    assert rewrite_id_to_en("sepatu") == "shoes"
+    assert rewrite_id_to_en("sandal") == "sandals"
+    assert rewrite_id_to_en("sendal") == "sandals"
+    assert rewrite_id_to_en("baju") == "t-shirt"
+    assert rewrite_id_to_en("kaos") == "t-shirt"
+    assert rewrite_id_to_en("kaus") == "t-shirt"
+    assert rewrite_id_to_en("kemeja") == "shirt"
+    assert rewrite_id_to_en("celana") == "pants"
+    assert rewrite_id_to_en("jas") == "blazer"
+    assert rewrite_id_to_en("gaun") == "dress"
+    assert rewrite_id_to_en("rok") == "skirt"
+    assert rewrite_id_to_en("topi") == "hat"
+    assert rewrite_id_to_en("kacamata") == "sunglasses"
+    assert rewrite_id_to_en("dompet") == "wallet"
+    assert rewrite_id_to_en("tas") == "bag"
+    assert rewrite_id_to_en("sabuk") == "belt"
+    assert rewrite_id_to_en("hitam") == "black"
+    assert rewrite_id_to_en("wanita") == "women"
+
+
+def test_rewrite_multi_word_phrases_win_over_single_words():
+    assert rewrite_id_to_en("celana jeans") == "jeans"
+    assert rewrite_id_to_en("celana pendek") == "shorts"
+    assert rewrite_id_to_en("celana panjang") == "trousers"
+    assert rewrite_id_to_en("kaos kaki") == "socks"
+    assert rewrite_id_to_en("ikat pinggang") == "belt"
+    assert rewrite_id_to_en("pakaian dalam") == "underwear"
+    assert rewrite_id_to_en("sepatu lari") == "running shoes"
+    assert rewrite_id_to_en("jaket kulit") == "leather jacket"
+    assert rewrite_id_to_en("merah muda") == "pink"
+    assert rewrite_id_to_en("abu-abu") == "gray"
+    assert rewrite_id_to_en("tahan air") == "waterproof"
+
+
+def test_rewrite_mixed_terms_preserves_unknown_words_and_order():
+    assert rewrite_id_to_en("jaket kulit hitam pria") == "leather jacket black men"
+    assert rewrite_id_to_en("sepatu lari wanita") == "running shoes women"
+    assert rewrite_id_to_en("kaos katun anak") == "t-shirt cotton kids"
+
+
+def test_rewrite_is_case_insensitive():
+    assert rewrite_id_to_en("SEPATU LARI PRIA") == "running shoes men"
+    assert rewrite_id_to_en("Baju Hitam") == "t-shirt black"
+
+
+def test_rewrite_returns_none_for_english_or_unchanged_queries():
+    assert rewrite_id_to_en("running shoes") is None
+    assert rewrite_id_to_en("black leather jacket") is None
+    assert rewrite_id_to_en("denim") is None
+    assert rewrite_id_to_en("") is None
+    assert rewrite_id_to_en("   ") is None
 
 
 # ── BM25Index Unit Tests ─────────────────────────────────────────────────────
@@ -180,3 +236,37 @@ def test_embed_query_clip_text_uses_fastembed_model(monkeypatch):
     assert vec is not None
     assert len(vec) == 512
     assert vec[0] == 1.0
+
+
+# ── Copilot search_catalog retry wiring ─────────────────────────────────────
+
+def test_search_catalog_retries_once_with_rewritten_query(monkeypatch):
+    import agent_tools
+
+    calls = []
+
+    def fake_once(query, **kwargs):
+        calls.append(query)
+        if len(calls) == 1:
+            return []
+        return [{"asin": "B000TEST"}]
+
+    monkeypatch.setattr(agent_tools, "_search_catalog_once", fake_once)
+    monkeypatch.setattr(agent_tools, "rewrite_id_to_en", lambda query: "running shoes")
+    assert agent_tools.search_catalog("sepatu lari", limit=3) == [{"asin": "B000TEST"}]
+    assert calls == ["sepatu lari", "running shoes"]
+
+
+def test_search_catalog_does_not_retry_when_first_query_has_results(monkeypatch):
+    import agent_tools
+
+    calls = []
+
+    def fake_once(query, **kwargs):
+        calls.append(query)
+        return [{"asin": "B000TEST"}]
+
+    monkeypatch.setattr(agent_tools, "_search_catalog_once", fake_once)
+    monkeypatch.setattr(agent_tools, "rewrite_id_to_en", lambda query: "running shoes")
+    assert agent_tools.search_catalog("sepatu", limit=3) == [{"asin": "B000TEST"}]
+    assert calls == ["sepatu"]

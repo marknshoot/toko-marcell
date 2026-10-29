@@ -91,7 +91,8 @@ from booting, and catalog browsing never pays for a search model it does not use
 | `GET` | `/products` | Paginated catalog (`limit≤24`, `offset`, `department=`, `category=`) |
 | `GET` | `/products/{id}` | Single product · `404` missing · `422` invalid id |
 | `GET` | `/products/{id}/reviews` | Reviews + rating breakdown for a numeric product id |
-| `GET` | `/search` | Hybrid/BM25/vector/trimodal search: `q`, `mode`, `department`, `category`, `limit`, `offset` |
+| `GET` | `/search` | Hybrid/BM25/vector/trimodal search: `q`, `mode`, `department`, `category`, `limit`, `offset`; one ID→EN retry on zero results |
+| `GET` | `/search/insights` | Search health from `events`: top queries, top zero-result queries, zero-result rate, session-level search-to-PDP |
 | `GET` | `/sizing/{asin}` | Category-aware size-kind + required inputs for one product; no LLM · `404` unknown ASIN |
 | `POST` | `/sizing/recommend` | Deterministic size advice from body measurements; `extra="forbid"`, bounds, write rate limit |
 | `POST` | `/search/image` | Visual similarity search from an uploaded image (multipart `file`) |
@@ -119,7 +120,9 @@ from booting, and catalog browsing never pays for a search model it does not use
 ```
 
 `/search` adds `{ "query", "mode", "deduped": true, "took_ms", "score" }` per item so the UI and the
-eval harness can tell *which ranker* produced a result set without guessing from a deployment.
+eval harness can tell *which ranker* produced a result set without guessing from a deployment. It
+also returns `{ rewritten, fallback_query, original_query }`; the three are `false`/`null`/`null`
+unless a zero-result retry actually recovered products.
 
 A product is the shape the storefront renders (camelCase, numbers as numbers):
 
@@ -153,7 +156,7 @@ api/
 ├── routers/
 │   ├── health.py             # GET /health
 │   ├── catalog.py            # GET /categories, /products, /products/{id}
-│   ├── search.py             # GET /search, POST /search/image, POST /search/reindex
+│   ├── search.py             # GET /search, /search/insights; POST /search/image, /search/reindex
 │   ├── recs.py               # GET /recs/popular, /recs/item/{asin}, /recs/session
 │   ├── reviews.py            # GET /products/{id}/reviews
 │   ├── events.py             # POST /events, GET /events/summary (funnel, revenue, cohorts, quality)
@@ -215,6 +218,35 @@ $$
 
 RRF is chosen over score normalization because BM25 scores are unbounded positives while cosine is
 bounded; RRF needs only ranks, so heterogeneous rankers combine with no calibration.
+
+### Zero-result recovery + `/search/insights`
+
+`/search` runs the requested ranker once. If the deduped ranking is empty, it calls
+`rewrite_id_to_en()` (`search.py`), which translates a hand-maintained Indonesian→English shopping
+dictionary with multi-word phrases checked first (`celana jeans → jeans`, `sepatu lari → running
+shoes`, `jaket kulit → leather jacket`), then single terms (`sepatu → shoes`, `hitam → black`,
+`pria → men`). If a translation exists, the endpoint runs the same query pipeline once more with the
+same mode, department, category, facet ids, limit/offset and rerank setting. Only a successful retry
+sets `rewritten=true` and returns `fallback_query`/`original_query`; otherwise all three are
+`false`/`null`/`null`. The copilot's `search_catalog` applies the same single retry.
+
+`GET /search/insights?since_days=30` aggregates the client-posted `search` events:
+
+```json
+{
+  "since_days": 30,
+  "total_searches": 120,
+  "zero_result_searches": 18,
+  "zero_result_rate": 0.15,
+  "top_zero_result_queries": [{"query": "sepatu lari", "count": 4}],
+  "top_queries": [{"query": "sepatu lari", "count": 4, "zero_result": true}],
+  "search_to_pdp_rate": 0.42
+}
+```
+
+`search_to_pdp_rate` is the same session-level proxy as `/events/summary`: a session that both
+searched and viewed a product. The event schema does not carry the search mode, so no by-mode
+breakdown is claimed.
 
 ### Image search (`POST /search/image`)
 
@@ -335,7 +367,7 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
 
 | Tool | Backed by | Purpose |
 |---|---|---|
-| `search_catalog` | BM25 + multilingual MiniLM (`embedding_ml`, pgvector) fused with RRF, optional reranker, department/category/budget filters | bilingual product discovery |
+| `search_catalog` | BM25 + multilingual MiniLM (`embedding_ml`, pgvector) fused with RRF, optional reranker, department/category/budget filters; one ID→EN retry on empty | bilingual product discovery |
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
 | `recommend_size` | `sizing.py` (`size_kind` dispatch: TB/BB, foot length, waist, or head circumference) + demo brand cut rules | advisory sizing; unsupported categories return `applicable=false` instead of a guessed S/M/L |
 | `build_outfit` | catalog search for top + bottom + shoes | the total is **summed and verified ≤ budget in code**, not by the LLM |
