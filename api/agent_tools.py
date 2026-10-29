@@ -11,6 +11,9 @@ when called from within the server process, ``db.get_conn()`` uses the pool.
 import logging
 import os
 import re
+import threading
+import time
+from collections import OrderedDict
 from typing import Any
 
 import psycopg
@@ -27,6 +30,50 @@ from search import (
 )
 
 logger = logging.getLogger(__name__)
+
+# Policy RAG is deterministic for a fixed knowledge seed, so identical queries
+# can skip both embedding and pgvector. Entries are bounded and expire; seeding
+# new knowledge calls clear_policy_cache().
+POLICY_CACHE_TTL_SECONDS = 600
+POLICY_CACHE_MAX_ITEMS = 256
+_policy_cache: OrderedDict[
+    tuple[str, int], tuple[float, list[dict[str, Any]]]
+] = OrderedDict()
+_policy_cache_lock = threading.Lock()
+
+
+def _normalize_policy_query(query: str) -> str:
+    """Case/whitespace normalization for cache keys, not for retrieval."""
+    return " ".join((query or "").casefold().split())
+
+
+def clear_policy_cache() -> None:
+    """Drop all cached policy chunks (tests and knowledge re-seeding)."""
+    with _policy_cache_lock:
+        _policy_cache.clear()
+
+
+def _policy_cache_get(key: tuple[str, int]) -> list[dict[str, Any]] | None:
+    now = time.monotonic()
+    with _policy_cache_lock:
+        entry = _policy_cache.get(key)
+        if entry is None:
+            return None
+        expires_at, results = entry
+        if expires_at <= now:
+            _policy_cache.pop(key, None)
+            return None
+        _policy_cache.move_to_end(key)
+        return [dict(item) for item in results]
+
+
+def _policy_cache_set(key: tuple[str, int], results: list[dict[str, Any]]) -> None:
+    expires_at = time.monotonic() + POLICY_CACHE_TTL_SECONDS
+    with _policy_cache_lock:
+        _policy_cache[key] = (expires_at, [dict(item) for item in results])
+        _policy_cache.move_to_end(key)
+        while len(_policy_cache) > POLICY_CACHE_MAX_ITEMS:
+            _policy_cache.popitem(last=False)
 
 
 def _default_db_url() -> str:
@@ -241,11 +288,25 @@ def score_policy_chunks_lexical(
 
 
 def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -> list[dict[str, Any]]:
-    """Retrieve store operations, QRIS demo rules, shipping, returns, and master size charts.
+    """Retrieve store ops, QRIS, shipping, returns, and size charts.
 
-    Uses Bilingual Hybrid RAG: fuses hypothetical-question vector similarity,
-    direct chunk vector similarity, and lexical keyword matching via RRF.
+    Identical normalized query+limit pairs are served from a bounded 10-minute
+    in-memory TTL cache, avoiding a second embedding and pgvector round trip.
     """
+    cache_key = (_normalize_policy_query(query), int(limit))
+    cached = _policy_cache_get(cache_key)
+    if cached is not None:
+        return cached
+
+    results = _lookup_store_policy_uncached(query, limit=limit, db_url=db_url)
+    _policy_cache_set(cache_key, results)
+    return results
+
+
+def _lookup_store_policy_uncached(
+    query: str, limit: int = 3, db_url: str | None = None
+) -> list[dict[str, Any]]:
+    """Bilingual hybrid RAG: hypothetical + direct chunk + lexical RRF."""
     q_vec = embed_query(query)
     if q_vec is None:
         return []

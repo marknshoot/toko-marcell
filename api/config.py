@@ -39,6 +39,13 @@ class Settings(BaseSettings):
     ADMIN_TOKEN: str = ""
     TRUST_PROXY: bool = False
 
+    # ── Guardrail ───────────────────────────────────────────────────────────
+    GUARDRAIL_LLM_MODE: str = "always"
+
+    # ── Unit economics (USD per 1M tokens) ──────────────────────────────────
+    LLM_INPUT_COST_PER_MILLION: float = 0.15
+    LLM_OUTPUT_COST_PER_MILLION: float = 0.60
+
     # ── LLM — OpenRouter (preferred) ────────────────────────────────────────
     OPENROUTER_API_KEY: str = ""
     LLM_MODEL: str = "openrouter/free"

@@ -2,6 +2,7 @@
 
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 from langchain_core.messages import AIMessage, HumanMessage
 
@@ -67,6 +68,44 @@ class TestTokenExtraction:
             )
         ]
         assert copilot_metrics.extract_token_usage(messages) == (4, 0)
+
+
+class TestCostEstimate:
+    def _set_prices(self, monkeypatch, input_price=0.15, output_price=0.60):
+        monkeypatch.setattr(
+            copilot_metrics,
+            "get_settings",
+            lambda: SimpleNamespace(
+                LLM_INPUT_COST_PER_MILLION=input_price,
+                LLM_OUTPUT_COST_PER_MILLION=output_price,
+            ),
+        )
+
+    def test_one_million_input_tokens(self, monkeypatch):
+        self._set_prices(monkeypatch)
+        assert copilot_metrics.estimate_cost_usd(1_000_000, 0) == 0.15
+
+    def test_one_million_output_tokens(self, monkeypatch):
+        self._set_prices(monkeypatch)
+        assert copilot_metrics.estimate_cost_usd(0, 1_000_000) == 0.60
+
+    def test_mixed_token_counts(self, monkeypatch):
+        self._set_prices(monkeypatch)
+        assert copilot_metrics.estimate_cost_usd(1_000, 500) == 0.00045
+
+    def test_one_missing_side_is_treated_as_zero(self, monkeypatch):
+        self._set_prices(monkeypatch)
+        assert copilot_metrics.estimate_cost_usd(1_000, None) == 0.00015
+        assert copilot_metrics.estimate_cost_usd(None, 1_000) == 0.0006
+        assert copilot_metrics.estimate_cost_usd(0, None) == 0.0
+
+    def test_both_missing_is_unknown_not_free(self, monkeypatch):
+        self._set_prices(monkeypatch)
+        assert copilot_metrics.estimate_cost_usd(None, None) is None
+
+    def test_configured_prices_are_used(self, monkeypatch):
+        self._set_prices(monkeypatch, input_price=1.0, output_price=2.0)
+        assert copilot_metrics.estimate_cost_usd(1_000_000, 1_000_000) == 3.0
 
 
 class TestRecordTurnNeverRaises:
@@ -188,3 +227,54 @@ class TestRecordTurnUnanswered:
         )
 
         assert captured["params"][-1] is None
+
+
+class TestRecordTurnCost:
+    def test_cost_is_derived_when_tokens_are_reported(self, monkeypatch):
+        import contextlib
+
+        captured = {}
+
+        class _FakeCursor:
+            def execute(self, sql, params):
+                captured["params"] = params
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        class _FakeConn:
+            def cursor(self):
+                return _FakeCursor()
+
+            def commit(self):
+                pass
+
+        @contextlib.contextmanager
+        def _fake_connect(_db_url):
+            yield _FakeConn()
+
+        monkeypatch.setattr(copilot_metrics, "_connect", _fake_connect)
+        monkeypatch.setattr(
+            copilot_metrics,
+            "get_settings",
+            lambda: SimpleNamespace(
+                LLM_INPUT_COST_PER_MILLION=0.15,
+                LLM_OUTPUT_COST_PER_MILLION=0.60,
+            ),
+        )
+
+        copilot_metrics.record_turn(
+            thread_id="t1",
+            session_id="s1",
+            db_url="postgresql://unreachable",
+            outcome="answered",
+            input_tokens=1_000_000,
+            output_tokens=0,
+            model="test-model",
+        )
+
+        # INSERT column order ends with model, cost_usd, unanswered_question.
+        assert captured["params"][9] == 0.15

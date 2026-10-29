@@ -49,9 +49,10 @@ the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`
 | [Deflection](#deflection) | Live (phase 12) | `copilot_turns` final turn → `GET /admin/kpi.copilot_quality` |
 | [Unanswered rate](#unanswered-rate) | Live (phase 10) | `copilot_turns.outcome` + `unanswered_question` → `GET /events/summary`, `GET /admin/kpi` |
 | [Thumbs-up rate](#thumbs-up-rate) | Live (phase 9) | `copilot_feedback` → `GET /events/summary`, `GET /admin/kpi` |
-| [Cost per conversation](#cost-per-conversation) | Planned (phase 13) | `copilot_turns` tokens × configured prices |
-| [Cost per assisted order](#cost-per-assisted-order) | Planned (phase 13) | `copilot_turns` + `orders` |
+| [Cost per conversation](#cost-per-conversation) | Live (phase 13) | `copilot_turns.cost_usd` → `unit_economics` |
+| [Cost per assisted order](#cost-per-assisted-order) | Live (phase 13) | `copilot_turns` + `orders` → `unit_economics` |
 | [Latency p50 and p95](#latency-p50-and-p95) | Live (phase 9; dashboard phase 12) | `copilot_turns.latency_ms` → `GET /events/summary`, `GET /admin/kpi` |
+| [SLOs](#service-level-objectives) | Live (policy, phase 13) | [`SLOS.md`](./SLOS.md); search/image/sizing/TTFT timing not yet persisted |
 
 ---
 
@@ -363,77 +364,109 @@ thumbs_up_rate = COUNT(rating=1) / COUNT(rating IN (-1, 1))
 
 ## Cost per conversation
 
-**Status:** Planned (phase 13). Token counts are logged per turn in phase 9; configurable
-price-per-1k-token and the cost calculation land in phase 13.
+**Status:** Live (phase 13). `GET /events/summary` and `GET /admin/kpi` return a
+`unit_economics` block. `copilot_turns.cost_usd` is populated by
+`copilot_metrics.estimate_cost_usd()` whenever the provider reports token usage.
 
-**Definition:** Estimated mean LLM spend for one copilot conversation in the window, in USD.
+**Definition:** Estimated mean LLM model spend for one copilot conversation (`thread_id`) in the
+window, in USD. This is model spend only, not infrastructure or business cost.
 
-**Formula:**
+**Price model:** USD per one million tokens, configured in `api/config.py`:
 
+```text
+LLM_INPUT_COST_PER_MILLION  = $0.15
+LLM_OUTPUT_COST_PER_MILLION = $0.60
 ```
-turn_cost = input_tokens / 1000 * price_per_1k_input
-          + output_tokens / 1000 * price_per_1k_output
 
-cost_per_conversation = SUM(turn_cost) / COUNT(DISTINCT thread_id)
+```text
+turn_cost = input_tokens  × input_price  / 1,000,000
+          + output_tokens × output_price / 1,000,000
+
+total_cost_usd                 = SUM(copilot_turns.cost_usd)
+avg_cost_per_turn_usd          = total_cost_usd / COUNT(*) copilot turns
+cost_per_conversation_usd      = total_cost_usd / COUNT(DISTINCT thread_id)
+cost_per_resolved_conversation = total_cost_usd
+                               / COUNT(DISTINCT thread_id
+                                       WHERE outcome IN ('answered', 'cart'))
 ```
 
-**Source:** `copilot_turns` (`thread_id`, `input_tokens`, `output_tokens`, `model`, `created_at` —
-phase 9); configured input/output prices (phase 13); `GET /admin/kpi` (phase 12/13). `tokens_in` /
-`tokens_out` were the old draft names; the committed columns are `input_tokens` / `output_tokens`.
-`cost_usd` is reserved and stays `NULL` until phase 13 writes the price table.
+All divisions return `null` when the denominator is zero or total cost is unknown. An unpriced turn
+is `NULL`, not `$0`; a zero-token guardrail turn is still part of the per-turn denominator.
+
+**Source:** `copilot_turns` (`thread_id`, `input_tokens`, `output_tokens`, `model`, `cost_usd`,
+`created_at`); `api/config.py` prices; `api/copilot_metrics.py` (`estimate_cost_usd`, `record_turn`);
+`api/routers/events.py` and `api/routers/admin.py` (`unit_economics`). `cost_usd` was reserved in
+phase 9 and is written from phase 13 onward.
 
 **Caveats:**
 
-- **Estimate, not invoice.** Prices are configured per 1k tokens; provider billing, discounts,
-  rounding and currency conversion can differ. A free-tier model can make the estimate $0 while
-  quota and capacity limits still bind.
-- **Include every LLM call attributable to the turn** (guardrail, agent, retries) when tokens are
-  logged; excluding them understates cost.
+- **Estimate, not invoice.** Provider billing, discounts, free tiers, retries, currency conversion
+  and rounding can differ. A free-tier model can make the estimate `$0` while quota still binds.
+- **Token coverage.** If a provider omits usage metadata, the turn has no cost and the aggregate
+  understates spend. Report the share of turns with reported usage; do not silently call missing
+  usage zero.
+- **Per-turn denominator includes zero-token guardrail/error turns**, which pulls the mean down but
+  is a true share of all logged turns. Recompute by route if comparing model configurations.
 - **Conversation boundary is `thread_id`.** A client-generated thread reset creates a new
   conversation and hides the prior spend.
-- **No infrastructure, embedding, vector-search, hosting or human cost.** This is model spend only.
-- **Outliers and small n.** Report the count and median; a single long conversation can dominate the
-  mean.
-- **Price changes over time.** Recompute historical estimates with the price table in force at the
-  time, and record the version used.
+- **Model spend only.** Excludes embeddings, vector search, hosting, payment fees, marketing and
+  human time.
+- **Guardrail tokens are not included.** The pre-agent classifier's LLM call happens outside the
+  agent result whose token usage is recorded, so switching `GUARDRAIL_LLM_MODE` can change true
+  spend without moving this metric. Treat the estimate as a lower bound when the guardrail is active.
+- **Outliers and small n.** A single long conversation can dominate the mean; report count and median
+  beside it.
+- **Price changes over time.** Historical estimates must record the configured price version; this
+  repository exposes one current deployment price, not a price table by date.
 
 ---
 
 ## Cost per assisted order
 
-**Status:** Planned (phase 13). This is the north-star **guardrail** metric, not a revenue metric.
+**Status:** Live (phase 13). This is the north-star **guardrail** metric, not a revenue metric.
 
-**Definition:** Estimated copilot model spend attributable to sessions that produced a
-server-confirmed order, divided by the number of those assisted orders.
+**Definition:** Estimated copilot model spend allocated across server-confirmed orders whose session
+had at least one copilot turn in the window.
 
 **Formula:**
 
-```
-assisted_orders = orders whose session_id has >= 1 copilot_turn
-copilot_cost    = SUM(turn_cost for turns in those sessions)
-cost_per_assisted_order = copilot_cost / COUNT(assisted_orders)
+```text
+assisted_orders = paid orders o
+                  WHERE o.session_id IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1 FROM copilot_turns ct
+                        WHERE ct.session_id = o.session_id
+                          AND ct.created_at > now() - :window
+                    )
+
+cost_per_assisted_order_usd = total_cost_usd / COUNT(assisted_orders)
 ```
 
-If a session contains multiple orders, either split the session cost across them or state that the
-full cost is allocated to each; do not silently double count.
+`total_cost_usd` is all copilot model spend in the window, `SUM(cost_usd)`, not only spend in
+converting sessions. If a session has multiple orders, the full session cost is effectively allocated
+across all of them; do not present this as a per-order causal cost.
 
-**Source:** `copilot_turns.session_id` (phase 9) joined to `orders.session_id`; per-turn cost from
-phase 13; `GET /admin/kpi` (phase 12/13). Orders remain the only revenue-grade source.
+**Source:** `copilot_turns.cost_usd` and `copilot_turns.session_id` joined to `orders.session_id`;
+`GET /events/summary.unit_economics`; `GET /admin/kpi.unit_economics`; SLO budgets in
+[`SLOS.md`](./SLOS.md#43-cost-budgets).
 
 **Caveats:**
 
 - **Correlational attribution.** The order may have happened without the copilot. There is no
   holdout, so this is cost *associated with* assisted orders, not incremental cost or ROI.
 - **Includes abandoned conversations** in converting sessions; excludes copilot conversations that
-  influenced a purchase in a later session or on another device.
+  influenced a purchase in a later session or another device.
 - **Simulated orders.** No real margin, refunds or fulfilment; do not present this as a real
   acquisition cost.
 - **Model spend only.** Excludes infrastructure, embeddings, search, hosting, payment fees and
   marketing.
-- **Extremely unstable at small order counts.** Report numerator (spend), denominator (orders) and a
-  confidence interval; never a bare ratio.
+- **Missing token usage understates spend**, and therefore understates this cost ratio.
+- **Extremely unstable at small order counts.** Report numerator (spend), denominator (assisted
+  orders) and a confidence interval; never a bare ratio.
 - **Report beside conversion and AOV, never alone.** A low cost per assisted order can simply mean
   few assisted orders; a high one can be a few expensive conversations.
+- **Budget, not result.** The `< $0.02` target in [`SLOS.md`](./SLOS.md) is a budget; it is not a
+  measured historical claim.
 
 ---
 
@@ -457,8 +490,8 @@ WHERE created_at > now() - make_interval(days => :since_days);
 ```
 
 **Source:** `copilot_turns.latency_ms` (phase 9); `GET /events/summary.copilot_quality` (phase 9);
-`GET /admin/kpi.copilot_quality` (phase 12); SLO targets and alert thresholds are documented in
-phase 13.
+`GET /admin/kpi.copilot_quality` (phase 12); SLO targets and alert thresholds are in
+[`SLOS.md`](./SLOS.md).
 
 **Caveats:**
 
@@ -473,13 +506,36 @@ phase 13.
 
 ---
 
+## Service-level objectives
+
+**Status:** Live (policy, phase 13). Targets and alert thresholds are committed in
+[`SLOS.md`](./SLOS.md). **Attainment is not yet computed**: `/events/summary` and `/admin/kpi`
+measure copilot total-turn latency, but text/image search, sizing latency and copilot TTFT are not
+persisted as timing metrics. Do not quote a target as a measured result.
+
+| SLO | Target | Measurement status |
+|---|---|---|
+| Text `/search` latency | p50 < 35 ms · p95 < 80 ms | Target only; no timing table yet |
+| `/search/image` latency | p50 < 120 ms · p95 < 250 ms | Target only; no timing table yet |
+| `/sizing/recommend` latency | p50 < 5 ms · p95 < 15 ms | Target only; no timing table yet |
+| Copilot TTFT | p50 < 1.2 s · p95 < 3.0 s | Target only; total-turn p50/p95 is live, TTFT is not |
+| Core REST availability | 99.5% (30-day) | No hosted SLO calculation committed |
+| AI copilot availability | 99.0% (30-day) | No hosted SLO calculation committed |
+| Cost per conversation | < $0.005 | Live estimate via `unit_economics`; budget not an invoice |
+| Cost per assisted order | < $0.02 | Live estimate via `unit_economics`; budget not an invoice |
+
+Error budgets, provider-rollover criteria, alert thresholds and the `GUARDRAIL_LLM_MODE` /
+policy-cache trade-offs are detailed in [`SLOS.md`](./SLOS.md).
+
+---
+
 ## Supporting telemetry
 
 These are useful for trust and diagnosis, but they are not north-star or revenue metrics.
 
 | Metric | Status | Definition / formula | Source | Caveat |
 |---|---|---|---|---|
-| Guardrail short-circuit rate | Live (phase 9) | `turns with outcome='guardrail' / all copilot turns` | `copilot_turns.outcome` → `copilot_quality.guardrail_rate`, `/admin/kpi.copilot_quality.guardrail_turns` | Counts every deterministic label, including greetings; it is not only unsafe blocks. False positives need the phase-14 golden set. |
+| Guardrail short-circuit rate | Live (phase 9) | `turns with outcome='guardrail' / all copilot turns` | `copilot_turns.outcome` → `copilot_quality.guardrail_rate`, `/admin/kpi.copilot_quality.guardrail_turns` | Counts every guardrail label (regex or LLM), including greetings; it is not only unsafe blocks. False positives need the phase-14 golden set. |
 | Items per order | Computable now, not exposed | `SUM(orders.item_count) / COUNT(orders)` or `SUM(order_items.qty) / COUNT(DISTINCT order_id)` | `orders.item_count`, `order_items.qty` | Same simulation caveats as AOV; no cancellation model. |
 | Offline retrieval quality | Live (offline) | nDCG@10, MRR@10, HR@10, P@10 over a fixed query set | [`search_eval_multilingual.json`](../pipelines/results/search_eval_multilingual.json), [`search_eval.json`](../pipelines/results/search_eval.json) | 32 queries, authored relevance labels; a proxy, not online behaviour. |
 | Offline policy/size-guide RAG | Live (offline) | RAGAS Context Precision / Recall at k=3 | [`rag_eval.json`](../pipelines/results/rag_eval.json) | 12 bilingual queries; measures retrieval, not answer correctness or fit accuracy. Current committed run: recall 1.0000, context precision 0.8750. |
@@ -497,8 +553,8 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | 10 (shipped) | `outcome='unanswered'` logging through `flag_unanswered` (question stored, 300-char cap); copilot refocused on sizing, policy and outfit jobs. |
 | 10b (shipped) | Category-aware sizing: every seed `(department, category)` pair mapped to an explicit size kind; tops/bottoms/dress use authored men's/women's TB/BB charts, footwear/waist/belt/headwear use cited standards, brand offsets marked `source=demo`; `GET /sizing/{asin}` + `POST /sizing/recommend` and a no-LLM product-page advisor. **No fit-accuracy metric** — coverage is structural, not a quality claim. |
 | 11 (shipped) | `GET /search/insights`: top queries, top zero-result queries, zero-result rate and session-level search-to-PDP; deterministic ID→EN rewrite retry on zero-result `/search` and `search_catalog`. |
-| 12 (shipped) | Token-gated `GET /admin/kpi` and `/admin/kpi` page: confirmed-order revenue/AOV, session funnel, copilot vs non-copilot cohorts, conversation-level deflection, turn outcomes, search health, p50/p95 and a mandatory `synthetic` badge. Cost remains phase 13. |
-| 13 | Cost per turn, cost per conversation, cost per resolved conversation and cost per assisted order; SLOs and cache. |
+| 12 (shipped) | Token-gated `GET /admin/kpi` and `/admin/kpi` page: confirmed-order revenue/AOV, session funnel, copilot vs non-copilot cohorts, conversation-level deflection, turn outcomes, search health, p50/p95 and a mandatory `synthetic` badge. Cost is added in phase 13. |
+| 13 (shipped) | Per-turn cost from configurable per-million prices; `unit_economics` cost per turn / conversation / resolved conversation / assisted order; `GUARDRAIL_LLM_MODE=ambiguous`; 10-minute bounded policy-RAG cache; [`SLOS.md`](./SLOS.md) latency, availability, cost and fallback targets. Attainment is not yet instrumented for search/image/sizing/TTFT. |
 | 14 | Golden-set evaluation in CI: sizing exact asserts, outfit budget invariant, guardrail labels, policy RAGAS. |
 | 15 | Seeded traffic simulator and case study; every simulated metric must carry a `synthetic` label. |
 
@@ -510,7 +566,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 - **AOV from `events.price_idr`.** The client supplies it.
 - **Profit, contribution margin or support-cost savings.** No COGS, margin or support baseline exists.
 - **Lift or causality from cohort comparison.** There is no holdout; state the selection bias.
-- **A cost figure before phase 13.** Tokens and prices are not wired yet.
+- **A provider invoice or ROI from the cost estimate.** Prices are configurable planning inputs, not billing records.
 - **A single blended north-star score.** Conversion and AOV are reported separately.
 - **"Deflection" as human-agent deflection.** There is no human handoff.
 - **Any number from the simulator as real traffic.** Label it `synthetic`, always.

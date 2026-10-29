@@ -27,7 +27,7 @@ from typing import Any
 from agent_tools import _connect
 from config import get_settings
 from copilot_llm import build_chat_model, llm_available
-from copilot_metrics import derive_outcome, extract_token_usage, record_turn
+from copilot_metrics import derive_outcome, estimate_cost_usd, extract_token_usage, record_turn
 from copilot_tools import ToolContext, _slim, build_tools
 from guardrail import classify, trim_guardrail_history
 from langchain.agents import create_agent
@@ -497,6 +497,7 @@ async def run_turn(
     products = ctx.turn_products(limit=6)
     tool_names = _tool_names(tool_calls)
     input_tokens, output_tokens = extract_token_usage(result.get("messages", []))
+    turn_model = _turn_model(fake)
 
     took_ms = round((time.perf_counter() - started) * 1000, 2)
     outcome = derive_outcome(None, tool_names, False)
@@ -509,7 +510,8 @@ async def run_turn(
         latency_ms=took_ms,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        model=_turn_model(fake),
+        model=turn_model,
+        cost_usd=estimate_cost_usd(input_tokens, output_tokens, turn_model),
         unanswered_question=ctx.unanswered_question if outcome == "unanswered" else None,
     )
     return {
@@ -702,6 +704,7 @@ async def stream_turn(
     products = ctx.turn_products(limit=6)
     tool_names = _tool_names(tool_calls)
     input_tokens, output_tokens = extract_token_usage(final_result.get("messages", []))
+    turn_model = _turn_model(fake)
 
     took_ms = round((time.perf_counter() - started) * 1000, 2)
     outcome = derive_outcome(None, tool_names, False)
@@ -714,7 +717,8 @@ async def stream_turn(
         latency_ms=took_ms,
         input_tokens=input_tokens,
         output_tokens=output_tokens,
-        model=_turn_model(fake),
+        model=turn_model,
+        cost_usd=estimate_cost_usd(input_tokens, output_tokens, turn_model),
         unanswered_question=ctx.unanswered_question if outcome == "unanswered" else None,
     )
     yield {

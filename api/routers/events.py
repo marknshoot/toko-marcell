@@ -21,6 +21,13 @@ def rate(numerator, denominator):
     return round(numerator / denominator, 4)
 
 
+def cost_rate(total_cost_usd, denominator):
+    """Money-safe division: keep 8 decimals and unknown cost as ``None``."""
+    if total_cost_usd is None or not denominator:
+        return None
+    return round(float(total_cost_usd) / denominator, 8)
+
+
 @router.post("/events", status_code=201)
 def create_event(event: EventIn, request: Request):
     allowed, retry_after = check_write_rate_limit(_get_client_ip(request))
@@ -215,6 +222,38 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
             )
             thumbs_up, thumbs_down = cur.fetchone()
 
+            # ── Unit economics (phase 13) ────────────────────────────────────
+            cur.execute(
+                f"""
+                SELECT
+                    SUM(cost_usd) AS total_cost_usd,
+                    COUNT(*) AS turns,
+                    COUNT(DISTINCT thread_id) AS conversations,
+                    COUNT(DISTINCT thread_id) FILTER (
+                        WHERE outcome IN ('answered', 'cart')
+                    ) AS resolved_conversations
+                FROM copilot_turns WHERE {window}
+                """,
+                (since_days,),
+            )
+            total_cost, cost_turns, conversations, resolved_conversations = cur.fetchone()
+
+            cur.execute(
+                """
+                SELECT COUNT(*) FROM orders o
+                WHERE o.status = 'paid'
+                  AND o.session_id IS NOT NULL
+                  AND o.created_at > now() - make_interval(days => %s)
+                  AND EXISTS (
+                      SELECT 1 FROM copilot_turns ct
+                      WHERE ct.session_id = o.session_id
+                        AND ct.created_at > now() - make_interval(days => %s)
+                  )
+                """,
+                (since_days, since_days),
+            )
+            assisted_orders = cur.fetchone()[0]
+
     viewed = sessions_by_step.get("view_product", 0)
     added = sessions_by_step.get("add_to_cart", 0)
     started = sessions_by_step.get("checkout_start", 0)
@@ -283,6 +322,15 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
             "aov_idr": round(float(aov_idr), 2) if aov_idr is not None else None,
         },
         "cohorts": cohort_data,
+        "unit_economics": {
+            "total_cost_usd": round(float(total_cost), 8) if total_cost is not None else None,
+            "avg_cost_per_turn_usd": cost_rate(total_cost, cost_turns),
+            "cost_per_conversation_usd": cost_rate(total_cost, conversations),
+            "cost_per_resolved_conversation_usd": cost_rate(
+                total_cost, resolved_conversations
+            ),
+            "cost_per_assisted_order_usd": cost_rate(total_cost, assisted_orders),
+        },
         "copilot_quality": {
             "turns": turns,
             "unanswered_rate": rate(unanswered, turns),
@@ -301,6 +349,9 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
             "copilot.assisted_add_to_cart_rate = copilot_add_to_cart / all add_to_cart; "
             "a copilot-driven add fires BOTH add_to_cart (from the cart) and copilot_add_to_cart, "
             "so the rate is the copilot-attributed share of total adds, not an independent funnel",
+            "unit_economics uses configured per-million token prices, not provider invoices; "
+            "cost is null when no turn reported token usage, and pre-agent guardrail tokens are "
+            "not included",
             cohort_caveat,
         ],
     }
