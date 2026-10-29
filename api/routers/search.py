@@ -342,7 +342,7 @@ async def search_by_image(
         raise HTTPException(
             status_code=503,
             detail=(
-                "Image search is unavailable: the fine-tuned CLIP vision encoder is "
+                "Image search is unavailable: the CLIP vision encoder is "
                 "not loaded on this deployment."
             ),
         )
