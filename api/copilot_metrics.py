@@ -1,8 +1,10 @@
 """Best-effort telemetry for copilot turns.
 
-Phase 9 writes one ``copilot_turns`` row per turn and exposes the aggregate in
-``GET /events/summary``. Measurement must never break a shopper's chat, so every
-database operation here is defensive: failures are logged and swallowed.
+Phase 9 writes one ``copilot_turns`` row per turn; phase 10 adds the honest
+``unanswered`` outcome and stores the shopper's question (capped at 300 chars).
+The aggregate is exposed in ``GET /events/summary``. Measurement must never
+break a shopper's chat, so every database operation here is defensive: failures
+are logged and swallowed.
 
 The token extractor reads LangChain's standard ``AIMessage.usage_metadata``
 (``input_tokens`` / ``output_tokens``). Providers that do not return usage simply
@@ -27,17 +29,19 @@ def derive_outcome(
 ) -> str:
     """Map one turn's evidence to the ``copilot_turns.outcome`` vocabulary.
 
-    Precedence: error → guardrail → unanswered flag → cart → answered.
+    Precedence: error → guardrail → cart → unanswered flag → answered.
+    A cart action wins over a fallback flag because the shopper still received a
+    concrete, server-validated outcome.
     """
     if reply_error:
         return "error"
     if guardrail:
         return "guardrail"
     names = {str(name) for name in (tool_names or []) if name}
-    if "flag_unanswered" in names:
-        return "unanswered"
     if "add_to_cart" in names:
         return "cart"
+    if "flag_unanswered" in names:
+        return "unanswered"
     return "answered"
 
 
@@ -90,11 +94,14 @@ def record_turn(
     output_tokens: int | None = None,
     model: str | None = None,
     cost_usd: float | None = None,
+    unanswered_question: str | None = None,
 ) -> None:
     """Insert one turn row. Never raises: telemetry must not break chat."""
     if outcome not in OUTCOMES:
         logger.warning("[copilot_metrics] ignoring invalid outcome %r", outcome)
         return
+
+    question = (unanswered_question or "").strip()[:300] or None
 
     try:
         with _connect(db_url) as conn:
@@ -103,8 +110,9 @@ def record_turn(
                     """
                     INSERT INTO copilot_turns
                         (thread_id, session_id, guardrail, outcome, tool_names,
-                         latency_ms, input_tokens, output_tokens, model, cost_usd)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         latency_ms, input_tokens, output_tokens, model, cost_usd,
+                         unanswered_question)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         thread_id,
@@ -117,6 +125,7 @@ def record_turn(
                         output_tokens,
                         model,
                         cost_usd,
+                        question,
                     ),
                 )
             conn.commit()

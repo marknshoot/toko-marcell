@@ -42,6 +42,8 @@ def test_tools_lists_v2_names():
     assert "search_catalog" in names
     assert "recommend_size" in names
     assert "add_to_cart" in names
+    assert "flag_unanswered" in names
+    assert len(names) == 7
     assert "search_by_image" not in names  # text-only (§4)
 
 

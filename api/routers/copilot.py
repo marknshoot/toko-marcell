@@ -23,6 +23,7 @@ V2_TOOL_NAMES = [
     "build_outfit",
     "lookup_store_policy",
     "add_to_cart",
+    "flag_unanswered",
 ]
 
 

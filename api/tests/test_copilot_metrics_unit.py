@@ -25,7 +25,13 @@ class TestDeriveOutcome:
     def test_cart(self):
         assert copilot_metrics.derive_outcome(None, ["search_catalog", "add_to_cart"], False) == "cart"
 
-    def test_unanswered_flag_for_phase_10(self):
+    def test_cart_wins_over_unanswered_flag(self):
+        assert (
+            copilot_metrics.derive_outcome(None, ["flag_unanswered", "add_to_cart"], False)
+            == "cart"
+        )
+
+    def test_unanswered_flag(self):
         assert copilot_metrics.derive_outcome(None, ["flag_unanswered"], False) == "unanswered"
 
     def test_none_tool_names(self):
@@ -100,3 +106,85 @@ class TestRecordTurnNeverRaises:
             outcome="bogus",
         )
         assert called is False
+
+
+class TestRecordTurnUnanswered:
+    def test_question_is_truncated_and_passed_to_insert(self, monkeypatch):
+        import contextlib
+
+        captured = {}
+
+        class _FakeCursor:
+            def execute(self, sql, params):
+                captured["sql"] = sql
+                captured["params"] = params
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        class _FakeConn:
+            def cursor(self):
+                return _FakeCursor()
+
+            def commit(self):
+                pass
+
+        @contextlib.contextmanager
+        def _fake_connect(_db_url):
+            yield _FakeConn()
+
+        monkeypatch.setattr(copilot_metrics, "_connect", _fake_connect)
+
+        copilot_metrics.record_turn(
+            thread_id="t1",
+            session_id="s1",
+            db_url="postgresql://unreachable",
+            outcome="unanswered",
+            tool_names=["flag_unanswered"],
+            unanswered_question="  " + "q" * 350 + "  ",
+        )
+
+        assert "unanswered_question" in captured["sql"]
+        assert captured["params"][-1] == "q" * 300
+
+    def test_blank_question_is_stored_as_null(self, monkeypatch):
+        import contextlib
+
+        captured = {}
+
+        class _FakeCursor:
+            def execute(self, sql, params):
+                captured["params"] = params
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                pass
+
+        class _FakeConn:
+            def cursor(self):
+                return _FakeCursor()
+
+            def commit(self):
+                pass
+
+        @contextlib.contextmanager
+        def _fake_connect(_db_url):
+            yield _FakeConn()
+
+        monkeypatch.setattr(copilot_metrics, "_connect", _fake_connect)
+
+        copilot_metrics.record_turn(
+            thread_id="t1",
+            session_id=None,
+            db_url="postgresql://unreachable",
+            outcome="unanswered",
+            tool_names=["flag_unanswered"],
+            unanswered_question="   ",
+        )
+
+        assert captured["params"][-1] is None

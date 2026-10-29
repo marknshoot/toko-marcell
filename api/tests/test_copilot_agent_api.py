@@ -75,6 +75,41 @@ def test_stream_turn_emits_tokens_and_done():
     assert done_events[0]["thread_id"] == "t-stream"
 
 
+# ── Unanswered telemetry ─────────────────────────────────────────────────────
+
+def test_unanswered_turn_persists_truncated_question():
+    import uuid
+
+    import psycopg
+    from copilot_metrics import record_turn
+
+    tid = f"unanswered-{uuid.uuid4()}"
+    question = "q" * 400
+
+    record_turn(
+        thread_id=tid,
+        session_id=None,
+        db_url=DB_URL,
+        outcome="unanswered",
+        tool_names=["flag_unanswered"],
+        unanswered_question=question,
+        model="test",
+    )
+
+    with psycopg.connect(DB_URL) as conn:
+        try:
+            row = conn.execute(
+                "SELECT outcome, unanswered_question FROM copilot_turns WHERE thread_id = %s",
+                (tid,),
+            ).fetchone()
+            assert row is not None
+            assert row[0] == "unanswered"
+            assert row[1] == "q" * 300
+        finally:
+            conn.execute("DELETE FROM copilot_turns WHERE thread_id = %s", (tid,))
+            conn.commit()
+
+
 # ── Agent path with a scripted tool call → products populate with fit ────────
 
 def test_scripted_tool_call_populates_registry():

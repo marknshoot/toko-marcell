@@ -42,8 +42,8 @@ the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`
 | [Zero-result rate](#zero-result-rate) | Live | `events` (`search`) → `GET /events/summary` |
 | [Search-to-PDP](#search-to-pdp) | Live (proxy) | `events` → `GET /events/summary`; by mode planned (phase 11) |
 | [Copilot assisted-add rate](#copilot-assisted-add-rate) | Live (proxy) | `events` → `GET /events/summary` |
-| [Deflection](#deflection) | Planned (phase 12) | `copilot_turns` (outcomes live in phase 9), `/admin/kpi` (phase 12) |
-| [Unanswered rate](#unanswered-rate) | Live field (phase 9); meaningful after phase 10 | `copilot_turns.outcome` → `GET /events/summary.copilot_quality` |
+| [Deflection](#deflection) | Planned (phase 12) | `copilot_turns` (outcomes + fallback live in phase 10), `/admin/kpi` (phase 12) |
+| [Unanswered rate](#unanswered-rate) | Live (phase 10) | `copilot_turns.outcome` + `unanswered_question` → `GET /events/summary.copilot_quality` |
 | [Thumbs-up rate](#thumbs-up-rate) | Live (phase 9) | `copilot_feedback` → `GET /events/summary.copilot_quality` |
 | [Cost per conversation](#cost-per-conversation) | Planned (phase 13) | `copilot_turns` tokens × configured prices |
 | [Cost per assisted order](#cost-per-assisted-order) | Planned (phase 13) | `copilot_turns` + `orders` |
@@ -225,8 +225,8 @@ aggregated in [`api/routers/events.py`](../api/routers/events.py). Phase 9 adds
 
 ## Deflection
 
-**Status:** Planned (phase 12). Outcomes are logged in `copilot_turns` now (phase 9); honest
-"can't answer" is added by `flag_unanswered` in phase 10. Surfaced by `GET /admin/kpi` in phase 12.
+**Status:** Planned (phase 12). Outcomes and the honest fallback are logged now (phase 10); the
+conversation-level deflection view is surfaced by `GET /admin/kpi` in phase 12.
 
 **Definition:** Share of copilot conversations resolved inside the copilot with a grounded answer,
 rather than ending in an explicit "I can't answer that" turn.
@@ -243,8 +243,8 @@ deflection = COUNT(deflected) / COUNT(eligible)
 ```
 
 **Source:** `copilot_turns` (`thread_id`, `session_id`, `outcome`, `created_at` — phase 9);
-`flag_unanswered` sets `outcome='unanswered'` (phase 10); aggregated by `/admin/kpi` (phase 12).
-The committed schema uses the column names above.
+`flag_unanswered` sets `outcome='unanswered'` (live in phase 10); aggregated by `/admin/kpi`
+(phase 12). The committed schema uses the column names above.
 
 **Caveats:**
 
@@ -263,11 +263,10 @@ The committed schema uses the column names above.
 
 ## Unanswered rate
 
-**Status:** Live field (phase 9), meaningful after phase 10. `GET /events/summary` returns
-`copilot_quality.unanswered_rate` = unanswered turns / all logged turns. `flag_unanswered` lands in
-phase 10, so the value is expected to remain 0 until then.
+**Status:** Live (phase 10). `GET /events/summary` returns `copilot_quality.unanswered_rate`.
 
-**Definition:** Share of logged copilot turns whose `outcome` is `unanswered`.
+**Definition:** Share of logged copilot turns where the model called `flag_unanswered` because it
+could not answer from tool evidence, and did not complete a cart action.
 
 **Formula:**
 
@@ -275,18 +274,27 @@ phase 10, so the value is expected to remain 0 until then.
 unanswered_rate = COUNT(outcome = 'unanswered') / COUNT(*)
 ```
 
-**Source:** `copilot_turns.outcome` (phase 9); `flag_unanswered` sets `outcome='unanswered'`
-(phase 10); exposed by `GET /events/summary.copilot_quality` (phase 9); dashboard in phase 12.
+`derive_outcome` precedence is `error → guardrail → cart → unanswered → answered`. A turn that both
+calls `add_to_cart` and flags a fallback is counted as `cart`, because the shopper still received a
+concrete server-validated outcome.
+
+**Source:** `copilot_turns.outcome`; the tool's `question` argument is stored in
+`copilot_turns.unanswered_question` (trimmed to 300 characters) for audit and future query analysis;
+`GET /events/summary.copilot_quality`; dashboard in phase 12.
 
 **Caveats:**
 
 - **Measures self-declared inability, not all errors.** A confidently wrong answer is not counted;
   groundedness needs an audit sample or the phase-14 golden set.
-- **The phase-9 denominator includes guardrail blocks and provider errors.** That is a true share of
-  all turns, but it conflates off-topic/abuse with knowledge gaps. A future knowledge-gap variant
-  should filter to `outcome IN ('answered', 'unanswered')`; state the denominator explicitly.
+- **The denominator includes guardrail blocks and provider errors.** That is a true share of all
+  turns, but it conflates off-topic/abuse with knowledge gaps. A future knowledge-gap variant should
+  filter to `outcome IN ('answered', 'unanswered')`; state the denominator explicitly.
 - **Depends on the model actually calling `flag_unanswered`.** Prompt/tool compliance is part of the
-  metric's validity.
+  metric's validity; the prompt requires the tool before an honest fallback, but the model can still
+  answer weakly without it.
+- **Raw shopper text is stored.** `unanswered_question` holds the first 300 characters of the user
+  question; there is no PII scrub or retention policy yet. Treat it as user content and restrict
+  access.
 - **Turn-level weights chatty conversations.** Report a conversation-level companion (share of
   threads with any unanswered turn) beside it.
 - **No human handoff.** An unanswered turn ends the interaction; it does not escalate.
@@ -458,7 +466,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 |---|---|
 | 8 | Dictionary and business framing only; no new metric is computed. |
 | 9 (shipped) | AOV/revenue from `orders`; `copilot_turns` logging (latency, tools, guardrail, outcome, tokens); `copilot_feedback` + thumbs UI; copilot-user vs non-user cohorts (descriptive); `copilot_quality` aggregate (unanswered/guardrail/latency/thumbs). |
-| 10 | `outcome='unanswered'` logging through `flag_unanswered`; copilot refocused on sizing, policy and outfit jobs. |
+| 10 (shipped) | `outcome='unanswered'` logging through `flag_unanswered` (question stored, 300-char cap); copilot refocused on sizing, policy and outfit jobs. |
 | 11 | `GET /search/insights`: top zero-result queries and search-to-PDP by mode; ID→EN rewrite fallback. |
 | 12 | `GET /admin/kpi`: funnel, cohorts, deflection, unanswered, search health, cost, p50/p95; `synthetic` badge. |
 | 13 | Cost per turn, cost per conversation, cost per resolved conversation and cost per assisted order; SLOs and cache. |

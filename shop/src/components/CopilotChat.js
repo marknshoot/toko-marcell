@@ -23,17 +23,27 @@ import { formatRp } from "../lib/formatRp";
 import ProductImage from "./ProductImage";
 
 const HOME_CHIPS = [
-  { label: "Outfit kondangan < Rp500rb", prompt: "Outfit kondangan pria di bawah Rp500.000 dong" },
-  { label: "Ukuran saya TB 170 BB 65", prompt: "Ukuran saya pas yang mana? TB 170 BB 65" },
-  { label: "Jaket buat hujan", prompt: "Ada jaket yang bagus dan tahan air buat hujan?" },
-  { label: "Info bayar QRIS & retur", prompt: "Gimana cara pembayaran QRIS dan kebijakan retur toko?" },
+  { label: "Ukuran saya TB 170 BB 65", prompt: "Ukuran saya TB 170 BB 65, cocoknya ukuran apa?" },
+  {
+    label: "Info QRIS, ongkir & retur",
+    prompt: "Gimana cara pembayaran QRIS, pengiriman, dan kebijakan retur toko?",
+  },
+  { label: "Outfit kondangan < Rp500rb", prompt: "Buatkan outfit kondangan pria di bawah Rp500.000 dong" },
 ];
 
 const PRODUCT_CHIPS = [
-  { label: "Ukuran saya pas yang mana?", prompt: "Untuk produk ini, ukuran saya pas yang mana?" },
-  { label: "Bahannya panas nggak?", prompt: "Bahan produk ini panas nggak kalau dipakai siang?" },
-  { label: "Yang mirip tapi lebih murah?", prompt: "Ada yang mirip produk ini tapi lebih murah?" },
-  { label: "Cocok dipadukan dengan apa?", prompt: "Produk ini cocok dipadukan dengan apa?" },
+  {
+    label: "Ukuran saya pas yang mana?",
+    prompt: "Untuk produk ini, ukuran saya pas yang mana? TB 170 BB 65",
+  },
+  {
+    label: "Info QRIS, ongkir & retur",
+    prompt: "Gimana cara pembayaran QRIS, pengiriman, dan kebijakan retur toko?",
+  },
+  {
+    label: "Outfit dengan produk ini < Rp1jt",
+    prompt: "Buatkan outfit dengan produk ini di bawah Rp1.000.000",
+  },
 ];
 
 const markdownComponents = {

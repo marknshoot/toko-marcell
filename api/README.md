@@ -99,7 +99,7 @@ from booting, and catalog browsing never pays for a search model it does not use
 | `GET` | `/recs/session` | Session-based recommendations from the current visit's events; cold → popularity |
 | `POST` | `/copilot/chat` | Agentic copilot turn (v2: deterministic guardrail → `create_agent` loop → grounded reply); text-only |
 | `POST` | `/copilot/chat/stream` | Stream an agentic copilot turn via Server-Sent Events (`token` + `done` events) |
-| `GET` | `/copilot/tools` | The 6 deterministic tool names the v2 copilot can call |
+| `GET` | `/copilot/tools` | The 7 deterministic tool names the v2 copilot can call |
 | `POST` | `/copilot/feedback` | Record a thumbs up/down vote for a copilot thread → `201` · rate-limited like other writes |
 | `GET` | `/copilot/threads/{thread_id}` | Replay a conversation thread's display messages (may be empty) |
 | `DELETE` | `/copilot/threads/{thread_id}` | Reset a conversation (delete all persisted checkpointer state) → `204` |
@@ -162,7 +162,7 @@ api/
 ├── guardrail.py              # deterministic pre-agent guardrail (greeting/off-topic/injection, zero LLM)
 ├── copilot_agent.py          # LangChain v1 create_agent orchestrator (run_turn) + middleware
 ├── copilot_metrics.py        # best-effort copilot_turns telemetry + outcome/token extraction
-├── copilot_tools.py          # the 6 deterministic @tool functions bound to the agent
+├── copilot_tools.py          # the 7 deterministic @tool functions bound to the agent
 ├── copilot_llm.py            # provider fallback chain (OpenRouter → generic → Gemini) + fake LLM
 ├── copilot_memory.py         # LangGraph PostgresSaver checkpointer + thread activity / TTL cleanup
 ├── sizing.py                 # deterministic recommend_size logic (TB/BB chart + brand cut rules)
@@ -328,7 +328,7 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
 3. **Grounded answer.** The reply may only use tool evidence, in the "Admin Toko Marcell" voice
    (Indonesian or English, mirroring the shopper), with structured product cards.
 
-### The 6 bound tools (`copilot_tools.py`)
+### The 7 bound tools (`copilot_tools.py`)
 
 | Tool | Backed by | Purpose |
 |---|---|---|
@@ -338,9 +338,12 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
 | `build_outfit` | catalog search for top + bottom + shoes | the total is **summed and verified ≤ budget in code**, not by the LLM |
 | `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` + IDF-weighted lexical RRF | bilingual sizing (TB/BB), shipping, returns, QRIS demo |
 | `add_to_cart` | re-reads `products.price_idr` server-side | returns a `ui_action` the browser executes |
+| `flag_unanswered` | no DB read; sets `ToolContext.unanswered` so the turn recorder logs the truncated question | honest fallback when tool evidence cannot answer; never guess |
 
-`GET /copilot/tools` returns exactly these 6 names. There is deliberately **no order-status tool**:
-checkout is a demo simulation with no fulfillment, shipping or tracking to report on.
+`GET /copilot/tools` returns exactly these 7 names. The prompt focuses the agent on three jobs —
+sizing, store policy, and outfit-under-budget — while product discovery stays short and points
+shoppers to the store search bar. There is deliberately **no order-status tool**: checkout is a demo
+simulation with no fulfillment, shipping or tracking to report on.
 
 ### Middleware
 
@@ -450,8 +453,9 @@ point is cheaper than breaking a purchase.
 The cohort caveat says plainly that the comparison is **correlational and self-selected** — there is
 no holdout. `copilot_quality.turns` counts all logged turns, so `unanswered_rate` and
 `guardrail_rate` share that denominator. `guardrail_rate` counts every deterministic guardrail
-label, including greetings, not only unsafe blocks. `copilot` also keeps `messages`, `product_clicks`,
-`add_to_cart`,
+label, including greetings, not only unsafe blocks. The raw question behind an `unanswered` turn is
+stored in `copilot_turns.unanswered_question` (first 300 chars) for review; the public summary only
+exposes aggregate rates. `copilot` also keeps `messages`, `product_clicks`, `add_to_cart`,
 `total_add_to_cart` and `assisted_add_to_cart_rate` (= `copilot_add_to_cart` / all `add_to_cart`,
 `null` when there is no denominator); a copilot-driven add fires **both** events, so it is an
 attributed share, not an independent funnel.
@@ -563,7 +567,7 @@ products (
 )
 events           (id BIGSERIAL, session_id, event_type, asin, query, results_count, qty, price_idr, created_at)
 copilot_turns    (id BIGSERIAL, thread_id, session_id, created_at, guardrail, outcome, tool_names, latency_ms,
-                  input_tokens, output_tokens, model, cost_usd)
+                  input_tokens, output_tokens, model, cost_usd, unanswered_question)
 copilot_feedback (id BIGSERIAL, thread_id, session_id, rating CHECK (-1,1), created_at)
 orders           (id BIGSERIAL, token UNIQUE, total_idr, item_count, status, session_id, created_at)
 order_items      (id BIGSERIAL, order_id → orders, asin, title, qty, unit_price_idr)
@@ -642,12 +646,12 @@ service restored from the seed with `COPILOT_FAKE_LLM=1`, alongside the frontend
 - No owner authentication; access is by unguessable token/URL.
 - `/checkout/confirm` is not idempotent (no `Idempotency-Key` yet).
 - Client-side filtering means `results_count` is not catalog-wide.
-- Migration `0003` adds copilot telemetry; revisions are applied on startup, still with a manual
-  `alembic upgrade head` available for operators.
+- Migrations `0003`–`0004` add copilot telemetry; revisions are applied on startup, still with a
+  manual `alembic upgrade head` available for operators.
 - Reindex is manual after a reseed.
-- The copilot is bound to 6 tools (search, details, size, outfit, policy, add-to-cart);
-  there is intentionally **no order-status tool** (checkout is a simulation), and reviews
-  are surfaced on the product page rather than in chat.
+- The copilot is bound to 7 tools (search, details, size, outfit, policy, add-to-cart,
+  flag-unanswered); there is intentionally **no order-status tool** (checkout is a simulation).
+  Product discovery stays short and points to the store search bar.
 - Render free tier cold-starts (see the cold-start overlay in the storefront).
 
 ---

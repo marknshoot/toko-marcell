@@ -117,6 +117,7 @@ def test_upgrade_empty_database_to_head(temp_db_url):
         "output_tokens",
         "model",
         "cost_usd",
+        "unanswered_question",
     } <= _columns(temp_db_url, "copilot_turns")
     assert {"thread_id", "session_id", "rating"} <= _columns(temp_db_url, "copilot_feedback")
     assert {
@@ -158,6 +159,9 @@ def test_downgrade_roundtrip(temp_db_url):
 
     cfg = _alembic_cfg(temp_db_url)
     command.upgrade(cfg, "head")
+
+    command.downgrade(cfg, "0003")
+    assert "unanswered_question" not in _columns(temp_db_url, "copilot_turns")
 
     command.downgrade(cfg, "0001")
     assert "embedding_ml" not in _columns(temp_db_url, "products")
