@@ -1,0 +1,1309 @@
+{
+  "_meta": {
+    "generated_by": "pipelines/extract_categories.py",
+    "source": "data/seed/init.sql.gz",
+    "pair_count": 260
+  },
+  "categories": [
+    {
+      "department": "Baby",
+      "category": "Accessories",
+      "count": 10
+    },
+    {
+      "department": "Baby",
+      "category": "Baby",
+      "count": 1
+    },
+    {
+      "department": "Baby",
+      "category": "Baby Boys",
+      "count": 3
+    },
+    {
+      "department": "Baby",
+      "category": "Baby Girls",
+      "count": 5
+    },
+    {
+      "department": "Baby",
+      "category": "Boots",
+      "count": 2
+    },
+    {
+      "department": "Baby",
+      "category": "Clothing",
+      "count": 26
+    },
+    {
+      "department": "Baby",
+      "category": "Flats",
+      "count": 3
+    },
+    {
+      "department": "Baby",
+      "category": "Hats & Caps",
+      "count": 7
+    },
+    {
+      "department": "Baby",
+      "category": "Jackets & Coats",
+      "count": 1
+    },
+    {
+      "department": "Baby",
+      "category": "Novelty",
+      "count": 1
+    },
+    {
+      "department": "Baby",
+      "category": "Sandals",
+      "count": 2
+    },
+    {
+      "department": "Baby",
+      "category": "Shoes",
+      "count": 9
+    },
+    {
+      "department": "Baby",
+      "category": "Sleepwear & Robes",
+      "count": 10
+    },
+    {
+      "department": "Baby",
+      "category": "Sneakers",
+      "count": 6
+    },
+    {
+      "department": "Baby",
+      "category": "Socks",
+      "count": 11
+    },
+    {
+      "department": "Baby",
+      "category": "Swim",
+      "count": 3
+    },
+    {
+      "department": "Boys",
+      "category": "Accessories",
+      "count": 7
+    },
+    {
+      "department": "Boys",
+      "category": "Active",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Active Pants",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Active Shirts & Tees",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Athletic",
+      "count": 4
+    },
+    {
+      "department": "Boys",
+      "category": "Athletic Socks",
+      "count": 2
+    },
+    {
+      "department": "Boys",
+      "category": "Boots",
+      "count": 2
+    },
+    {
+      "department": "Boys",
+      "category": "Boxer Briefs",
+      "count": 2
+    },
+    {
+      "department": "Boys",
+      "category": "Briefs",
+      "count": 9
+    },
+    {
+      "department": "Boys",
+      "category": "Clothing",
+      "count": 8
+    },
+    {
+      "department": "Boys",
+      "category": "Costumes",
+      "count": 9
+    },
+    {
+      "department": "Boys",
+      "category": "Dress Shirts",
+      "count": 5
+    },
+    {
+      "department": "Boys",
+      "category": "Fashion Hoodies & Sweatshirts",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Jackets & Coats",
+      "count": 4
+    },
+    {
+      "department": "Boys",
+      "category": "Jeans",
+      "count": 5
+    },
+    {
+      "department": "Boys",
+      "category": "Necklaces",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Novelty",
+      "count": 4
+    },
+    {
+      "department": "Boys",
+      "category": "Outdoor",
+      "count": 8
+    },
+    {
+      "department": "Boys",
+      "category": "Oxfords",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Pants",
+      "count": 3
+    },
+    {
+      "department": "Boys",
+      "category": "Polos",
+      "count": 4
+    },
+    {
+      "department": "Boys",
+      "category": "Running",
+      "count": 4
+    },
+    {
+      "department": "Boys",
+      "category": "Sandals",
+      "count": 2
+    },
+    {
+      "department": "Boys",
+      "category": "Shorts",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Sleepwear & Robes",
+      "count": 2
+    },
+    {
+      "department": "Boys",
+      "category": "Slippers",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Sneakers",
+      "count": 8
+    },
+    {
+      "department": "Boys",
+      "category": "Socks",
+      "count": 3
+    },
+    {
+      "department": "Boys",
+      "category": "Sunglasses",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Swim",
+      "count": 2
+    },
+    {
+      "department": "Boys",
+      "category": "Tops & Tees",
+      "count": 3
+    },
+    {
+      "department": "Boys",
+      "category": "Underwear",
+      "count": 1
+    },
+    {
+      "department": "Boys",
+      "category": "Wrist Watches",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Accessories",
+      "count": 2
+    },
+    {
+      "department": "Girls",
+      "category": "Athletic",
+      "count": 8
+    },
+    {
+      "department": "Girls",
+      "category": "Boots",
+      "count": 7
+    },
+    {
+      "department": "Girls",
+      "category": "Casual",
+      "count": 2
+    },
+    {
+      "department": "Girls",
+      "category": "Clothing",
+      "count": 12
+    },
+    {
+      "department": "Girls",
+      "category": "Costumes",
+      "count": 11
+    },
+    {
+      "department": "Girls",
+      "category": "Dresses",
+      "count": 12
+    },
+    {
+      "department": "Girls",
+      "category": "Flats",
+      "count": 8
+    },
+    {
+      "department": "Girls",
+      "category": "Girls",
+      "count": 6
+    },
+    {
+      "department": "Girls",
+      "category": "Hats & Caps",
+      "count": 2
+    },
+    {
+      "department": "Girls",
+      "category": "Hiking & Trekking",
+      "count": 3
+    },
+    {
+      "department": "Girls",
+      "category": "Jackets & Coats",
+      "count": 2
+    },
+    {
+      "department": "Girls",
+      "category": "Jeans",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Kids & Baby",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Leggings",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Novelty",
+      "count": 5
+    },
+    {
+      "department": "Girls",
+      "category": "One-Pieces",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Outdoor",
+      "count": 5
+    },
+    {
+      "department": "Girls",
+      "category": "Rings",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Sandals",
+      "count": 6
+    },
+    {
+      "department": "Girls",
+      "category": "Shoes",
+      "count": 4
+    },
+    {
+      "department": "Girls",
+      "category": "Sleepwear & Robes",
+      "count": 3
+    },
+    {
+      "department": "Girls",
+      "category": "Sneakers",
+      "count": 10
+    },
+    {
+      "department": "Girls",
+      "category": "Stud",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Sweaters",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Swim",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Synthetic",
+      "count": 1
+    },
+    {
+      "department": "Girls",
+      "category": "Underwear",
+      "count": 10
+    },
+    {
+      "department": "Girls",
+      "category": "Wrist Watches",
+      "count": 3
+    },
+    {
+      "department": "Men",
+      "category": "Accessories",
+      "count": 15
+    },
+    {
+      "department": "Men",
+      "category": "Active",
+      "count": 18
+    },
+    {
+      "department": "Men",
+      "category": "Active Pants",
+      "count": 10
+    },
+    {
+      "department": "Men",
+      "category": "Active Shirts & Tees",
+      "count": 10
+    },
+    {
+      "department": "Men",
+      "category": "Active Shorts",
+      "count": 6
+    },
+    {
+      "department": "Men",
+      "category": "Athletic",
+      "count": 21
+    },
+    {
+      "department": "Men",
+      "category": "Athletic Socks",
+      "count": 19
+    },
+    {
+      "department": "Men",
+      "category": "Belts",
+      "count": 48
+    },
+    {
+      "department": "Men",
+      "category": "Bikinis",
+      "count": 1
+    },
+    {
+      "department": "Men",
+      "category": "Boots",
+      "count": 39
+    },
+    {
+      "department": "Men",
+      "category": "Boxer Briefs",
+      "count": 35
+    },
+    {
+      "department": "Men",
+      "category": "Bracelets",
+      "count": 1
+    },
+    {
+      "department": "Men",
+      "category": "Briefs",
+      "count": 15
+    },
+    {
+      "department": "Men",
+      "category": "Cardigans",
+      "count": 2
+    },
+    {
+      "department": "Men",
+      "category": "Casual",
+      "count": 30
+    },
+    {
+      "department": "Men",
+      "category": "Casual Button-Down Shirts",
+      "count": 24
+    },
+    {
+      "department": "Men",
+      "category": "Casual Socks",
+      "count": 33
+    },
+    {
+      "department": "Men",
+      "category": "Clothing",
+      "count": 9
+    },
+    {
+      "department": "Men",
+      "category": "Cold Weather Gloves",
+      "count": 6
+    },
+    {
+      "department": "Men",
+      "category": "Costumes",
+      "count": 6
+    },
+    {
+      "department": "Men",
+      "category": "Costumes & Accessories",
+      "count": 1
+    },
+    {
+      "department": "Men",
+      "category": "Costumes & Cosplay Apparel",
+      "count": 2
+    },
+    {
+      "department": "Men",
+      "category": "Dress Shirts",
+      "count": 21
+    },
+    {
+      "department": "Men",
+      "category": "Fashion Hoodies & Sweatshirts",
+      "count": 6
+    },
+    {
+      "department": "Men",
+      "category": "Fashion Sneakers",
+      "count": 61
+    },
+    {
+      "department": "Men",
+      "category": "Fitness & Cross-Training",
+      "count": 11
+    },
+    {
+      "department": "Men",
+      "category": "Hats & Caps",
+      "count": 37
+    },
+    {
+      "department": "Men",
+      "category": "Hiking & Trekking",
+      "count": 18
+    },
+    {
+      "department": "Men",
+      "category": "Jackets & Coats",
+      "count": 24
+    },
+    {
+      "department": "Men",
+      "category": "Jeans",
+      "count": 50
+    },
+    {
+      "department": "Men",
+      "category": "Jewelry",
+      "count": 7
+    },
+    {
+      "department": "Men",
+      "category": "Loafers & Slip-Ons",
+      "count": 55
+    },
+    {
+      "department": "Men",
+      "category": "Medical",
+      "count": 7
+    },
+    {
+      "department": "Men",
+      "category": "Men",
+      "count": 9
+    },
+    {
+      "department": "Men",
+      "category": "Military",
+      "count": 13
+    },
+    {
+      "department": "Men",
+      "category": "Mules & Clogs",
+      "count": 10
+    },
+    {
+      "department": "Men",
+      "category": "Necklaces",
+      "count": 3
+    },
+    {
+      "department": "Men",
+      "category": "Novelty",
+      "count": 84
+    },
+    {
+      "department": "Men",
+      "category": "Outdoor",
+      "count": 9
+    },
+    {
+      "department": "Men",
+      "category": "Oxfords",
+      "count": 18
+    },
+    {
+      "department": "Men",
+      "category": "Pants",
+      "count": 12
+    },
+    {
+      "department": "Men",
+      "category": "Polos",
+      "count": 7
+    },
+    {
+      "department": "Men",
+      "category": "Rings",
+      "count": 6
+    },
+    {
+      "department": "Men",
+      "category": "Running",
+      "count": 58
+    },
+    {
+      "department": "Men",
+      "category": "Sandals",
+      "count": 33
+    },
+    {
+      "department": "Men",
+      "category": "Shirts",
+      "count": 14
+    },
+    {
+      "department": "Men",
+      "category": "Shoes",
+      "count": 53
+    },
+    {
+      "department": "Men",
+      "category": "Shorts",
+      "count": 19
+    },
+    {
+      "department": "Men",
+      "category": "Skullies & Beanies",
+      "count": 11
+    },
+    {
+      "department": "Men",
+      "category": "Sleep & Lounge",
+      "count": 19
+    },
+    {
+      "department": "Men",
+      "category": "Slippers",
+      "count": 22
+    },
+    {
+      "department": "Men",
+      "category": "Socks",
+      "count": 13
+    },
+    {
+      "department": "Men",
+      "category": "Sport Sandals & Slides",
+      "count": 14
+    },
+    {
+      "department": "Men",
+      "category": "Sunglasses",
+      "count": 18
+    },
+    {
+      "department": "Men",
+      "category": "Sunglasses & Eyewear Accessories",
+      "count": 14
+    },
+    {
+      "department": "Men",
+      "category": "Swim",
+      "count": 10
+    },
+    {
+      "department": "Men",
+      "category": "T-Shirts",
+      "count": 26
+    },
+    {
+      "department": "Men",
+      "category": "Ties, Cummerbunds & Pocket Squares",
+      "count": 6
+    },
+    {
+      "department": "Men",
+      "category": "Underwear",
+      "count": 46
+    },
+    {
+      "department": "Men",
+      "category": "Walking",
+      "count": 14
+    },
+    {
+      "department": "Men",
+      "category": "Wallets",
+      "count": 46
+    },
+    {
+      "department": "Men",
+      "category": "Wallets, Card Cases & Money Organizers",
+      "count": 10
+    },
+    {
+      "department": "Men",
+      "category": "Watches",
+      "count": 5
+    },
+    {
+      "department": "Men",
+      "category": "Work Utility & Safety",
+      "count": 34
+    },
+    {
+      "department": "Men",
+      "category": "Wrist Watches",
+      "count": 50
+    },
+    {
+      "department": "Other",
+      "category": "Backpacks",
+      "count": 15
+    },
+    {
+      "department": "Other",
+      "category": "Bracelets",
+      "count": 5
+    },
+    {
+      "department": "Other",
+      "category": "Casual Daypacks",
+      "count": 14
+    },
+    {
+      "department": "Other",
+      "category": "Clothing",
+      "count": 8
+    },
+    {
+      "department": "Other",
+      "category": "Costumes & Accessories",
+      "count": 1
+    },
+    {
+      "department": "Other",
+      "category": "Earrings",
+      "count": 3
+    },
+    {
+      "department": "Other",
+      "category": "Jewelry",
+      "count": 3
+    },
+    {
+      "department": "Other",
+      "category": "Jewelry Accessories",
+      "count": 2
+    },
+    {
+      "department": "Other",
+      "category": "Jewelry Boxes & Organizers",
+      "count": 14
+    },
+    {
+      "department": "Other",
+      "category": "Kids & Baby",
+      "count": 1
+    },
+    {
+      "department": "Other",
+      "category": "Luggage",
+      "count": 24
+    },
+    {
+      "department": "Other",
+      "category": "Luggage & Travel Gear",
+      "count": 49
+    },
+    {
+      "department": "Other",
+      "category": "Military",
+      "count": 7
+    },
+    {
+      "department": "Other",
+      "category": "Novelty",
+      "count": 5
+    },
+    {
+      "department": "Other",
+      "category": "Other",
+      "count": 4
+    },
+    {
+      "department": "Other",
+      "category": "Shoe Care & Accessories",
+      "count": 48
+    },
+    {
+      "department": "Other",
+      "category": "Shoe, Jewelry & Watch Accessories",
+      "count": 15
+    },
+    {
+      "department": "Other",
+      "category": "Tops & Tees",
+      "count": 3
+    },
+    {
+      "department": "Other",
+      "category": "Travel Accessories",
+      "count": 57
+    },
+    {
+      "department": "Women",
+      "category": "Accessories",
+      "count": 13
+    },
+    {
+      "department": "Women",
+      "category": "Active",
+      "count": 13
+    },
+    {
+      "department": "Women",
+      "category": "Active Pants",
+      "count": 3
+    },
+    {
+      "department": "Women",
+      "category": "Active Shirts & Tees",
+      "count": 6
+    },
+    {
+      "department": "Women",
+      "category": "Active Shorts",
+      "count": 8
+    },
+    {
+      "department": "Women",
+      "category": "Ankle & Bootie",
+      "count": 36
+    },
+    {
+      "department": "Women",
+      "category": "Athletic",
+      "count": 18
+    },
+    {
+      "department": "Women",
+      "category": "Athletic Socks",
+      "count": 4
+    },
+    {
+      "department": "Women",
+      "category": "Belts",
+      "count": 23
+    },
+    {
+      "department": "Women",
+      "category": "Bikinis",
+      "count": 12
+    },
+    {
+      "department": "Women",
+      "category": "Blouses & Button-Down Shirts",
+      "count": 66
+    },
+    {
+      "department": "Women",
+      "category": "Boots",
+      "count": 14
+    },
+    {
+      "department": "Women",
+      "category": "Bracelets",
+      "count": 7
+    },
+    {
+      "department": "Women",
+      "category": "Cardigans",
+      "count": 47
+    },
+    {
+      "department": "Women",
+      "category": "Casual",
+      "count": 106
+    },
+    {
+      "department": "Women",
+      "category": "Casual Socks",
+      "count": 50
+    },
+    {
+      "department": "Women",
+      "category": "Chains",
+      "count": 19
+    },
+    {
+      "department": "Women",
+      "category": "Charms & Charm Bracelets",
+      "count": 11
+    },
+    {
+      "department": "Women",
+      "category": "Clothing",
+      "count": 32
+    },
+    {
+      "department": "Women",
+      "category": "Club & Night Out",
+      "count": 16
+    },
+    {
+      "department": "Women",
+      "category": "Coats, Jackets & Vests",
+      "count": 22
+    },
+    {
+      "department": "Women",
+      "category": "Cocktail",
+      "count": 24
+    },
+    {
+      "department": "Women",
+      "category": "Cold Weather Gloves",
+      "count": 12
+    },
+    {
+      "department": "Women",
+      "category": "Costumes",
+      "count": 14
+    },
+    {
+      "department": "Women",
+      "category": "Costumes & Accessories",
+      "count": 16
+    },
+    {
+      "department": "Women",
+      "category": "Costumes & Cosplay Apparel",
+      "count": 4
+    },
+    {
+      "department": "Women",
+      "category": "Crossbody Bags",
+      "count": 14
+    },
+    {
+      "department": "Women",
+      "category": "Dresses",
+      "count": 93
+    },
+    {
+      "department": "Women",
+      "category": "Drop & Dangle",
+      "count": 12
+    },
+    {
+      "department": "Women",
+      "category": "Earrings",
+      "count": 11
+    },
+    {
+      "department": "Women",
+      "category": "Exotic Apparel",
+      "count": 16
+    },
+    {
+      "department": "Women",
+      "category": "Fashion Hoodies & Sweatshirts",
+      "count": 12
+    },
+    {
+      "department": "Women",
+      "category": "Fashion Scarves",
+      "count": 20
+    },
+    {
+      "department": "Women",
+      "category": "Fashion Sneakers",
+      "count": 72
+    },
+    {
+      "department": "Women",
+      "category": "Fitness & Cross-Training",
+      "count": 6
+    },
+    {
+      "department": "Women",
+      "category": "Flats",
+      "count": 107
+    },
+    {
+      "department": "Women",
+      "category": "Flip-Flops",
+      "count": 75
+    },
+    {
+      "department": "Women",
+      "category": "Gloves & Mittens",
+      "count": 1
+    },
+    {
+      "department": "Women",
+      "category": "Handbags & Wallets",
+      "count": 6
+    },
+    {
+      "department": "Women",
+      "category": "Hats & Caps",
+      "count": 22
+    },
+    {
+      "department": "Women",
+      "category": "Heeled Sandals",
+      "count": 12
+    },
+    {
+      "department": "Women",
+      "category": "Hiking & Trekking",
+      "count": 19
+    },
+    {
+      "department": "Women",
+      "category": "Jeans",
+      "count": 34
+    },
+    {
+      "department": "Women",
+      "category": "Jewelry",
+      "count": 12
+    },
+    {
+      "department": "Women",
+      "category": "Jumpsuits, Rompers & Overalls",
+      "count": 18
+    },
+    {
+      "department": "Women",
+      "category": "Knee-High",
+      "count": 22
+    },
+    {
+      "department": "Women",
+      "category": "Knits & Tees",
+      "count": 28
+    },
+    {
+      "department": "Women",
+      "category": "Leggings",
+      "count": 56
+    },
+    {
+      "department": "Women",
+      "category": "Lingerie",
+      "count": 277
+    },
+    {
+      "department": "Women",
+      "category": "Lingerie, Sleep & Lounge",
+      "count": 5
+    },
+    {
+      "department": "Women",
+      "category": "Loafers & Slip-Ons",
+      "count": 42
+    },
+    {
+      "department": "Women",
+      "category": "Maternity",
+      "count": 17
+    },
+    {
+      "department": "Women",
+      "category": "Medical",
+      "count": 26
+    },
+    {
+      "department": "Women",
+      "category": "Mid-Calf",
+      "count": 45
+    },
+    {
+      "department": "Women",
+      "category": "Mules & Clogs",
+      "count": 30
+    },
+    {
+      "department": "Women",
+      "category": "Necklaces",
+      "count": 8
+    },
+    {
+      "department": "Women",
+      "category": "Novelty",
+      "count": 63
+    },
+    {
+      "department": "Women",
+      "category": "One-Pieces",
+      "count": 26
+    },
+    {
+      "department": "Women",
+      "category": "Outdoor",
+      "count": 21
+    },
+    {
+      "department": "Women",
+      "category": "Oxfords",
+      "count": 4
+    },
+    {
+      "department": "Women",
+      "category": "Pants",
+      "count": 6
+    },
+    {
+      "department": "Women",
+      "category": "Pendants",
+      "count": 21
+    },
+    {
+      "department": "Women",
+      "category": "Platforms & Wedges",
+      "count": 24
+    },
+    {
+      "department": "Women",
+      "category": "Polos",
+      "count": 3
+    },
+    {
+      "department": "Women",
+      "category": "Pullovers",
+      "count": 9
+    },
+    {
+      "department": "Women",
+      "category": "Pumps",
+      "count": 40
+    },
+    {
+      "department": "Women",
+      "category": "Rings",
+      "count": 7
+    },
+    {
+      "department": "Women",
+      "category": "Running",
+      "count": 74
+    },
+    {
+      "department": "Women",
+      "category": "Sandals",
+      "count": 38
+    },
+    {
+      "department": "Women",
+      "category": "Scarves & Wraps",
+      "count": 21
+    },
+    {
+      "department": "Women",
+      "category": "Shoes",
+      "count": 64
+    },
+    {
+      "department": "Women",
+      "category": "Shorts",
+      "count": 6
+    },
+    {
+      "department": "Women",
+      "category": "Shoulder Bags",
+      "count": 20
+    },
+    {
+      "department": "Women",
+      "category": "Skirts",
+      "count": 32
+    },
+    {
+      "department": "Women",
+      "category": "Skullies & Beanies",
+      "count": 10
+    },
+    {
+      "department": "Women",
+      "category": "Sleep & Lounge",
+      "count": 43
+    },
+    {
+      "department": "Women",
+      "category": "Slippers",
+      "count": 48
+    },
+    {
+      "department": "Women",
+      "category": "Socks & Hosiery",
+      "count": 43
+    },
+    {
+      "department": "Women",
+      "category": "Sport Sandals & Slides",
+      "count": 24
+    },
+    {
+      "department": "Women",
+      "category": "Statement",
+      "count": 4
+    },
+    {
+      "department": "Women",
+      "category": "Stud",
+      "count": 20
+    },
+    {
+      "department": "Women",
+      "category": "Sunglasses",
+      "count": 35
+    },
+    {
+      "department": "Women",
+      "category": "Sunglasses & Eyewear Accessories",
+      "count": 9
+    },
+    {
+      "department": "Women",
+      "category": "Sweaters",
+      "count": 6
+    },
+    {
+      "department": "Women",
+      "category": "Swimsuits & Cover Ups",
+      "count": 25
+    },
+    {
+      "department": "Women",
+      "category": "Synthetic",
+      "count": 3
+    },
+    {
+      "department": "Women",
+      "category": "Tanks & Camis",
+      "count": 27
+    },
+    {
+      "department": "Women",
+      "category": "Tops & Tees",
+      "count": 3
+    },
+    {
+      "department": "Women",
+      "category": "Tops, Tees & Blouses",
+      "count": 13
+    },
+    {
+      "department": "Women",
+      "category": "Tunics",
+      "count": 46
+    },
+    {
+      "department": "Women",
+      "category": "Walking",
+      "count": 49
+    },
+    {
+      "department": "Women",
+      "category": "Wallets",
+      "count": 17
+    },
+    {
+      "department": "Women",
+      "category": "Wallets, Card Cases & Money Organizers",
+      "count": 3
+    },
+    {
+      "department": "Women",
+      "category": "Watches",
+      "count": 5
+    },
+    {
+      "department": "Women",
+      "category": "Wedding & Engagement",
+      "count": 10
+    },
+    {
+      "department": "Women",
+      "category": "Women",
+      "count": 29
+    },
+    {
+      "department": "Women",
+      "category": "Work Utility & Safety",
+      "count": 3
+    },
+    {
+      "department": "Women",
+      "category": "Wrist Watches",
+      "count": 29
+    }
+  ]
+}

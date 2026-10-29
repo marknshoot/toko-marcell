@@ -127,13 +127,13 @@ low-memory override.
 
 | Strategy | ID Precision@3 | ID Recall@3 | Context Precision | Context Recall |
 |---|:---:|:---:|:---:|:---:|
-| `direct_chunk` | 0.2500 | 0.7500 | 0.4722 | 0.7500 |
-| `hypothetical_question` | 0.2500 | 0.7500 | 0.6944 | 0.7500 |
-| **`hybrid_rrf`** | **0.3333** | **1.0000** | **0.9167** | **1.0000** |
+| `direct_chunk` | 0.2222 | 0.6667 | 0.5417 | 0.6667 |
+| `hypothetical_question` | 0.3056 | 0.9167 | 0.7222 | 0.9167 |
+| **`hybrid_rrf`** | **0.3333** | **1.0000** | **0.8750** | **1.0000** |
 
 > Note: With 1 ground-truth reference chunk per query and `k=3` retrieved chunks, the theoretical
 > ceiling for `id_based_context_precision` is `1/3 = 0.3333`. `hybrid_rrf` achieves the `0.3333`
-> ceiling (`1.0000` Recall across all 12 bilingual queries and `0.9167` Context Precision).
+> ceiling (`1.0000` Recall across all 12 bilingual queries and `0.8750` Context Precision).
 
 ```bash
 # Reproduce:

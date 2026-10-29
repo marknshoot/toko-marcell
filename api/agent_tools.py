@@ -291,25 +291,34 @@ def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -
 # Sizing recommender (design §3 — 3 layers, never a certainty)
 # ---------------------------------------------------------------------------
 
-def _infer_garment_kind(department: str | None, category: str | None) -> str:
-    """Guess tops vs bottoms from department/category text. Defaults to tops."""
-    blob = f"{department or ''} {category or ''}".lower()
-    bottoms_kw = ("pant", "trouser", "jean", "short", "legging", "chino", "cargo", "skirt", "celana")
-    if any(k in blob for k in bottoms_kw):
-        return "bottoms"
-    return "tops"
+def _infer_garment_kind(
+    department: str | None,
+    category: str | None,
+    title: str | None = None,
+) -> str:
+    """Return the explicit category-aware size kind (never a tops default)."""
+    from sizing import size_kind_for
+
+    return size_kind_for(department, category, title)
 
 
 def recommend_size(
-    height_cm: float,
-    weight_kg: float,
+    height_cm: float | None = None,
+    weight_kg: float | None = None,
     asin: str | None = None,
     category: str | None = None,
     brand: str | None = None,
+    foot_length_cm: float | None = None,
+    waist_cm: float | None = None,
+    head_circumference_cm: float | None = None,
     db_url: str | None = None,
 ) -> dict[str, Any]:
-    """Suggest a size from TB (height) + BB (weight) using the store's authored
-    size chart plus the brand cut rules from that same knowledge base.
+    """Suggest a size using the correct category-aware measurement.
+
+    Tops, bottoms, and dress use height (TB) + weight (BB). Footwear uses foot
+    length, belts use waist, and headwear uses head circumference. If the
+    product category has no defensible sizing basis, the core returns
+    ``applicable=False`` instead of guessing tops.
 
     Resolution:
       - If ``asin`` is given, look up the product's brand + department/category.
@@ -318,15 +327,7 @@ def recommend_size(
     The result is advisory ("coba ukuran X dulu"), always with a disclaimer —
     never "you must buy size X".
     """
-    from sizing import recommend_size_core
-
-    if height_cm <= 0 or weight_kg <= 0:
-        return {"error": "Butuh tinggi badan (cm) dan berat badan (kg) yang valid untuk saran ukuran."}
-
-    resolved_brand = brand
-    resolved_category = category
-    resolved_department = None
-    matched_title = None
+    from sizing import recommend_size_core, size_kind_for
 
     if asin:
         with _connect(db_url) as conn:
@@ -336,20 +337,32 @@ def recommend_size(
                     (str(asin),),
                 )
                 row = cur.fetchone()
-                if row:
-                    matched_title = row[1]
-                    resolved_brand = resolved_brand or row[2]
-                    resolved_department = row[3]
-                    resolved_category = resolved_category or row[4]
+                if not row:
+                    return {"error": f"Produk dengan ASIN {asin} tidak ditemukan."}
+                matched_title, product_brand, product_department, product_category = row[1], row[2], row[3], row[4]
+    else:
+        matched_title = product_brand = product_department = product_category = None
 
-    garment_kind = _infer_garment_kind(resolved_department, resolved_category)
+    resolved_brand = brand or product_brand
+    resolved_category = category or product_category
+    resolved_department = product_department
+    size_kind = size_kind_for(resolved_department, resolved_category, matched_title)
 
     result = recommend_size_core(
-        height_cm=float(height_cm),
-        weight_kg=float(weight_kg),
-        garment_kind=garment_kind,
+        height_cm=float(height_cm) if height_cm is not None else None,
+        weight_kg=float(weight_kg) if weight_kg is not None else None,
+        foot_length_cm=float(foot_length_cm) if foot_length_cm is not None else None,
+        waist_cm=float(waist_cm) if waist_cm is not None else None,
+        head_circumference_cm=(
+            float(head_circumference_cm) if head_circumference_cm is not None else None
+        ),
+        size_kind=size_kind,
         brand=resolved_brand,
+        department=resolved_department,
+        category=resolved_category,
+        title=matched_title,
     )
+    result["size_kind"] = size_kind
     if matched_title:
         result["matched_product"] = {"asin": asin, "title": matched_title}
     return result

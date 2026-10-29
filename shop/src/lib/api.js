@@ -355,3 +355,42 @@ export async function getCopilotTools() {
   }
   return response.json();
 }
+
+// ── Sizing advisor (category-aware, no LLM) ──────────────────────────────────
+
+export async function getSizingInfo(asin) {
+  try {
+    const response = await fetch(`${API_URL}/sizing/${encodeURIComponent(asin)}`);
+    if (response.status === 404) {
+      return null;
+    }
+    if (!response.ok) {
+      return null;
+    }
+    return response.json();
+  } catch {
+    return null;
+  }
+}
+
+export async function postSizingRecommend({ asin, heightCm, weightKg, footLengthCm, waistCm, headCircumferenceCm }) {
+  const response = await fetch(`${API_URL}/sizing/recommend`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      asin,
+      height_cm: heightCm ?? null,
+      weight_kg: weightKg ?? null,
+      foot_length_cm: footLengthCm ?? null,
+      waist_cm: waistCm ?? null,
+      head_circumference_cm: headCircumferenceCm ?? null,
+    }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    throw new Error(err.detail || "Could not get a size recommendation");
+  }
+
+  return response.json();
+}

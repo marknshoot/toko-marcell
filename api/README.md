@@ -92,6 +92,8 @@ from booting, and catalog browsing never pays for a search model it does not use
 | `GET` | `/products/{id}` | Single product · `404` missing · `422` invalid id |
 | `GET` | `/products/{id}/reviews` | Reviews + rating breakdown for a numeric product id |
 | `GET` | `/search` | Hybrid/BM25/vector/trimodal search: `q`, `mode`, `department`, `category`, `limit`, `offset` |
+| `GET` | `/sizing/{asin}` | Category-aware size-kind + required inputs for one product; no LLM · `404` unknown ASIN |
+| `POST` | `/sizing/recommend` | Deterministic size advice from body measurements; `extra="forbid"`, bounds, write rate limit |
 | `POST` | `/search/image` | Visual similarity search from an uploaded image (multipart `file`) |
 | `POST` | `/search/reindex` | Rebuild the in-memory BM25 index and drop the facet cache → `202` |
 | `GET` | `/recs/popular` | Popularity baseline (optionally by `department`) |
@@ -156,6 +158,7 @@ api/
 │   ├── reviews.py            # GET /products/{id}/reviews
 │   ├── events.py             # POST /events, GET /events/summary (funnel, revenue, cohorts, quality)
 │   ├── checkout.py           # POST /checkout/confirm, GET /orders/{token}
+│   ├── sizing.py             # GET /sizing/{asin}, POST /sizing/recommend (no LLM)
 │   └── copilot.py            # POST /copilot/chat, /chat/stream, /feedback; GET /tools, /threads/{id}
 ├── search.py                 # BM25 index, embeddings, RRF, CLIP encoders (ONNX)
 ├── reranker.py               # Stage-2 ONNX cross-encoder (ms-marco-MiniLM-L-6-v2)
@@ -165,10 +168,10 @@ api/
 ├── copilot_tools.py          # the 7 deterministic @tool functions bound to the agent
 ├── copilot_llm.py            # provider fallback chain (OpenRouter → generic → Gemini) + fake LLM
 ├── copilot_memory.py         # LangGraph PostgresSaver checkpointer + thread activity / TTL cleanup
-├── sizing.py                 # deterministic recommend_size logic (TB/BB chart + brand cut rules)
+├── sizing.py                 # category-aware recommend_size: size_kind dispatch + honest fallback
 ├── rate_limiter.py           # sliding-window per-IP rate limiter for /copilot/chat
 ├── knowledge_seed.py         # markdown → embedded store_knowledge chunks + hypothetical questions
-├── knowledge/                # authored RAG source: size_charts.md, store_policies.md, size_chart.json
+├── knowledge/                # authored RAG source: size_charts.md, size_chart.json, size_kind_map.json, catalog_categories.json
 └── tests/                    # pytest suite (unit + live API integration)
 ```
 
@@ -334,9 +337,9 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
 |---|---|---|
 | `search_catalog` | BM25 + multilingual MiniLM (`embedding_ml`, pgvector) fused with RRF, optional reranker, department/category/budget filters | bilingual product discovery |
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
-| `recommend_size` | `sizing.py` (TB/BB, 2-layer: store baseline chart → brand cut rule) | advisory sizing, framed as guidance never a certainty |
+| `recommend_size` | `sizing.py` (`size_kind` dispatch: TB/BB, foot length, waist, or head circumference) + demo brand cut rules | advisory sizing; unsupported categories return `applicable=false` instead of a guessed S/M/L |
 | `build_outfit` | catalog search for top + bottom + shoes | the total is **summed and verified ≤ budget in code**, not by the LLM |
-| `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` + IDF-weighted lexical RRF | bilingual sizing (TB/BB), shipping, returns, QRIS demo |
+| `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` + IDF-weighted lexical RRF | bilingual sizing (category-aware), shipping, returns, QRIS demo |
 | `add_to_cart` | re-reads `products.price_idr` server-side | returns a `ui_action` the browser executes |
 | `flag_unanswered` | no DB read; sets `ToolContext.unanswered` so the turn recorder logs the truncated question | honest fallback when tool evidence cannot answer; never guess |
 
@@ -344,6 +347,16 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
 sizing, store policy, and outfit-under-budget — while product discovery stays short and points
 shoppers to the store search bar. There is deliberately **no order-status tool**: checkout is a demo
 simulation with no fulfillment, shipping or tracking to report on.
+
+### No-LLM sizing endpoints
+
+| Endpoint | Contract |
+|---|---|
+| `GET /sizing/{asin}` | `{asin, size_kind, applicable, required_inputs, reason}`. `404` for an unknown ASIN. |
+| `POST /sizing/recommend` | `{asin, height_cm?, weight_kg?, foot_length_cm?, waist_cm?, head_circumference_cm?}` (`extra="forbid"`, body-plausible bounds). Returns the core recommendation; `404` unknown ASIN, `429` write rate limit. |
+
+The product page (`shop/src/components/SizeAdvisor.js`) uses these endpoints to render adaptive
+inputs and a source/confidence badge, without calling an LLM or opening chat.
 
 ### Middleware
 
@@ -396,21 +409,29 @@ in `copilot_quality`.
 - Every product in a reply comes from a tool result; the prompt forbids invented brands, ASINs,
   stock or discounts, and the tool results are the only catalog data in context.
 - Prices are always IDR, always from `products.price_idr`; `add_to_cart` re-reads the price server-side.
-- Sizing is answered by the deterministic `recommend_size` tool and framed as guidance, applying the
-  authored brand cut rules in `knowledge/size_chart.json` (the structured source of truth, labelled
-  *panduan umum toko*) and explained in `knowledge/size_charts.md`. Sizing and fit come **only** from
-  that knowledge base — no per-product or review-derived signal.
+- Sizing is answered by the deterministic, category-aware `recommend_size` tool and framed as
+  guidance. It first maps the product's `(department, category)` through
+  `knowledge/size_kind_map.json`, then uses the matching layer in `knowledge/size_chart.json`:
+  TB/BB for tops/bottoms/dress, foot length for footwear, waist for belts, head circumference for
+  headwear. Luggage is dimensions, one-size accessories need no body measurement, and
+  lingerie/kids/swimwear/costumes/unknown categories return `applicable=false` with a reason. The
+  demo brand cut rules are applied only after the category baseline. Sizing and fit come **only**
+  from that knowledge base — no per-product or review-derived signal.
 - Outfit budgets are summed and verified in code, not by the LLM.
 - Off-topic, coding, SQL, academic, medical/legal and prompt-injection requests are stopped by the
   deterministic guardrail with **zero LLM calls**.
 
 **Knowledge ingestion & RAGAS evaluation.** `knowledge_seed.py` splits `knowledge/*.md` by section header,
 embeds each chunk with `TEXT_EMBED_MODEL` (`paraphrase-multilingual-MiniLM-L12-v2`) into `store_knowledge`
-(**23 chunks**, HNSW index), and generates 3–5 bilingual (ID+EN) hypothetical questions per chunk into
-`store_knowledge_questions` (**82** questions). At query time, `lookup_store_policy` fuses
+(**34 chunks**, HNSW index), and generates 3–5 bilingual (ID+EN) hypothetical questions per chunk into
+`store_knowledge_questions` (**120** questions). At query time, `lookup_store_policy` fuses
 hypothetical-question vectors, direct-chunk vectors, and IDF-weighted lexical keywords via RRF (`k=60`),
-achieving **1.0000 Context Recall** and **0.9167 Context Precision** in RAGAS evaluation
+achieving **1.0000 Context Recall** and **0.8750 Context Precision** in RAGAS evaluation
 (`../pipelines/eval_rag.py`).
+
+`seed_knowledge()` returns early when `sizing_example` rows already exist. After editing
+`knowledge/size_charts.md`, run `python -m knowledge_seed` from `api/` (the module's `__main__`
+forces a reload) instead of relying on startup seeding.
 
 ---
 
@@ -573,8 +594,8 @@ orders           (id BIGSERIAL, token UNIQUE, total_idr, item_count, status, ses
 order_items      (id BIGSERIAL, order_id → orders, asin, title, qty, unit_price_idr)
 item_recommendations (asin PRIMARY KEY, recs JSONB)
 reviews          (id SERIAL, asin, rating, summary, comment, author, verified, review_date, created_at)
-store_knowledge  (id SERIAL, category, title, content, embedding vector(384))        -- 23 chunks
-store_knowledge_questions (id SERIAL, knowledge_id → store_knowledge, question, embedding vector(384))  -- 82 hypothetical questions
+store_knowledge  (id SERIAL, category, title, content, embedding vector(384))        -- 34 chunks
+store_knowledge_questions (id SERIAL, knowledge_id → store_knowledge, question, embedding vector(384))  -- 120 hypothetical questions
 copilot_thread_activity (thread_id, last_touch)   -- sidecar for the 7-day TTL cleanup
 ```
 

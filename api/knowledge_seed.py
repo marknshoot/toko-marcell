@@ -121,7 +121,10 @@ def _chunk_markdown(filepath: str, default_category: str) -> list[dict]:
         header_lower = header.lower()
         if "example" in header_lower:
             category = "sizing_example"
-        elif any(brand in header_lower for brand in ["dickies", "levi", "carhartt", "birkenstock", "toms", "champion"]):
+        elif any(
+            re.search(rf"\b{re.escape(brand)}\b", header_lower)
+            for brand in ["dickies", "levi", "carhartt", "birkenstock", "toms", "champion"]
+        ):
             category = "brand_sizing"
         elif "size" in header_lower or "tops" in header_lower or "bottoms" in header_lower or "footwear" in header_lower:
             category = "sizing_baseline"

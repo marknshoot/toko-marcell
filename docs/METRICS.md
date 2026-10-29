@@ -455,7 +455,8 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | Guardrail short-circuit rate | Live (phase 9) | `turns with outcome='guardrail' / all copilot turns` | `copilot_turns.outcome` → `copilot_quality.guardrail_rate` | Counts every deterministic label, including greetings; it is not only unsafe blocks. False positives need the phase-14 golden set. |
 | Items per order | Computable now, not exposed | `SUM(orders.item_count) / COUNT(orders)` or `SUM(order_items.qty) / COUNT(DISTINCT order_id)` | `orders.item_count`, `order_items.qty` | Same simulation caveats as AOV; no cancellation model. |
 | Offline retrieval quality | Live (offline) | nDCG@10, MRR@10, HR@10, P@10 over a fixed query set | [`search_eval_multilingual.json`](../pipelines/results/search_eval_multilingual.json), [`search_eval.json`](../pipelines/results/search_eval.json) | 32 queries, authored relevance labels; a proxy, not online behaviour. |
-| Offline policy/size-guide RAG | Live (offline) | RAGAS Context Precision / Recall at k=3 | [`rag_eval.json`](../pipelines/results/rag_eval.json) | 12 bilingual queries; measures retrieval, not answer correctness or fit accuracy. |
+| Offline policy/size-guide RAG | Live (offline) | RAGAS Context Precision / Recall at k=3 | [`rag_eval.json`](../pipelines/results/rag_eval.json) | 12 bilingual queries; measures retrieval, not answer correctness or fit accuracy. Current committed run: recall 1.0000, context precision 0.8750. |
+| Sizing category coverage | Live (structural) | Share of seed `(department, category)` pairs with an explicit `size_kind` | [`catalog_categories.json`](../api/knowledge/catalog_categories.json), [`size_kind_map.json`](../api/knowledge/size_kind_map.json) | 260/260 pairs mapped; this is coverage, **not** fit accuracy. The map is authored and some ambiguous categories stay `unsupported`. |
 | Offline recommendation ranking | Live (offline) | Sequential leave-one-out HR@10 / HR@5 / MRR@10 / nDCG@10 | [`recs_eval.json`](../pipelines/results/recs_eval.json) | 5,000 sampled active users, seed 42; offline holdout, not online CTR. |
 
 ---
@@ -467,6 +468,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | 8 | Dictionary and business framing only; no new metric is computed. |
 | 9 (shipped) | AOV/revenue from `orders`; `copilot_turns` logging (latency, tools, guardrail, outcome, tokens); `copilot_feedback` + thumbs UI; copilot-user vs non-user cohorts (descriptive); `copilot_quality` aggregate (unanswered/guardrail/latency/thumbs). |
 | 10 (shipped) | `outcome='unanswered'` logging through `flag_unanswered` (question stored, 300-char cap); copilot refocused on sizing, policy and outfit jobs. |
+| 10b (shipped) | Category-aware sizing: every seed `(department, category)` pair mapped to an explicit size kind; tops/bottoms/dress use authored men's/women's TB/BB charts, footwear/waist/belt/headwear use cited standards, brand offsets marked `source=demo`; `GET /sizing/{asin}` + `POST /sizing/recommend` and a no-LLM product-page advisor. **No fit-accuracy metric** — coverage is structural, not a quality claim. |
 | 11 | `GET /search/insights`: top zero-result queries and search-to-PDP by mode; ID→EN rewrite fallback. |
 | 12 | `GET /admin/kpi`: funnel, cohorts, deflection, unanswered, search health, cost, p50/p95; `synthetic` badge. |
 | 13 | Cost per turn, cost per conversation, cost per resolved conversation and cost per assisted order; SLOs and cache. |
