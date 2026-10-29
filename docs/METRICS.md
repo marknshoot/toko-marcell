@@ -1,13 +1,16 @@
 # KPI dictionary — Toko Marcell
 
 Every business metric this repository exposes **or plans to expose**, with its definition, formula,
-source and caveats. Companion to the [business case](./BUSINESS_CASE.md); engineering details live in
-the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`](../pipelines/BENCHMARKS.md)).
+source and caveats. Companion to the [business case](./BUSINESS_CASE.md) and
+[synthetic case study](./CASE_STUDY.md); engineering details live in the [README](../README.md) and
+the benchmark provenance ledger ([`BENCHMARKS.md`](../pipelines/BENCHMARKS.md)).
 
 > **Source-of-truth rule.** Money metrics come from server-confirmed `orders` / `order_items`, never
 > from browser-posted events. Checkout confirm writes `purchase_mock` server-side today, but the public
 > `POST /events` endpoint also accepts `purchase_mock` from any client, and historical rows may be
-> browser-asserted. Treat `purchase_mock` as a directional funnel signal, not revenue.
+> browser-asserted. Treat `purchase_mock` as a directional funnel signal, not revenue. Phase-15
+> simulator orders are written server-side but are still synthetic; they must never be quoted as
+> real revenue.
 
 ## Status legend
 
@@ -15,6 +18,7 @@ the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`
 |---|---|
 | **Live** | Computed today by a committed endpoint or query. Values can be quoted with the caveats below. |
 | **Live (proxy)** | Computed today, but the metric is a proxy for the business quantity, not the quantity itself. |
+| **Live (synthetic)** | Computed from deterministic simulator rows, not customers. Quote only with an explicit synthetic label; never as revenue, lift or ROI. |
 | **Planned (phase N)** | Not exposed yet. The formula and source are the design contract; do not quote a value until the phase ships. |
 
 ## Conventions
@@ -54,6 +58,7 @@ the [README](../README.md) and the benchmark provenance ledger ([`BENCHMARKS.md`
 | [Latency p50 and p95](#latency-p50-and-p95) | Live (phase 9; dashboard phase 12) | `copilot_turns.latency_ms` → `GET /events/summary`, `GET /admin/kpi` |
 | [SLOs](#service-level-objectives) | Live (policy, phase 13) | [`SLOS.md`](./SLOS.md); search/image/sizing/TTFT timing not yet persisted |
 | [Copilot business scenario benchmark](#copilot-business-scenario-benchmark) | Live (CI, phase 14) | [`pipelines/results/copilot_eval.json`](../pipelines/results/copilot_eval.json) |
+| [Synthetic traffic simulation](#synthetic-traffic-simulation) | Live (synthetic, phase 15) | [`scripts/simulate_traffic.py`](../scripts/simulate_traffic.py) → [`CASE_STUDY.md`](./CASE_STUDY.md) |
 
 ---
 
@@ -566,6 +571,46 @@ uses `lookup_store_policy(k=3)`.
 
 ---
 
+## Synthetic traffic simulation
+
+**Status:** Live (synthetic, phase 15). [`scripts/simulate_traffic.py`](../scripts/simulate_traffic.py)
+writes deterministic, seeded journeys into `events`, `orders`/`order_items`, `copilot_turns` and
+`copilot_feedback`; [`CASE_STUDY.md`](./CASE_STUDY.md) interprets one run. Every session id starts
+with `sim_sess_`, every order token with `sim_ord_`, and every copilot thread with `sim_thr_`.
+
+**This is a simulation, not a live metric.** The simulator is useful for demonstrating the
+instrumentation and the business mechanism; its probabilities are authored, not fitted to customer
+behaviour. Never quote a simulator number as revenue, lift, ROI or production traffic.
+
+| Simulated metric | Definition | Source |
+|---|---|---|
+| Cohort conversion rate | distinct sessions with a paid `orders` row / cohort sessions | `orders.session_id` + simulator cohort map |
+| Cohort AOV | cohort paid-order revenue / cohort paid orders | `orders.total_idr` |
+| Revenue per session | cohort paid-order revenue / cohort sessions | `orders` + simulator cohort map |
+| Add-to-cart session rate | sessions with an `add_to_cart` event / cohort sessions | `events` |
+| Policy deflection | policy sessions with an `answered`/`cart` turn / policy sessions | `copilot_turns` |
+| Outfit budget violation | outfit order with `total_idr > budget_idr` or `item_count < 2` | `orders`, `order_items`, simulator budget |
+| Cost per assisted order | simulated `SUM(cost_usd)` / assisted `orders` | `copilot_turns`, `orders` |
+
+The seed-42 / 300-session run is documented in [`CASE_STUDY.md`](./CASE_STUDY.md):
+baseline conversion **7.4%** vs copilot-assisted **30.3%**, AOV **Rp378,270** vs **Rp764,190**, and
+estimated cost per assisted order **$0.001593**. Those are **simulation outputs**, not causal lift or
+revenue. The simulator validates all ids, order arithmetic and outfit budgets before writing; run it
+with `--reset-sim-only` to replace prior simulation rows instead of double-counting them.
+
+**Caveats:**
+
+- The simulator does not call the LLM, search, sizing or RAG code; it writes the telemetry those paths
+  would produce.
+- Probabilities are assumptions. They demonstrate direction and instrumentation, not an effect size.
+- There is no A/B holdout; cohort comparison remains correlational even inside the simulation.
+- Checkout, inventory, payment and fulfilment remain simulated; no margin, refund or support-cost
+  data exists.
+- Token cost uses configured planning prices, not a provider invoice; guardrail and cache savings are
+  not credited in the simulator.
+
+---
+
 ## Supporting telemetry
 
 These are useful for trust and diagnosis, but they are not north-star or revenue metrics.
@@ -578,6 +623,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | Offline policy/size-guide RAG | Live (offline) | RAGAS Context Precision / Recall at k=3 | [`rag_eval.json`](../pipelines/results/rag_eval.json) | 12 bilingual queries; measures retrieval, not answer correctness or fit accuracy. Current committed run: recall 1.0000, context precision 0.8750. |
 | Sizing category coverage | Live (structural) | Share of seed `(department, category)` pairs with an explicit `size_kind` | [`catalog_categories.json`](../api/knowledge/catalog_categories.json), [`size_kind_map.json`](../api/knowledge/size_kind_map.json) | 260/260 pairs mapped; this is coverage, **not** fit accuracy. The map is authored and some ambiguous categories stay `unsupported`. |
 | Offline recommendation ranking | Live (offline) | Sequential leave-one-out HR@10 / HR@5 / MRR@10 / nDCG@10 | [`recs_eval.json`](../pipelines/results/recs_eval.json) | 5,000 sampled active users, seed 42; offline holdout, not online CTR. |
+| Synthetic traffic simulation | Live (synthetic, phase 15) | Seed-42, 300-session cohort comparison; conversion, AOV, revenue/session, deflection, outfit invariants and cost per assisted order | [`scripts/simulate_traffic.py`](../scripts/simulate_traffic.py) → [`CASE_STUDY.md`](./CASE_STUDY.md) | Authored probabilities; no live A/B; no real revenue. The case study’s numbers are a demonstration of the measurement design, not an effect estimate. |
 
 ---
 
@@ -593,7 +639,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | 12 (shipped) | Token-gated `GET /admin/kpi` and `/admin/kpi` page: confirmed-order revenue/AOV, session funnel, copilot vs non-copilot cohorts, conversation-level deflection, turn outcomes, search health, p50/p95 and a mandatory `synthetic` badge. Cost is added in phase 13. |
 | 13 (shipped) | Per-turn cost from configurable per-million prices; `unit_economics` cost per turn / conversation / resolved conversation / assisted order; `GUARDRAIL_LLM_MODE=ambiguous`; 10-minute bounded policy-RAG cache; [`SLOS.md`](./SLOS.md) latency, availability, cost and fallback targets. Attainment is not yet instrumented for search/image/sizing/TTFT. |
 | 14 (shipped) | Committed 54-scenario business benchmark in CI: guardrail accuracy/per-label precision/recall, exact sizing contracts, outfit budget invariant, policy top-3 recall; hard failure gates. |
-| 15 | Seeded traffic simulator and case study; every simulated metric must carry a `synthetic` label. |
+| 15 (shipped) | Seeded `scripts/simulate_traffic.py` (seed 42 default, `sim_*` ids, `--dry-run`, `--reset-sim-only`) and [`CASE_STUDY.md`](./CASE_STUDY.md). Simulated cohort conversion, AOV, revenue/session, policy deflection, outfit budget invariants and token-cost estimates. **Synthetic only** — no revenue, lift or ROI claim. |
 
 ---
 

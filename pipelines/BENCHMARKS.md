@@ -208,9 +208,10 @@ are read directly from `pipelines/build_recs.py` (Tier A).
 
 | Suite | Count | Tier | Command |
 |---|---:|:---:|---|
-| Offline Unit Tests (guardrail, tools, RAGAS, search, sizing, schemas, rate limiter) | 184 passed + 1 skipped | B | `python3 -m pytest api/tests/test_rate_limiter.py api/tests/test_copilot_tools_unit.py api/tests/test_guardrail_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_copilot_metrics_unit.py api/tests/test_search_unit.py api/tests/test_sizing_unit.py pipelines/tests/test_pipeline_math.py` |
+| Offline Unit Tests (guardrail, tools, RAGAS, search, sizing, schemas, rate limiter, simulator) | 188 passed + 1 skipped | B | `python3 -m pytest api/tests/test_rate_limiter.py api/tests/test_copilot_tools_unit.py api/tests/test_guardrail_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_copilot_metrics_unit.py api/tests/test_search_unit.py api/tests/test_sizing_unit.py pipelines/tests/test_pipeline_math.py pipelines/tests/test_simulate_traffic.py` |
 | Full API Integration Suite (needs Postgres; copilot runs on fake LLM) | 292 passed + 4 skipped | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
 | Copilot Business Scenario Benchmark (needs Postgres) | 54 cases, all gates pass | A | `python pipelines/eval_copilot.py --out pipelines/results/copilot_eval.json` |
+| Traffic simulator dry-run (fallback catalog) | 100 sessions · 18 orders · 63 turns · 0 outfit-budget violations | B | `python scripts/simulate_traffic.py --dry-run --sessions 100 --seed 42` |
 | Frontend (Vitest) | 36 (7 files) | B | `cd shop && npm test` |
 
 ---

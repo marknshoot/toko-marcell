@@ -22,6 +22,7 @@
 | 📊 **IR & Multilingual benchmarks** | [`pipelines/results/search_eval_multilingual.json`](./pipelines/results/search_eval_multilingual.json) |
 | 🧪 **RAGAS evaluation results** | [`pipelines/results/rag_eval.json`](./pipelines/results/rag_eval.json) |
 | 🧭 **Copilot business-scenario benchmark** | [`pipelines/results/copilot_eval.json`](./pipelines/results/copilot_eval.json) |
+| 📈 **Synthetic business case study** | [`docs/CASE_STUDY.md`](./docs/CASE_STUDY.md) — seeded simulation, unit economics, limitations |
 | 🧾 **Benchmark source ledger** | [`pipelines/BENCHMARKS.md`](./pipelines/BENCHMARKS.md) — what each number is and how to reproduce it |
 
 > **Note on the live API:** the backend runs on Render's free tier, so it sleeps after 15 minutes of
@@ -54,13 +55,16 @@ Offline nDCG/RAGAS/HR numbers are proxies on small evaluation sets; they justify
 not a revenue claim. The live funnel endpoint reports its own caveats; AOV and cohorts are now
 order-derived (phase 9), but the orders are still simulation rows.
 
-**Full business case** — personas, five falsifiable hypotheses, KPI tree, non-goals and honest
-limitations: **[docs/BUSINESS_CASE.md](./docs/BUSINESS_CASE.md)**. Every metric with its definition,
-formula, source table and caveats: **[docs/METRICS.md](./docs/METRICS.md)**.
+**Full business case** — personas, six falsifiable hypotheses, KPI tree, non-goals and honest
+limitations: **[docs/BUSINESS_CASE.md](./docs/BUSINESS_CASE.md)**. The seeded simulation and
+portfolio case study: **[docs/CASE_STUDY.md](./docs/CASE_STUDY.md)**. Every metric with its
+definition, formula, source table and caveats: **[docs/METRICS.md](./docs/METRICS.md)**.
 
 **What is not claimed:** revenue, profit, ROI, provider-invoice cost or measured SLO attainment.
 Checkout is a simulation, there is no inventory or margin data, cohort comparison is correlational (no
-live A/B), cost is a configured estimate, and brand size rules are authored demo data. See [Honest limitations](#-honest-limitations--what-is-not-built).
+live A/B), cost is a configured estimate, and brand size rules are authored demo data. The phase-15
+case study is synthetic: its journey probabilities are authored, so its cohort differences are not
+lift. See [Honest limitations](#-honest-limitations--what-is-not-built).
 
 ---
 
@@ -397,6 +401,11 @@ captures relevance a bi-encoder cannot — the standard two-stage retrieve-then-
    sizing, outfit and policy functions. The JSON artifact records per-case expected/actual values and
    hard CI gates: guardrail accuracy ≥95%, sizing accuracy 100%, zero outfit-budget violations, and
    policy top-3 recall ≥90% ([`pipelines/results/copilot_eval.json`](./pipelines/results/copilot_eval.json)).
+4. **Synthetic traffic (`scripts/simulate_traffic.py`)**: Generates deterministic, seeded shopper
+   journeys across baseline/sizing/policy/outfit cohorts and writes `events`, `orders`,
+   `copilot_turns` and `copilot_feedback`; `--dry-run` validates without writing. The business
+   interpretation, unit economics and limitations are in
+   [`docs/CASE_STUDY.md`](./docs/CASE_STUDY.md).
 
 ---
 
@@ -811,6 +820,31 @@ Two cost controls are implemented alongside the model:
 
 ---
 
+## 📈 Synthetic case study — what the simulator shows
+
+The final phase adds a deterministic traffic simulator, not a real-traffic claim:
+
+```bash
+python scripts/simulate_traffic.py --dry-run --sessions 100 --seed 42
+DATABASE_URL=postgresql://toko:toko@localhost:5432/toko \
+  python scripts/simulate_traffic.py --reset-sim-only --sessions 300 --seed 42
+```
+
+Every session is `sim_sess_*`, every order `sim_ord_*`, every copilot thread `sim_thr_*`.
+`--reset-sim-only` replaces prior simulation rows; running without it refuses to double-count.
+The seed-42 / 300-session run writes realistic multi-step journeys and reports cohort conversion,
+AOV, revenue/session, policy deflection and outfit-budget invariants.
+
+> **SYNTHETIC / SIMULATION CASE STUDY — All business outcomes are demonstrated via deterministic
+> seeded simulation; no real revenue or customer data is claimed.**
+
+The full narrative — why ungrounded AI fails, H1–H4 design, baseline vs copilot-assisted outcomes,
+token cost vs incremental cart value, guardrail/cache effects and the production roadmap — is in
+**[docs/CASE_STUDY.md](./docs/CASE_STUDY.md)**. The simulator does not call the LLM, search or RAG
+code; it writes the telemetry those paths would produce, with authored probabilities.
+
+---
+
 ## 📦 The data behind it
 
 | | |
@@ -1028,6 +1062,7 @@ manual/
 ├── docs/                         # business framing, no code
 │   ├── BUSINESS_CASE.md          #   personas, problems → features → KPIs, hypotheses, KPI tree
 │   ├── METRICS.md                #   KPI definitions, formulas, sources, caveats, phase status
+│   ├── CASE_STUDY.md             #   synthetic simulator outcomes, unit economics, production roadmap
 │   └── SLOS.md                   #   latency/availability SLOs, cost budgets, fallback policy
 ├── shop/                         # Next.js 16 storefront
 │   └── src/{app,components,lib}  #   routes (incl. /admin/kpi), UI, API client, session & cart state
@@ -1046,6 +1081,8 @@ manual/
 │   ├── eval_recs.py              #   leave-one-out HR@K / MRR / nDCG harness
 │   ├── eda_interactions.py       #   sparsity, long tail, rating distribution
 │   └── migrate_to_neon.py        #   local → Neon serverless migration
+├── scripts/
+│   └── simulate_traffic.py       # deterministic synthetic journeys → events/orders/copilot tables
 ├── data/
 │   ├── seed/init.sql.gz          # COMMITTED: the seeded database dump (works without raw data)
 │   ├── knowledge/*.md            # COMMITTED: RAG source documents
@@ -1072,9 +1109,10 @@ cd shop && npm test
 
 # Backend + pipelines
 cd api && python3 -m pytest tests/          # 292 passed, 4 env-gated skips (needs a live DB)
-python3 -m pytest pipelines/tests/          #   6 tests (pipeline maths, no DB)
+python3 -m pytest pipelines/tests/          #  10 tests (pipeline maths + simulator, no DB)
 # Run after the API/docker stack has seeded the RAG knowledge base:
 python pipelines/eval_copilot.py --out pipelines/results/copilot_eval.json  # 54 scenarios
+python scripts/simulate_traffic.py --dry-run --sessions 100 --seed 42        # deterministic, no writes
 ```
 
 Every push and PR runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
@@ -1082,7 +1120,7 @@ Every push and PR runs [`.github/workflows/ci.yml`](./.github/workflows/ci.yml):
 | Job | Steps |
 |---|---|
 | **Frontend** (Node 22) | `npm ci` → `npm run lint` → `npm run test` → `npm run build` |
-| **Backend & pipelines** (Python 3.12) | Ruff → full API suite against a Postgres service restored from the seed, with `COPILOT_FAKE_LLM=1` → pipeline tests → 54-scenario copilot business benchmark |
+| **Backend & pipelines** (Python 3.12) | Ruff (`api/ pipelines/ scripts/`) → full API suite against a Postgres service restored from the seed, with `COPILOT_FAKE_LLM=1` → pipeline/simulator tests + dry-run → 54-scenario copilot business benchmark |
 | **Render Deploy Status** (`main` push) | Triggers and polls the Render deployment until `live` when `RENDER_API_KEY` and `RENDER_SERVICE_ID` secrets are configured |
 
 CI runs **Ruff + the full API suite** against a Postgres service restored from the committed seed,
