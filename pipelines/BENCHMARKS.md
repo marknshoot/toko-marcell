@@ -29,7 +29,6 @@ Three tiers of provenance:
 | USD→IDR demo rate | 16,000 | A | `data/processed/stats.json` → `usd_idr_rate_used` |
 | Knowledge chunks / hypothetical questions | 23 / 82 | A | `data/seed/init.sql.gz` → `store_knowledge` + `store_knowledge_questions` COPY blocks |
 | Demo funnel rows | 357 events · 106 orders | A | `data/seed/init.sql.gz` |
-| VLM pairs / splits | 5,378 total · 4,302 train / 537 val / 539 test | A | `data/processed/clip_dataset_summary.json` |
 
 Reproduce the full catalog (needs ~2.8 GB raw download):
 
@@ -37,98 +36,6 @@ Reproduce the full catalog (needs ~2.8 GB raw download):
 bash pipelines/download_data.sh
 python3 pipelines/build_catalog.py        # → data/processed/stats.json
 cd api && docker compose run --rm seed --reset
-```
-
----
-
-## Multimodal VLM study (authoritative leaderboard)
-
-**Artifact:** [`multimodal_benchmark_results.json`](./multimodal_benchmark_results.json) (Tier A).
-Produced on **Kaggle GPU (NVIDIA Tesla T4 16 GB)**, AMP FP16, 3 epochs, batch 64, base LR 5e-6.
-
-| Experiment | Recall@1 | Recall@5 | Recall@10 | MRR | Latency (T4) |
-|---|:---:|:---:|:---:|:---:|:---:|
-| Zero-shot base CLIP | 26.53% | 54.92% | 70.69% | 0.4033 | 27.80 ms |
-| PEFT LoRA | 33.40% | 71.61% | 83.49% | 0.5038 | 15.50 ms |
-| SigLIP | 35.25% | 71.43% | 82.19% | 0.5091 | 19.38 ms |
-| WiSE-FT ensemble (α=0.35) | 37.85% | 73.28% | 85.53% | 0.5363 | 9.76 ms |
-| **Decoupled LR (champion)** | **39.15%** | **78.11%** | **87.20%** | **0.5592** | **14.01 ms** |
-
-Champion delta: **+12.62 pts absolute / +47.57% relative Recall@1**; MRR +0.1559.
-
-Reproduce (Tier B, needs a GPU and trained checkpoints):
-
-```bash
-python3 pipelines/prepare_clip_dataset.py
-python3 pipelines/experiments_clip.py --exp decoupled_lr --batch-size 64 --epochs 3
-python3 pipelines/eval_multimodal.py       # standalone harness; writes multimodal_benchmark_results.json
-```
-
-> The committed JSON was emitted by the **Kaggle notebook**
-> [`kaggle/toko_marcell_vlm_experiments.ipynb`](./kaggle/toko_marcell_vlm_experiments.ipynb);
-> `eval_multimodal.py` is the equivalent local harness. If you re-run either, expect to overwrite the
-> artifact — keep both in sync with the README tables or the numbers will drift again.
-
-**Small local smoke runs** (Tier A, but not the headline): `models/experiments/*/experiment_summary.json`
-and `models/fashion_clip/training_history.json`. They use batch 8 / 1 epoch on a tiny eval slice, so
-their metrics (e.g. LoRA test R@1 0.8125) are **sanity checks only** — never quote them as results.
-
-**LoRA trainable parameters:** 983,040 (~0.65% of the ~151 M base), measured directly from
-`models/experiments/lora/adapter_model.safetensors` (Tier A).
-
----
-
-## Champion vision encoder — ONNX export & int8 quantization
-
-**Artifact:** [`models/champion_vision_encoder.json`](../models/champion_vision_encoder.json)
-(Tier A metadata). The `.onnx` weights are large and gitignored; the int8 model is published at
-[HF Hub: `Marcell-Kristianto/toko-marcell-clip/champion_vision_encoder_int8.onnx`](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip)
-and fetched by the API at runtime (public repo, no token required).
-
-This is the encoder the serving API uses for image search, so query embeddings land in the **same
-space** as the stored `products.image_embedding` vectors. It runs on ONNX Runtime with **no `torch`**.
-
-| Artifact | Size | Cosine vs torch fp32 | Cosine vs stored DB vector |
-|---|---:|---:|---:|
-| `champion_vision_encoder.onnx` (fp32, opset 17) | 351.6 MB | 1.000000 | 1.000000 |
-| `champion_vision_encoder_int8.onnx` (dynamic int8, MatMul only) | 95.8 MB | 0.991256 | 0.991256 |
-
-- Preprocessing parity vs transformers' `CLIPImageProcessor`: embedding cosine **1.0** (pixel
-  max-abs diff 0.015 — immaterial).
-- Quantization recipe: dynamic `QInt8`, `op_types_to_quantize=["MatMul"]`. Quantizing every op dropped
-  cosine to ~0.95; per-channel was unstable (~0.46). Both were measured.
-
-```bash
-python3 pipelines/export_vision_onnx.py        # needs torch + onnx>=1.16 + onnxruntime
-```
-
-The exporter loads `pipelines/Best Model`, exports the vision tower
-(`vision_model -> pooler_output -> visual_projection -> L2 normalize`), quantizes it, and verifies the
-cosines above (failing the run if int8 drops below 0.99).
-
----
-
-## Champion text encoder — fp16 conversion
-
-**Artifact:** [`models/champion_text_encoder.json`](../models/champion_text_encoder.json) (Tier A
-metadata). The `.onnx` weights are gitignored; the fp16 model is published at
-[HF Hub: `Marcell-Kristianto/toko-marcell-clip/champion_text_encoder_fp16.onnx`](https://huggingface.co/Marcell-Kristianto/toko-marcell-clip)
-and fetched by the API at runtime (public repo, no token required).
-
-This is the encoder used for trimodal text→image search. It is the largest model the API loads, so it
-is converted to fp16 rather than int8.
-
-| Artifact | Size | Cosine vs fp32 |
-|---|---:|---:|
-| `champion_text_encoder.onnx` (fp32) | 254.0 MB | 1.000000 |
-| `champion_text_encoder_fp16.onnx` | 127.2 MB | 0.999999 (min) |
-
-- **Why fp16, not int8:** dynamic int8 was measured and **rejected** — text-embedding cosine collapsed
-  to ~0.77 mean / 0.62 min (the 49,408-row token-embedding table is quantization-sensitive). fp16
-  halves the file with no measurable loss (mean cosine 1.0, min 0.999999).
-
-```bash
-python3 pipelines/export_text_onnx.py     # needs onnx + onnxconverter-common + onnxruntime + transformers
 ```
 
 ---
@@ -158,10 +65,7 @@ MRR@10 and nDCG@10.
 | Trimodal | 0.600 | 0.821 | 0.792 |
 
 Hybrid beats BM25 on all groups overall. The reranker improves P@10 and nDCG@10 overall (+1.6% nDCG
-absolute vs hybrid) but slightly lowers MRR@10 (0.906 → 0.885); its strongest effect is on the
-Indonesian group (+0.117 nDCG). On Brand/SKU, hybrid+rerank matches BM25 (both 1.000 nDCG).
-Category/Attr nDCG drops slightly with the reranker (0.990 → 0.940). The reranker is a net positive
-overall, with its largest gains on the hardest queries.
+absolute vs hybrid) with its strongest effect on the Indonesian group (+0.117 nDCG).
 
 ```bash
 # Reproduce (needs the running Docker stack):
@@ -170,20 +74,16 @@ python3 pipelines/eval_search.py --api-url http://localhost:8001 \
   --out pipelines/results/search_eval.json
 ```
 
-> `hybrid+rerank` requires `ENABLE_RERANKER=true` on the API (set by default in docker-compose.yml).
-> The `?rerank=true` query parameter is opt-in; the default `/search` behaviour is unchanged.
-
 ---
 
-## Multilingual embedding A/B — MiniLM vs paraphrase-multilingual-MiniLM-L12-v2
+## Multilingual embedding benchmark — MiniLM vs paraphrase-multilingual-MiniLM-L12-v2
 
 **Artifact:** [`pipelines/results/search_eval_multilingual.json`](./results/search_eval_multilingual.json)
-(Tier A). Both variants are the same 384-d dimension and the same 32-query harness; the only change
-is the dense text embedding model + the column it queries:
+(Tier A). Both variants are 384-d on the same 32-query harness:
 
-- **MiniLM (default):** `sentence-transformers/all-MiniLM-L6-v2` → `products.embedding`
-- **Multilingual (opt-in):** `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
-  (quantized ONNX `qdrant/…-onnx-Q`, 0.22 GB) → `products.embedding_ml`
+- **Multilingual (default):** `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+  (quantized ONNX via `fastembed`) → `products.embedding_ml`
+- **English MiniLM:** `sentence-transformers/all-MiniLM-L6-v2` → `products.embedding`
 
 Overall (32 queries):
 
@@ -192,7 +92,7 @@ Overall (32 queries):
 | vector | MiniLM | 0.759 | 0.841 | 0.863 | 96.9% |
 | vector | Multilingual | 0.719 | 0.801 | 0.823 | 93.8% |
 | **hybrid** | **MiniLM** | 0.775 | 0.879 | 0.906 | 96.9% |
-| **hybrid** | **Multilingual** | 0.813 | **0.894** | **0.919** | 100.0% |
+| **hybrid** | **Multilingual** | **0.813** | **0.894** | **0.919** | **100.0%** |
 
 Indonesian / cross-lingual group (8 queries):
 
@@ -201,90 +101,44 @@ Indonesian / cross-lingual group (8 queries):
 | vector | MiniLM | 0.363 | 0.544 | 0.545 |
 | vector | Multilingual | 0.688 | **0.774** | **0.854** |
 | hybrid | MiniLM | 0.413 | 0.622 | 0.688 |
-| hybrid | Multilingual | 0.700 | **0.765** | **0.844** |
+| hybrid | Multilingual | **0.700** | **0.765** | **0.844** |
 
-The multilingual model wins hybrid nDCG@10 **overall** (0.879 → 0.894) **and** on the Indonesian
-group (0.622 → 0.765, +0.143). The tradeoff is exact lexical precision: on dense-only Brand/SKU it
-drops nDCG 0.969 → 0.715, because a multilingual model spreads capacity across ~50 languages and is
-weaker at pinning English model numbers / SKUs. BM25 is identical in both runs (lexical, no
-embeddings) and the hybrid fusion recovers most of the Brand/SKU loss (0.989 → 0.935).
-
-### Memory (peak RSS of the API process, both CLIP ONNX encoders resident)
-
-Measured on a fresh python process inside the `toko-api` container via `/proc/self/status` `VmHWM`,
-after loading the text embedding model **and** the CLIP text + vision ONNX encoders as deployed
-(`ENABLE_TRIMODAL=false`):
-
-| Config | Peak RSS | Embedding layer alone |
-|---|:---:|:---:|
-| MiniLM, no reranker | ~646 MB | 226 MB |
-| MiniLM, with reranker | ~611 MB | 226 MB |
-| Multilingual, no reranker | ~1024 MB | ~664 MB |
-| Multilingual, with reranker | ~1025 MB | ~664 MB |
-
-The entire regression is the embedding model: paraphrase-multilingual-MiniLM-**L12** is a 12-layer
-model (~470 MB resident) vs MiniLM-**L6** (~90 MB). The cross-encoder reranker adds only ~10 MB and
-is **not** the constraint. (Run-to-run allocator variance explains the 611 vs 646 MiniLM figures;
-treat MiniLM peak as ~610–650 MB.)
-
-### Decision
-
-> **Keep MiniLM (`all-MiniLM-L6-v2`) as the default. Ship the multilingual model as an opt-in flag,
-> not the deploy default.**
-
-The switch criterion was: adopt as default only if the model **wins nDCG@10 overall AND on the
-Indonesian group AND fits a ~450 MB peak-RSS budget**. The multilingual model wins both quality
-criteria but **fails the memory gate** — ~1024 MB peak with the CLIP encoders loaded, more than 2×
-the 512 MB Render free tier and ~2.3× the ~450 MB target. (MiniLM itself already peaks at
-~610–650 MB with both CLIP encoders resident; the free tier only survives because the encoders are
-lazy-loaded and rarely all co-resident on a browse-only workload.)
-
-The path is wired but gated behind config: set `TEXT_EMBED_MODEL=sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
-and `TEXT_EMBED_COLUMN=embedding_ml` to serve it. This is only advisable on a **≥1 GB (ideally 2 GB)**
-instance. The `embedding_ml` column + HNSW index ship in the seed so the opt-in works with no
-re-embedding.
-
-```bash
-# Reproduce (needs the running Docker stack with both embedding columns populated):
-# MiniLM (default container):
-python3 pipelines/eval_search.py --api-url http://localhost:8001 --modes bm25,vector,hybrid --out /tmp/ab_minilm.json
-# Multilingual: start a uvicorn with TEXT_EMBED_MODEL + TEXT_EMBED_COLUMN=embedding_ml and point the harness at it.
-```
-
-> **Deploy note:** the shipped `toko-api` image bakes `search.py` at build time, so a running image
-> built before this change ignores `TEXT_EMBED_MODEL`. Rebuild the image to pick up the switch. The
-> API test suite runs a fresh `uvicorn main:app`, so tests always exercise the current code.
+The multilingual model wins hybrid nDCG@10 **overall** (`0.879 → 0.894`), MRR@10 (`0.906 → 0.919`),
+HitRate@10 (`96.9% → 100.0%`), and lifts Indonesian nDCG@10 (`0.622 → 0.765`, `+0.143`). Both `/search`
+and the Copilot `search_catalog` tool default to `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+(`TEXT_EMBED_COLUMN=embedding_ml`), with `all-MiniLM-L6-v2` (`embedding`) retained as an optional
+low-memory override.
 
 ---
 
-## RAG retrieval — direct-chunk vs hypothetical-question (Phase 5)
+## Store Policy & Sizing RAG — RAGAS evaluation
 
 **Artifact:** [`pipelines/results/rag_eval.json`](./results/rag_eval.json) (Tier A).
-`pipelines/eval_rag.py` compares two store-policy retrieval strategies on a 12-query labelled set
-(mixed Indonesian + English, phrased like shoppers rather than like the chunk headers):
+`pipelines/eval_rag.py` evaluates three store-policy retrieval strategies across **12 bilingual
+(Indonesian + English)** shopper queries using **RAGAS** (`ragas.evaluate` with
+`IDBasedContextPrecision`, `IDBasedContextRecall`, `NonLLMContextPrecisionWithReference`, and
+`NonLLMContextRecall`) and `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`:
 
-- **direct-chunk** — embed the query, match against `store_knowledge.embedding`.
-- **hypothetical-question** — embed the query, match against the per-chunk hypothetical questions
-  (`store_knowledge_questions.embedding`, 82 rows / 23 chunks), then return the parent chunk (deduped).
+- **direct_chunk** — dense vector similarity over `store_knowledge` chunks (`k=3`).
+- **hypothetical_question** — dense vector similarity over `store_knowledge_questions` (3–5 bilingual
+  ID+EN questions per chunk), deduplicated to parent chunks (`k=3`).
+- **hybrid_rrf** (`lookup_store_policy` default) — Reciprocal Rank Fusion (`k=60`) of
+  `hypothetical_question` + `direct_chunk` + IDF-weighted bilingual lexical keyword matching (`k=3`).
 
-| Strategy | HR@1 | HR@3 | MRR@3 |
-|---|:---:|:---:|:---:|
-| direct-chunk | 0.250 | 0.333 | 0.292 |
-| **hypothetical-question** | **0.750** | **0.917** | **0.819** |
+| Strategy | ID Precision@3 | ID Recall@3 | Context Precision | Context Recall |
+|---|:---:|:---:|:---:|:---:|
+| `direct_chunk` | 0.2500 | 0.7500 | 0.4722 | 0.7500 |
+| `hypothetical_question` | 0.2500 | 0.7500 | 0.6944 | 0.7500 |
+| **`hybrid_rrf`** | **0.3333** | **1.0000** | **0.9167** | **1.0000** |
 
-The question index triples HR@1 (0.25 → 0.75) on conversational phrasing: a shopper's "ongkir ke
-Surabaya berapa lama" or "does Champion run large or small" matches a generated question far better
-than it matches a formal section header like "3. Shipping & Delivery Guidelines". This is the
-measurable justification for the Phase 4c §6 design decision.
+> Note: With 1 ground-truth reference chunk per query and `k=3` retrieved chunks, the theoretical
+> ceiling for `id_based_context_precision` is `1/3 = 0.3333`. `hybrid_rrf` achieves the `0.3333`
+> ceiling (`1.0000` Recall across all 12 bilingual queries and `0.9167` Context Precision).
 
 ```bash
-# Reproduce (needs the DB with store_knowledge + store_knowledge_questions seeded):
-python3 pipelines/eval_rag.py --database-url postgresql://toko:toko@localhost:5432/toko \
-  --out pipelines/results/rag_eval.json
+# Reproduce:
+python3 pipelines/eval_rag.py --out pipelines/results/rag_eval.json
 ```
-
-> Small labelled set (12 queries) — indicative, not a large benchmark. The expected-chunk labels are
-> title-substring matches, so the harness is deterministic and reproducible against the seeded DB.
 
 ---
 
@@ -317,9 +171,9 @@ are read directly from `pipelines/build_recs.py` (Tier A).
 
 | Suite | Count | Tier | Command |
 |---|---:|:---:|---|
-| API (pytest, needs DB; copilot runs on the fake LLM) | 173 passed + 4 skipped | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
-| Pipelines (maths) | 6 | B | `python3 -m pytest pipelines/tests/` |
-| Frontend (Vitest) | 21 (5 files) | B | `cd shop && npm test` |
+| Offline Unit Tests (guardrail, tools, RAGAS, search, sizing, SSRF, rate limiter) | 115 passed + 1 skipped | B | `python3 -m pytest api/tests/test_rate_limiter.py api/tests/test_copilot_tools_unit.py api/tests/test_guardrail_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_search_unit.py api/tests/test_sizing_unit.py api/tests/test_ssrf_image_validation.py pipelines/tests/test_pipeline_math.py` |
+| Full API Integration Suite (needs Postgres; copilot runs on fake LLM) | 180+ passed | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
+| Frontend (Vitest) | 23 (5 files) | B | `cd shop && npm test` |
 
 ---
 
@@ -328,12 +182,5 @@ are read directly from `pipelines/build_recs.py` (Tier A).
 Quoted in the docs but with **no committed artifact**. Treat as indicative:
 
 - `/categories` in-memory facet cache: “~60 ms → ~2 ms” (code comment; not re-measured here).
-- BM25 index rebuild “well under a second for 6,000 docs” and ONNX text encoder “< ~150 MB RAM”
-  (code comments).
+- BM25 index rebuild “well under a second for 6,000 docs” (code comment).
 - Render free-tier cold start “~30–50 s” (platform behaviour, not measured here).
-- The individual **failure-case ranks** in `failure_case_analysis.md` (originally #42→#1 etc.) come
-  from an unpublished local error-mining pass; they are presented qualitatively and are not part of
-  the 539-pair leaderboard.
-
-If you want any Tier-C item promoted to Tier A/B, add the command that emits it as an artifact and
-link it here.

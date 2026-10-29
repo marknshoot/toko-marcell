@@ -65,22 +65,17 @@ life of the process and would otherwise serve a stale catalog.
 | `COPILOT_FAKE_LLM` | | *(unset)* | `1` swaps in a deterministic in-process fake tool-calling model (no network, no key) so CI/tests never hit a real provider |
 | `GEMINI_API_KEY` | fallback | — | Google AI Studio key; the final link in the provider chain, used only when the others are absent |
 | `GEMINI_MODEL` | | `gemini-3.5-flash-lite` (code) / `gemini-2.5-flash` (compose) | Any Gemini chat model (fallback path) |
-| `TEXT_EMBED_MODEL` | | `sentence-transformers/all-MiniLM-L6-v2` | Dense text embedding model. The multilingual A/B uses `paraphrase-multilingual-MiniLM-L12-v2` (opt-in) |
-| `TEXT_EMBED_COLUMN` | | `embedding` | Which 384-d column the search queries. Set to `embedding_ml` to use the multilingual embeddings shipped in the seed |
+| `TEXT_EMBED_MODEL` | | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Multilingual (ID/EN) 384-d dense text embedding model (or `sentence-transformers/all-MiniLM-L6-v2` for English-only low-RAM mode) |
+| `TEXT_EMBED_COLUMN` | | `embedding_ml` | Which 384-d column `/search` and Copilot `search_catalog` query (`embedding_ml` default, or `embedding`) |
 | `CORS_ORIGINS` | | `http://localhost:3000,https://toko-marcell.vercel.app` | Comma-separated allowlist; `*` opens it up |
 | `ADMIN_TOKEN` | for reindex | — | Secret token for `POST /search/reindex`; endpoint returns `503` when unset. Docker Compose defaults to `dev-admin-token`; set a strong value in production |
 | `TRUST_PROXY` | | `false` | Set `true` on Render (behind their LB) so `X-Forwarded-For` is trusted for rate-limiting |
 | `COPILOT_RATE_LIMIT_PER_MIN` | | `10` | Max copilot requests per client IP per minute |
 | `COPILOT_RATE_LIMIT_PER_DAY` | | `100` | Max copilot requests per client IP per day |
 | `IMAGE_FETCH_ALLOWED_HOSTS` | | `images-na.ssl-images-amazon.com,m.media-amazon.com` | HTTPS hosts the copilot may fetch images from |
-| `HF_MODEL_REPO` | | `Marcell-Kristianto/toko-marcell-clip` | HF repo for the champion ONNX text encoder |
-| `CLIP_MODEL_DIR` / `CLIP_MODEL_PATH` | | auto-detected | Optional local paths for the champion CLIP **PyTorch** weights |
-| `CLIP_VISION_ONNX_PATH` | | auto-detected | Explicit path to the champion ONNX **vision** encoder |
-| `CLIP_VISION_ONNX_PREFER` | | `int8` | Prefer `int8` or `fp32` ONNX vision encoder |
-| `CLIP_TEXT_ONNX_PATH` | | auto-detected | Explicit path to the champion ONNX **text** encoder (fp16 preferred) |
-| `ENABLE_TRIMODAL` | | `false` (set `true` in local Compose) | Enable `mode=trimodal`; it loads both MiniLM and the text ONNX, so it needs ≥1 GB RAM |
-| `ENABLE_RERANKER` | | `false` (set `true` in local Compose) | Cross-encoder reranking for the copilot's `search_catalog`. Off by default because the copilot image turn otherwise peaks at ~560 MB (OOM on 512 MB); `/search` never used it |
-| `FASTEMBED_CACHE_DIR` | | `/tmp/fastembed_cache` | Cache for MiniLM/CLIP fastembed models |
+| `ENABLE_TRIMODAL` | | `false` (set `true` in local Compose) | Enable `mode=trimodal`; it loads both MiniLM and the CLIP text ONNX (`Qdrant/clip-ViT-B-32-text`), so it needs ≥1 GB RAM |
+| `ENABLE_RERANKER` | | `false` (set `true` in local Compose) | Cross-encoder reranking for `/search?rerank=true` and the copilot's `search_catalog` |
+| `FASTEMBED_CACHE_DIR` | | `/tmp/fastembed_cache` | Cache for MiniLM and CLIP `fastembed` ONNX models |
 | `HF_HUB_CACHE` | | `/tmp/hf_cache` | Cache for the ONNX cross-encoder |
 
 Models are loaded **lazily and cached per process**, so a model-download problem cannot stop the API
@@ -204,13 +199,12 @@ other rankers — which is exactly why the baseline is measured first.
 
 ### Dense + cross-modal (the vector half)
 
-- 384-d `all-MiniLM-L6-v2` sentence embeddings → `products.embedding` (HNSW cosine).
-- 512-d CLIP embeddings → `products.image_embedding` (HNSW cosine).
+- 384-d `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` sentence embeddings → `products.embedding_ml` (HNSW cosine, bilingual ID/EN default; `products.embedding` with `all-MiniLM-L6-v2` also available).
+- 512-d pre-trained CLIP embeddings (`Qdrant/clip-ViT-B-32-vision` / `Qdrant/clip-ViT-B-32-text` via `fastembed` ONNX) → `products.image_embedding` (HNSW cosine).
 - `/search?mode=` switches ranker: `bm25`, `vector`, `hybrid` (default: BM25+vector), `trimodal`
   (BM25+dense+CLIP-text). All fused lists go through **Reciprocal Rank Fusion** with `k=60`.
-  `trimodal` is the one mode that loads **both** the fastembed MiniLM model and the champion ONNX
-  text encoder, so it is **off by default** (`ENABLE_TRIMODAL=false`) and returns `400` when disabled —
-  a single such request can exceed a 512 MB instance. Local Compose sets it to `true`.
+  `trimodal` loads both the text MiniLM model and the CLIP text encoder, so it is gated behind
+  `ENABLE_TRIMODAL` (`false` on 512 MB deployments, `true` in local Compose).
 
 $$
 \text{RRF}(d) = \sum_{m \in M} \frac{1}{60 + r_m(d)}
@@ -222,23 +216,11 @@ bounded; RRF needs only ranks, so heterogeneous rankers combine with no calibrat
 ### Image search (`POST /search/image`)
 
 1. Validate MIME (`image/*`) and size (50 B–10 MB).
-2. Encode with the **fine-tuned champion CLIP vision tower** — always. It is served as a quantized
-   ONNX model (`champion_vision_encoder_int8.onnx`, ~96 MB) via ONNX Runtime, so it needs no `torch`.
-   Loaded from a mounted local path when present, otherwise fetched from `HF_MODEL_REPO` (default
-   `Marcell-Kristianto/toko-marcell-clip`).
-   Preprocessing replicates `CLIPImageProcessor` exactly (verified: embedding cosine 1.0 vs the
-   official processor, 0.991 vs the fp32 encoder).
-3. Cosine search against `image_embedding`, ordered by HNSW, returning `visualSimilarity` per item.
-
-**There is deliberately no zero-shot fallback.** The stored `image_embedding` vectors were produced by
-the fine-tuned champion; mixing in fastembed's zero-shot CLIP would silently return wrong results. If
-no champion encoder is available the endpoint returns **`503`** (“fine-tuned CLIP vision encoder is not
-loaded”) rather than a 500 or a wrong answer. A corrupt upload that still passes the MIME/size checks
-returns `400`.
-
-The response includes a `timings: { embed_ms, db_ms }` breakdown so encoding cost is never confused
-with database cost. To regenerate the ONNX encoder:
-`python3 pipelines/export_vision_onnx.py` — see [`../pipelines/README.md`](../pipelines/README.md).
+2. Offload synchronous image decoding, `fastembed` ONNX inference (`Qdrant/clip-ViT-B-32-vision`), and
+   PostgreSQL query execution to a worker thread (`asyncio.to_thread`) so the FastAPI event loop never blocks.
+3. Cosine search against `image_embedding`, ordered by HNSW, returning `visualSimilarity` per item and
+   `timings: { embed_ms, db_ms }`. To embed or refresh catalog image vectors:
+   `python3 pipelines/embed_images.py --overwrite` — see [`../pipelines/README.md`](../pipelines/README.md).
 
 ### Stage-2 cross-encoder reranking (optional, copilot only)
 
@@ -333,13 +315,16 @@ Guardrail (deterministic, 0 LLM calls)  ─ greeting / off-topic / injection →
 create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply + cards + citations
 ```
 
-1. **Deterministic guardrail (`guardrail.py`).** Before any LLM call, greetings/thanks/identity,
-   off-topic requests (code, SQL, math, politics, medical/legal, creative) and prompt-injection
-   attempts get a canned "Admin Toko Marcell" reply with **zero LLM calls**. The response carries a
-   `guardrail` tag (`greeting` | `off_topic` | `injection`). Everything else goes to the agent.
+1. **Pre-agent guardrail (`guardrail.py`).** Before the tool-calling agent runs, `classify(message, history)`
+   evaluates the user message alongside up to **3 user + 3 assistant history turns** using a fast
+   LLM classifier (with deterministic regex fast-path for pure greetings/injections and full offline
+   fallback when `COPILOT_FAKE_LLM=1`). Greetings, off-topic requests (code, SQL, math, politics,
+   medical/legal, creative) and prompt-injection attempts receive a canned "Admin Toko Marcell" reply
+   tagged with `guardrail` (`greeting` | `off_topic` | `injection`).
 2. **`create_agent` loop (`copilot_agent.py`).** The LLM plans and calls tools, iterating until it
    has an answer. A `ModelCallLimitMiddleware` caps it at **3 model calls per turn** so a free-tier
-   quota can't be drained by a loop.
+   quota can't be drained by a loop. User messages are sanitized against spoofed context headers, and
+   the injected context block is wrapped in `<store_context>` tags with explicit untrusted-data prompt rules.
 3. **Grounded answer.** The reply may only use tool evidence, in the "Admin Toko Marcell" voice
    (Indonesian or English, mirroring the shopper), with structured product cards and citations.
 
@@ -347,12 +332,12 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
 
 | Tool | Backed by | Purpose |
 |---|---|---|
-| `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, department/category (real enum)/budget filters | product discovery; the planner writes English catalog-vocabulary queries |
+| `search_catalog` | BM25 + multilingual MiniLM (`embedding_ml`, pgvector) fused with RRF, optional reranker, department/category/budget filters | bilingual product discovery |
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
-| `get_product_reviews` | `reviews`, topic filter (fit / size / fabric / durability) | aspect-level social proof |
+| `get_product_reviews` | `reviews`, topic filter (fit / size / fabric / durability, capped at 5 keywords) | aspect-level social proof |
 | `recommend_size` | `sizing.py` (TB/BB, 2-layer: store baseline chart → brand cut rule) | advisory sizing, framed as guidance never a certainty |
 | `build_outfit` | catalog search for top + bottom + shoes | the total is **summed and verified ≤ budget in code**, not by the LLM |
-| `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` (hypothetical-question RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
+| `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` + IDF-weighted lexical RRF | bilingual sizing (TB/BB), shipping, returns, QRIS demo |
 | `add_to_cart` | re-reads `products.price_idr` server-side | returns a `ui_action` the browser executes |
 
 `GET /copilot/tools` returns exactly these 7 names. There is deliberately **no order-status tool**:
@@ -406,13 +391,13 @@ Response (`CopilotChatV2Out`, or streamed via `POST /copilot/chat/stream` as SSE
 - Off-topic, coding, SQL, academic, medical/legal and prompt-injection requests are stopped by the
   deterministic guardrail with **zero LLM calls**.
 
-**Knowledge ingestion.** `knowledge_seed.py` splits `knowledge/*.md` by section header, embeds each
-chunk with MiniLM and upserts into `store_knowledge` (**23 chunks**, HNSW index), and also generates
-hypothetical questions per chunk into `store_knowledge_questions` (**82** ID+EN questions, 3–5 per
-chunk) — a cheap retrieval boost measured in `../pipelines/eval_rag.py`.
-
-See [`../pipelines/failure_case_analysis.md`](../pipelines/failure_case_analysis.md) for the
-grounding/persona rationale.
+**Knowledge ingestion & RAGAS evaluation.** `knowledge_seed.py` splits `knowledge/*.md` by section header,
+embeds each chunk with `TEXT_EMBED_MODEL` (`paraphrase-multilingual-MiniLM-L12-v2`) into `store_knowledge`
+(**23 chunks**, HNSW index), and generates 3–5 bilingual (ID+EN) hypothetical questions per chunk into
+`store_knowledge_questions` (**82** questions). At query time, `lookup_store_policy` fuses
+hypothetical-question vectors, direct-chunk vectors, and IDF-weighted lexical keywords via RRF (`k=60`),
+achieving **1.0000 Context Recall** and **0.9167 Context Precision** in RAGAS evaluation
+(`../pipelines/eval_rag.py`).
 
 ---
 
