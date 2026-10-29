@@ -119,3 +119,63 @@ def test_thread_get_and_delete():
 
     status, _ = api_request("DELETE", f"/copilot/threads/{tid}")
     assert status == 204
+
+
+# ── Feedback (phase 9) ───────────────────────────────────────────────────────
+
+def test_feedback_valid_and_summary_updates():
+    tid = str(uuid.uuid4())
+    status, body = api_request(
+        "POST", "/copilot/feedback",
+        {"thread_id": tid, "session_id": "feedback-sess-01", "rating": 1},
+    )
+    assert status == 201
+    assert body["thread_id"] == tid
+    assert body["rating"] == 1
+    assert isinstance(body["id"], int)
+
+    status, summary = api_request("GET", "/events/summary?since_days=1")
+    assert status == 200
+    quality = summary["copilot_quality"]
+    assert quality["thumbs_up"] >= 1
+    assert quality["thumbs_up_rate"] is not None
+    assert 0.0 <= quality["thumbs_up_rate"] <= 1.0
+
+
+def test_feedback_accepts_optional_session_and_downvote():
+    tid = str(uuid.uuid4())
+    status, body = api_request(
+        "POST", "/copilot/feedback",
+        {"thread_id": tid, "rating": -1},
+    )
+    assert status == 201
+    assert body["rating"] == -1
+
+
+def test_feedback_rejects_invalid_rating():
+    status, _ = api_request(
+        "POST", "/copilot/feedback",
+        {"thread_id": str(uuid.uuid4()), "rating": 0},
+    )
+    assert status == 422
+
+
+def test_feedback_rejects_extra_fields():
+    status, _ = api_request(
+        "POST", "/copilot/feedback",
+        {"thread_id": str(uuid.uuid4()), "rating": 1, "turn_id": "abc"},
+    )
+    assert status == 422
+
+
+def test_feedback_rejects_invalid_thread_id():
+    status, _ = api_request(
+        "POST", "/copilot/feedback",
+        {"thread_id": "../bad thread", "rating": 1},
+    )
+    assert status == 422
+
+
+def test_feedback_requires_thread_id():
+    status, _ = api_request("POST", "/copilot/feedback", {"rating": 1})
+    assert status == 422

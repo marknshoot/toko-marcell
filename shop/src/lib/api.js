@@ -305,6 +305,26 @@ export async function streamCopilotMessage({ message, threadId, context = null, 
   );
 }
 
+export async function postCopilotFeedback({ threadId, rating }) {
+  const sessionId = getSessionId();
+  const response = await fetch(`${API_URL}/copilot/feedback`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    keepalive: true,
+    body: JSON.stringify({
+      thread_id: threadId,
+      session_id: sessionId,
+      rating,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error("Could not save copilot feedback");
+  }
+
+  return response.json();
+}
+
 export async function getCopilotThread(threadId) {
   try {
     const response = await fetch(`${API_URL}/copilot/threads/${encodeURIComponent(threadId)}`);

@@ -19,12 +19,15 @@ router passes recent history explicitly.
 
 import json
 import logging
+import os
 import re
 import time
 from typing import Any
 
 from agent_tools import _connect
+from config import get_settings
 from copilot_llm import build_chat_model, llm_available
+from copilot_metrics import derive_outcome, extract_token_usage, record_turn
 from copilot_tools import ToolContext, _slim, build_tools
 from guardrail import classify, trim_guardrail_history
 from langchain.agents import create_agent
@@ -35,6 +38,30 @@ logger = logging.getLogger(__name__)
 
 # Max model→tool iterations in a single turn (design §1).
 MAX_MODEL_CALLS = 3
+
+
+def _is_fake(fake: bool | None) -> bool:
+    if fake is None:
+        return os.environ.get("COPILOT_FAKE_LLM") == "1"
+    return bool(fake)
+
+
+def _turn_model(fake: bool | None) -> str | None:
+    if _is_fake(fake):
+        return "fake"
+    try:
+        return get_settings().LLM_MODEL or None
+    except Exception:
+        return None
+
+
+def _tool_names(tool_calls: list[dict[str, Any]]) -> list[str]:
+    names: list[str] = []
+    for call in tool_calls:
+        name = call.get("name")
+        if name and name not in names:
+            names.append(name)
+    return names
 
 
 ADMIN_SYSTEM_PROMPT = """You are Admin Toko Marcell, an expert in-store stylist and customer-service admin for Toko Marcell (Jakarta, Indonesia).
@@ -362,13 +389,24 @@ async def run_turn(
         use_llm=not bool(fake),
     )
     if label is not None:
+        took_ms = round((time.perf_counter() - started) * 1000, 2)
+        record_turn(
+            thread_id=thread_id,
+            session_id=session_id,
+            db_url=db_url,
+            guardrail=label,
+            outcome=derive_outcome(label, [], False),
+            tool_names=[],
+            latency_ms=took_ms,
+            model=_turn_model(fake),
+        )
         return {
             "reply": canned,
             "products": [],
             "ui_actions": [],
             "tool_calls": [],
             "guardrail": label,
-            "took_ms": round((time.perf_counter() - started) * 1000, 2),
+            "took_ms": took_ms,
         }
 
     ctx = ToolContext(
@@ -379,6 +417,15 @@ async def run_turn(
     _seed_registry_from_checkpoint(ctx, checkpointer, thread_id)
     agent = build_agent(ctx, session_id, fake=fake, checkpointer=checkpointer)
     if agent is None:
+        took_ms = round((time.perf_counter() - started) * 1000, 2)
+        record_turn(
+            thread_id=thread_id,
+            session_id=session_id,
+            db_url=db_url,
+            outcome=derive_outcome(None, [], True),
+            latency_ms=took_ms,
+            model=_turn_model(fake),
+        )
         from fastapi import HTTPException
         raise HTTPException(
             status_code=503,
@@ -410,6 +457,15 @@ async def run_turn(
             result = await agent.ainvoke({"messages": input_messages}, config=invoke_cfg)
     except Exception as e:
         logger.error("copilot agent error: %s", e)
+        took_ms = round((time.perf_counter() - started) * 1000, 2)
+        record_turn(
+            thread_id=thread_id,
+            session_id=session_id,
+            db_url=db_url,
+            outcome=derive_outcome(None, [], True),
+            latency_ms=took_ms,
+            model=_turn_model(fake),
+        )
         from fastapi import HTTPException
         raise HTTPException(
             status_code=502,
@@ -434,8 +490,21 @@ async def run_turn(
 
     # Products shown during this turn (not merely rehydrated from history), capped at 6.
     products = ctx.turn_products(limit=6)
+    tool_names = _tool_names(tool_calls)
+    input_tokens, output_tokens = extract_token_usage(result.get("messages", []))
 
     took_ms = round((time.perf_counter() - started) * 1000, 2)
+    record_turn(
+        thread_id=thread_id,
+        session_id=session_id,
+        db_url=db_url,
+        outcome=derive_outcome(None, tool_names, False),
+        tool_names=tool_names,
+        latency_ms=took_ms,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        model=_turn_model(fake),
+    )
     return {
         "reply": reply,
         "products": products,
@@ -481,6 +550,17 @@ async def stream_turn(
         use_llm=not bool(fake),
     )
     if label is not None:
+        took_ms = round((time.perf_counter() - started) * 1000, 2)
+        record_turn(
+            thread_id=thread_id,
+            session_id=session_id,
+            db_url=db_url,
+            guardrail=label,
+            outcome=derive_outcome(label, [], False),
+            tool_names=[],
+            latency_ms=took_ms,
+            model=_turn_model(fake),
+        )
         yield {"type": "token", "content": canned}
         yield {
             "type": "done",
@@ -490,7 +570,7 @@ async def stream_turn(
             "ui_actions": [],
             "tool_calls": [],
             "guardrail": label,
-            "took_ms": round((time.perf_counter() - started) * 1000, 2),
+            "took_ms": took_ms,
         }
         return
 
@@ -502,6 +582,15 @@ async def stream_turn(
     _seed_registry_from_checkpoint(ctx, checkpointer, thread_id)
     agent = build_agent(ctx, session_id, fake=fake, checkpointer=checkpointer)
     if agent is None:
+        took_ms = round((time.perf_counter() - started) * 1000, 2)
+        record_turn(
+            thread_id=thread_id,
+            session_id=session_id,
+            db_url=db_url,
+            outcome=derive_outcome(None, [], True),
+            latency_ms=took_ms,
+            model=_turn_model(fake),
+        )
         from fastapi import HTTPException
         raise HTTPException(
             status_code=503,
@@ -546,6 +635,15 @@ async def stream_turn(
         if mode == "__err__":
             logger.error("copilot stream error: %s", payload)
             fallback_err = "Maaf kak, asisten AI lagi ada kendala koneksi. Boleh coba kirim lagi ya!"
+            took_ms = round((time.perf_counter() - started) * 1000, 2)
+            record_turn(
+                thread_id=thread_id,
+                session_id=session_id,
+                db_url=db_url,
+                outcome=derive_outcome(None, [], True),
+                latency_ms=took_ms,
+                model=_turn_model(fake),
+            )
             if not streamed_parts:
                 yield {"type": "token", "content": fallback_err}
             yield {
@@ -556,7 +654,7 @@ async def stream_turn(
                 "ui_actions": [],
                 "tool_calls": [],
                 "guardrail": None,
-                "took_ms": round((time.perf_counter() - started) * 1000, 2),
+                "took_ms": took_ms,
             }
             return
         if mode == "messages":
@@ -595,8 +693,21 @@ async def stream_turn(
             tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
 
     products = ctx.turn_products(limit=6)
+    tool_names = _tool_names(tool_calls)
+    input_tokens, output_tokens = extract_token_usage(final_result.get("messages", []))
 
     took_ms = round((time.perf_counter() - started) * 1000, 2)
+    record_turn(
+        thread_id=thread_id,
+        session_id=session_id,
+        db_url=db_url,
+        outcome=derive_outcome(None, tool_names, False),
+        tool_names=tool_names,
+        latency_ms=took_ms,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        model=_turn_model(fake),
+    )
     yield {
         "type": "done",
         "reply": reply,

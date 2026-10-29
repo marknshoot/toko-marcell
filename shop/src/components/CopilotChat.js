@@ -11,6 +11,7 @@ import {
   searchProducts,
   getProducts,
   postEvent,
+  postCopilotFeedback,
 } from "../lib/api";
 import {
   getCopilotThreadId,
@@ -233,7 +234,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
             streamingInserted = true;
             setMessages((prev) => [
               ...prev,
-              { role: "assistant", content: fullText, products: [], uiActions: [] },
+              { role: "assistant", content: fullText, products: [], uiActions: [], feedback: null },
             ]);
           } else {
             setMessages((prev) => {
@@ -254,6 +255,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
         products: res.products || [],
         uiActions: res.ui_actions || [],
         guardrail: res.guardrail || null,
+        feedback: null,
       };
 
       setMessages((prev) => {
@@ -279,6 +281,27 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
     } finally {
       setIsThinking(false);
       setIsLoading(false);
+    }
+  }
+
+  async function handleFeedback(index, rating) {
+    const message = messages[index];
+    if (!message || message.role !== "assistant" || message.feedback === rating) {
+      return;
+    }
+
+    // Optimistic: the shopper sees the vote immediately; the POST is best-effort.
+    setMessages((prev) => {
+      const copy = [...prev];
+      if (copy[index]?.role !== "assistant") return prev;
+      copy[index] = { ...copy[index], feedback: rating };
+      return copy;
+    });
+
+    try {
+      await postCopilotFeedback({ threadId, rating });
+    } catch {
+      // Keep the local selection; a failed feedback write must not interrupt chat.
     }
   }
 
@@ -471,6 +494,37 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                         <ReactMarkdown remarkPlugins={[remarkGfm]} components={markdownComponents}>
                           {normalizeMarkdown(msg.content)}
                         </ReactMarkdown>
+                      </div>
+
+                      <div className="flex items-center gap-1 pl-0.5">
+                        <button
+                          type="button"
+                          aria-label="Jawaban membantu"
+                          title="Jawaban membantu"
+                          aria-pressed={msg.feedback === 1}
+                          onClick={() => handleFeedback(index, 1)}
+                          className={`rounded-md px-1.5 py-0.5 text-xs transition ${
+                            msg.feedback === 1
+                              ? "bg-emerald-100 text-emerald-800"
+                              : "text-muted hover:bg-muted/15 hover:text-foreground"
+                          }`}
+                        >
+                          👍
+                        </button>
+                        <button
+                          type="button"
+                          aria-label="Jawaban tidak membantu"
+                          title="Jawaban tidak membantu"
+                          aria-pressed={msg.feedback === -1}
+                          onClick={() => handleFeedback(index, -1)}
+                          className={`rounded-md px-1.5 py-0.5 text-xs transition ${
+                            msg.feedback === -1
+                              ? "bg-rose-100 text-rose-800"
+                              : "text-muted hover:bg-muted/15 hover:text-foreground"
+                          }`}
+                        >
+                          👎
+                        </button>
                       </div>
 
                       {msg.products?.length > 0 && (

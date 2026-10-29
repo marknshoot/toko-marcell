@@ -259,6 +259,42 @@ describe("CopilotChat v2", () => {
     expect(queryByText("Ukuran?")).toBeNull();
   });
 
+  it("posts thumbs up and down feedback under an assistant message", async () => {
+    vi.spyOn(api, "streamCopilotMessage").mockResolvedValue({
+      reply: "Halo kak!",
+      thread_id: "t1",
+      products: [],
+      ui_actions: [],
+      guardrail: "greeting",
+      took_ms: 10,
+    });
+    const feedbackSpy = vi.spyOn(api, "postCopilotFeedback").mockResolvedValue({ id: 1 });
+
+    const { container, getByLabelText, getByText } = render(
+      <CartProvider>
+        <CopilotChat />
+      </CartProvider>
+    );
+    openPanel(container);
+    const input = getByLabelText("Ketik pesan untuk Admin Toko Marcell");
+    fireEvent.change(input, { target: { value: "Halo" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    await waitFor(() => expect(getByText("Halo kak!")).toBeTruthy());
+
+    const up = getByLabelText("Jawaban membantu");
+    fireEvent.click(up);
+    await waitFor(() => expect(feedbackSpy).toHaveBeenCalledTimes(1));
+    expect(feedbackSpy.mock.calls[0][0]).toMatchObject({ rating: 1 });
+    expect(up.getAttribute("aria-pressed")).toBe("true");
+
+    const down = getByLabelText("Jawaban tidak membantu");
+    fireEvent.click(down);
+    await waitFor(() => expect(feedbackSpy).toHaveBeenCalledTimes(2));
+    expect(feedbackSpy.mock.calls[1][0]).toMatchObject({ rating: -1 });
+    expect(down.getAttribute("aria-pressed")).toBe("true");
+  });
+
   it("reset calls deleteCopilotThread and clears messages", async () => {
     vi.spyOn(api, "streamCopilotMessage").mockResolvedValue({
       reply: "hi",

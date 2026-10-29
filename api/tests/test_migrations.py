@@ -29,6 +29,8 @@ APP_TABLES = {
     "reviews",
     "store_knowledge",
     "store_knowledge_questions",
+    "copilot_turns",
+    "copilot_feedback",
 }
 
 
@@ -105,11 +107,27 @@ def test_upgrade_empty_database_to_head(temp_db_url):
     assert APP_TABLES <= _tables(temp_db_url)
     assert {"embedding", "image_embedding", "embedding_ml"} <= _columns(temp_db_url, "products")
     assert {
+        "thread_id",
+        "session_id",
+        "guardrail",
+        "outcome",
+        "tool_names",
+        "latency_ms",
+        "input_tokens",
+        "output_tokens",
+        "model",
+        "cost_usd",
+    } <= _columns(temp_db_url, "copilot_turns")
+    assert {"thread_id", "session_id", "rating"} <= _columns(temp_db_url, "copilot_feedback")
+    assert {
         "products_embedding_idx",
         "products_image_embedding_idx",
         "products_embedding_ml_idx",
         "store_knowledge_embedding_idx",
         "store_knowledge_q_embedding_idx",
+        "copilot_turns_created_idx",
+        "copilot_turns_thread_idx",
+        "copilot_feedback_created_idx",
     } <= _indexes(temp_db_url)
     assert _version(temp_db_url) == _head()
 

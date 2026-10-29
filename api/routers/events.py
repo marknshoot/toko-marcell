@@ -57,11 +57,17 @@ def create_event(event: EventIn, request: Request):
 
 @router.get("/events/summary")
 def events_summary(since_days: int = Query(30, ge=1, le=365)):
-    """Funnel KPIs, computed from the events table."""
+    """Funnel, revenue, cohort and copilot-quality KPIs.
+
+    The event funnel keeps its original keys. Revenue/AOV come only from the
+    server-side ``orders`` table; copilot quality comes from ``copilot_turns``
+    and ``copilot_feedback`` (phase 9).
+    """
     window = "created_at > now() - make_interval(days => %s)"
 
     with get_conn() as conn:
         with conn.cursor() as cur:
+            # ── Event funnel (unchanged) ─────────────────────────────────────
             cur.execute(
                 f"""
                 SELECT event_type, COUNT(*), COUNT(DISTINCT session_id)
@@ -101,6 +107,114 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
             )
             search_to_pdp_sessions = cur.fetchone()[0]
 
+            # ── Revenue: server-confirmed orders only ────────────────────────
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE status = 'paid') AS order_count,
+                    COALESCE(SUM(total_idr) FILTER (WHERE status = 'paid'), 0) AS revenue_idr,
+                    AVG(total_idr) FILTER (WHERE status = 'paid') AS aov_idr
+                FROM orders WHERE {window}
+                """,
+                (since_days,),
+            )
+            order_count, revenue_idr, aov_idr = cur.fetchone()
+
+            # ── Cohorts: copilot users vs everyone else (descriptive) ────────
+            cur.execute(
+                """
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = current_schema()
+                      AND table_name = 'orders' AND column_name = 'session_id'
+                )
+                """
+            )
+            orders_have_session = cur.fetchone()[0]
+            if orders_have_session:
+                purchase_exists = """
+                    EXISTS (
+                        SELECT 1 FROM orders o
+                        WHERE o.session_id = cs.session_id
+                          AND o.status = 'paid'
+                          AND o.created_at > now() - make_interval(days => %s)
+                    )
+                """
+                purchase_source = "orders"
+            else:
+                purchase_exists = """
+                    EXISTS (
+                        SELECT 1 FROM events p
+                        WHERE p.session_id = cs.session_id
+                          AND p.event_type = 'purchase_mock'
+                          AND p.created_at > now() - make_interval(days => %s)
+                    )
+                """
+                purchase_source = "purchase_mock"
+
+            cur.execute(
+                f"""
+                WITH copilot_sessions AS (
+                    SELECT DISTINCT session_id FROM events
+                    WHERE event_type = 'copilot_message' AND {window}
+                ),
+                all_sessions AS (
+                    SELECT DISTINCT session_id FROM events WHERE {window}
+                ),
+                cohort_sessions AS (
+                    SELECT s.session_id,
+                           EXISTS (
+                               SELECT 1 FROM copilot_sessions c
+                               WHERE c.session_id = s.session_id
+                           ) AS is_copilot
+                    FROM all_sessions s
+                )
+                SELECT
+                    is_copilot,
+                    COUNT(*) AS sessions,
+                    COUNT(*) FILTER (
+                        WHERE EXISTS (
+                            SELECT 1 FROM events e
+                            WHERE e.session_id = cs.session_id
+                              AND e.event_type = 'add_to_cart'
+                              AND e.created_at > now() - make_interval(days => %s)
+                        )
+                    ) AS sessions_with_add_to_cart,
+                    COUNT(*) FILTER (WHERE {purchase_exists}) AS purchase_sessions
+                FROM cohort_sessions cs
+                GROUP BY is_copilot
+                """,
+                (since_days, since_days, since_days, since_days),
+            )
+            cohort_rows = cur.fetchall()
+
+            # ── Copilot quality: turns + explicit feedback ───────────────────
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) AS turns,
+                    COUNT(*) FILTER (WHERE outcome = 'unanswered') AS unanswered,
+                    COUNT(*) FILTER (WHERE outcome = 'guardrail') AS guardrail,
+                    AVG(latency_ms) AS avg_latency_ms,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) AS p50_latency_ms,
+                    percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_latency_ms
+                FROM copilot_turns WHERE {window}
+                """,
+                (since_days,),
+            )
+            turns, unanswered, guardrail, avg_latency, p50_latency, p95_latency = cur.fetchone()
+
+            cur.execute(
+                f"""
+                SELECT
+                    COUNT(*) FILTER (WHERE rating = 1) AS thumbs_up,
+                    COUNT(*) FILTER (WHERE rating = -1) AS thumbs_down
+                FROM copilot_feedback WHERE {window}
+                """,
+                (since_days,),
+            )
+            thumbs_up, thumbs_down = cur.fetchone()
+
     viewed = sessions_by_step.get("view_product", 0)
     added = sessions_by_step.get("add_to_cart", 0)
     started = sessions_by_step.get("checkout_start", 0)
@@ -112,6 +226,31 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
     copilot_clicks = by_type.get("copilot_product_click", 0)
     copilot_adds = by_type.get("copilot_add_to_cart", 0)
     total_adds = by_type.get("add_to_cart", 0)
+
+    # ── Cohorts (Phase 9) ────────────────────────────────────────────────────
+    cohort_data = {
+        "copilot": {"sessions": 0, "sessions_with_add_to_cart": 0, "purchase_sessions": 0},
+        "non_copilot": {"sessions": 0, "sessions_with_add_to_cart": 0, "purchase_sessions": 0},
+    }
+    for is_copilot, sessions, add_sessions, purchase_sessions in cohort_rows:
+        key = "copilot" if is_copilot else "non_copilot"
+        cohort_data[key] = {
+            "sessions": sessions,
+            "sessions_with_add_to_cart": add_sessions,
+            "purchase_sessions": purchase_sessions,
+        }
+    for key in ("copilot", "non_copilot"):
+        c = cohort_data[key]
+        c["add_to_cart_rate"] = rate(c["sessions_with_add_to_cart"], c["sessions"])
+        c["purchase_rate"] = rate(c["purchase_sessions"], c["sessions"])
+
+    cohort_caveat = (
+        "Cohorts are correlational and self-selected: sessions that open the copilot differ from "
+        "sessions that do not, and there is no holdout/control group. "
+        f"Purchase sessions are matched on {purchase_source}."
+    )
+    cohort_data["purchase_source"] = purchase_source
+    cohort_data["caveat"] = cohort_caveat
 
     return {
         "since_days": since_days,
@@ -138,11 +277,30 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
             # Share of all add-to-cart events that were copilot-assisted.
             "assisted_add_to_cart_rate": rate(copilot_adds, total_adds),
         },
+        "revenue": {
+            "order_count": order_count,
+            "revenue_idr": int(revenue_idr or 0),
+            "aov_idr": round(float(aov_idr), 2) if aov_idr is not None else None,
+        },
+        "cohorts": cohort_data,
+        "copilot_quality": {
+            "turns": turns,
+            "unanswered_rate": rate(unanswered, turns),
+            "guardrail_rate": rate(guardrail, turns),
+            "avg_latency_ms": round(float(avg_latency), 2) if avg_latency is not None else None,
+            "p50_latency_ms": round(float(p50_latency), 2) if p50_latency is not None else None,
+            "p95_latency_ms": round(float(p95_latency), 2) if p95_latency is not None else None,
+            "thumbs_up": thumbs_up,
+            "thumbs_down": thumbs_down,
+            "thumbs_up_rate": rate(thumbs_up, thumbs_up + thumbs_down),
+        },
         "caveats": [
             "search_to_pdp is a session-level proxy (search + view_product in one session)",
-            "purchase_mock is browser-asserted until checkout is confirmed server-side (B5)",
+            "revenue/aov use only server-confirmed orders; purchase_mock is a directional "
+            "funnel event and remains client-assertable",
             "copilot.assisted_add_to_cart_rate = copilot_add_to_cart / all add_to_cart; "
             "a copilot-driven add fires BOTH add_to_cart (from the cart) and copilot_add_to_cart, "
             "so the rate is the copilot-attributed share of total adds, not an independent funnel",
+            cohort_caveat,
         ],
     }

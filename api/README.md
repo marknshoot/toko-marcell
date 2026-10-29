@@ -100,10 +100,11 @@ from booting, and catalog browsing never pays for a search model it does not use
 | `POST` | `/copilot/chat` | Agentic copilot turn (v2: deterministic guardrail → `create_agent` loop → grounded reply); text-only |
 | `POST` | `/copilot/chat/stream` | Stream an agentic copilot turn via Server-Sent Events (`token` + `done` events) |
 | `GET` | `/copilot/tools` | The 6 deterministic tool names the v2 copilot can call |
+| `POST` | `/copilot/feedback` | Record a thumbs up/down vote for a copilot thread → `201` · rate-limited like other writes |
 | `GET` | `/copilot/threads/{thread_id}` | Replay a conversation thread's display messages (may be empty) |
 | `DELETE` | `/copilot/threads/{thread_id}` | Reset a conversation (delete all persisted checkpointer state) → `204` |
 | `POST` | `/events` | Record a funnel event → `201` · `422` on unknown type |
-| `GET` | `/events/summary` | Funnel KPIs + explicit caveats |
+| `GET` | `/events/summary` | Funnel + order revenue/AOV + copilot cohorts + copilot quality, with explicit caveats |
 | `POST` | `/checkout/confirm` | Create a paid order from `{items:[{asin,qty}], session_id}` → `201` |
 | `GET` | `/orders/{token}` | Read an order back by its secret token · `404` unknown |
 
@@ -153,13 +154,14 @@ api/
 │   ├── search.py             # GET /search, POST /search/image, POST /search/reindex
 │   ├── recs.py               # GET /recs/popular, /recs/item/{asin}, /recs/session
 │   ├── reviews.py            # GET /products/{id}/reviews
-│   ├── events.py             # POST /events, GET /events/summary (incl. copilot block)
+│   ├── events.py             # POST /events, GET /events/summary (funnel, revenue, cohorts, quality)
 │   ├── checkout.py           # POST /checkout/confirm, GET /orders/{token}
-│   └── copilot.py            # POST /copilot/chat, POST /copilot/chat/stream, GET /copilot/tools, GET/DELETE /copilot/threads/{id}
+│   └── copilot.py            # POST /copilot/chat, /chat/stream, /feedback; GET /tools, /threads/{id}
 ├── search.py                 # BM25 index, embeddings, RRF, CLIP encoders (ONNX)
 ├── reranker.py               # Stage-2 ONNX cross-encoder (ms-marco-MiniLM-L-6-v2)
 ├── guardrail.py              # deterministic pre-agent guardrail (greeting/off-topic/injection, zero LLM)
 ├── copilot_agent.py          # LangChain v1 create_agent orchestrator (run_turn) + middleware
+├── copilot_metrics.py        # best-effort copilot_turns telemetry + outcome/token extraction
 ├── copilot_tools.py          # the 6 deterministic @tool functions bound to the agent
 ├── copilot_llm.py            # provider fallback chain (OpenRouter → generic → Gemini) + fake LLM
 ├── copilot_memory.py         # LangGraph PostgresSaver checkpointer + thread activity / TTL cleanup
@@ -376,6 +378,16 @@ Response (`CopilotChatV2Out`, or streamed via `POST /copilot/chat/stream` as SSE
 `null`) and `took_ms`. Errors: `422` (malformed/oversized), `429` (rate limit), `503` (no LLM key),
 `502` (upstream failure).
 
+`POST /copilot/feedback` (`CopilotFeedbackIn`, `extra="forbid"`):
+
+```json
+{ "thread_id": "uuid-from-localStorage", "session_id": "sess-abc12345", "rating": 1 }
+```
+
+`rating` is `1` (thumbs up) or `-1` (thumbs down); `session_id` is optional. The endpoint is
+rate-limited like `/events` and writes one `copilot_feedback` row. `GET /events/summary` aggregates it
+in `copilot_quality`.
+
 ### Grounding guarantees
 
 - Every product in a reply comes from a tool result; the prompt forbids invented brands, ASINs,
@@ -426,21 +438,27 @@ curl -s localhost:8001/events/summary | python3 -m json.tool
 The frontend posts events **fire-and-forget** (`keepalive: true`, errors swallowed): losing a data
 point is cheaper than breaking a purchase.
 
-`GET /events/summary` returns `by_type`, `sessions_by_step`, `rates` and `search`, and — importantly —
-its own `caveats` array. Three matter:
+`GET /events/summary` returns the original funnel keys (`by_type`, `sessions_by_step`, `rates`,
+`search`, `copilot`, `caveats`) plus the phase-9 measurement blocks:
 
-1. `search_to_pdp` is a **session-level proxy** (search + view_product in one session), not a CTR.
-2. `results_count` counts matches among currently loaded products, because filtering is client-side.
-3. `purchase_mock` is now written by the confirm handler (server-side), so it is authoritative.
+| Block | Contents | Source |
+|---|---|---|
+| `revenue` | `order_count`, `revenue_idr`, `aov_idr` (`null` without a denominator) | `orders` only — never browser events |
+| `cohorts` | `copilot` vs `non_copilot`: `sessions`, `sessions_with_add_to_cart`, `add_to_cart_rate`, `purchase_sessions`, `purchase_rate`; `purchase_source`; `caveat` | `events` + `orders` (joined on `session_id`) |
+| `copilot_quality` | `turns`, `unanswered_rate`, `guardrail_rate`, `avg_latency_ms`, `p50_latency_ms`, `p95_latency_ms`, `thumbs_up`, `thumbs_down`, `thumbs_up_rate` | `copilot_turns` + `copilot_feedback` |
 
-It also carries a `copilot` block — `messages`, `product_clicks`, `add_to_cart`,
+The cohort caveat says plainly that the comparison is **correlational and self-selected** — there is
+no holdout. `copilot_quality.turns` counts all logged turns, so `unanswered_rate` and
+`guardrail_rate` share that denominator. `guardrail_rate` counts every deterministic guardrail
+label, including greetings, not only unsafe blocks. `copilot` also keeps `messages`, `product_clicks`,
+`add_to_cart`,
 `total_add_to_cart` and `assisted_add_to_cart_rate` (= `copilot_add_to_cart` / all `add_to_cart`,
-`null` when there is no denominator). A caveat spells out that a copilot-driven add fires **both**
-`add_to_cart` (from the cart) and `copilot_add_to_cart`, so the rate is the copilot-attributed share
-of total adds, not an independent funnel.
+`null` when there is no denominator); a copilot-driven add fires **both** events, so it is an
+attributed share, not an independent funnel.
 
-Rates are `null`, never `0.0`, when a denominator is missing — an empty events table cannot produce a
-misleading "0% conversion".
+`orders` is the only revenue source. `purchase_mock` is written by the confirm handler today, but the
+public `/events` endpoint still accepts it from any client and historical rows may be browser-asserted;
+it remains a directional funnel signal. Rates are `null`, never `0.0`, when a denominator is missing.
 
 ### Checkout — the authoritative step
 
@@ -464,8 +482,8 @@ Consequences of putting the order on the server:
 
 - `/checkout/confirm/[token]` **fetches** the order, so it survives refresh, a new tab, or another
   device. An invalid token renders a 404, not a fake receipt.
-- `purchase_mock` is written by the server inside the confirm handler, so the funnel's last step is
-  authoritative.
+- `orders` is the authoritative checkout record; `purchase_mock` is a funnel event only. The public
+  events endpoint still accepts a client-posted `purchase_mock`, so revenue/AOV never read it.
 - `session_id` is **required** on confirm; a purchase that cannot be attributed to a visit is useless.
 - The client cart gained `asin`, so the localStorage key moved to `toko-cart-v2`. A v1 cart line has no
   asin and cannot be priced; the key bump is honest where a silent migration would have produced
@@ -544,6 +562,9 @@ products (
   image_embedding vector(512)       -- champion CLIP, HNSW cosine
 )
 events           (id BIGSERIAL, session_id, event_type, asin, query, results_count, qty, price_idr, created_at)
+copilot_turns    (id BIGSERIAL, thread_id, session_id, created_at, guardrail, outcome, tool_names, latency_ms,
+                  input_tokens, output_tokens, model, cost_usd)
+copilot_feedback (id BIGSERIAL, thread_id, session_id, rating CHECK (-1,1), created_at)
 orders           (id BIGSERIAL, token UNIQUE, total_idr, item_count, status, session_id, created_at)
 order_items      (id BIGSERIAL, order_id → orders, asin, title, qty, unit_price_idr)
 item_recommendations (asin PRIMARY KEY, recs JSONB)
@@ -621,7 +642,8 @@ service restored from the seed with `COPILOT_FAKE_LLM=1`, alongside the frontend
 - No owner authentication; access is by unguessable token/URL.
 - `/checkout/confirm` is not idempotent (no `Idempotency-Key` yet).
 - Client-side filtering means `results_count` is not catalog-wide.
-- No Alembic; `init_db()` is additive, not a versioned migration system.
+- Migration `0003` adds copilot telemetry; revisions are applied on startup, still with a manual
+  `alembic upgrade head` available for operators.
 - Reindex is manual after a reseed.
 - The copilot is bound to 6 tools (search, details, size, outfit, policy, add-to-cart);
   there is intentionally **no order-status tool** (checkout is a simulation), and reviews

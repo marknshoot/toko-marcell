@@ -38,19 +38,20 @@ spend.
 
 **North star:** **conversion and AOV of sessions that use an AI/search/rec surface** — reported as two
 metrics, never blended into one score. **Guardrail:** **cost per assisted order**. Recommendation-rail
-impressions are not instrumented yet, so today's definition covers search and copilot sessions; AOV
-moves to server-confirmed `orders` in phase 9.
+impressions are not instrumented yet, so today's definition covers search and copilot sessions. AOV,
+revenue and copilot-vs-non-copilot cohorts are now computed from server-confirmed `orders` (phase 9).
 
 | # | Problem | Feature | KPI it moves | Measured impact (committed artifact) |
 |---|---|---|---|---|
 | 1 | Mixed Indonesian/English or casual queries return nothing or the wrong products | Tri-modal bilingual retrieval: BM25 + multilingual MiniLM + CLIP → RRF, optional reranker | **zero-result rate ↓**, **search-to-PDP ↑** | **Offline:** overall nDCG@10 **0.794 → 0.894**, Indonesian nDCG@10 **0.334 → 0.765**, HR@10 **100%** ([multilingual eval](./pipelines/results/search_eval_multilingual.json)) |
-| 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic `recommend_size` (category-aware in phase 10b) + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.9167** ([RAG eval](./pipelines/results/rag_eval.json)); sizing has no fit-accuracy benchmark yet |
+| 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic `recommend_size` (category-aware in phase 10b) + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.9167** ([RAG eval](./pipelines/results/rag_eval.json)); assisted-add and copilot quality are live (phase 9); sizing has no fit-accuracy benchmark yet |
 | 3 | Repetitive shipping/returns/payment questions consume the owner's time | `lookup_store_policy`: hypothetical-question + chunk + IDF lexical RRF | **deflection ↑**, **unanswered rate ↓** | Same RAGAS artifact for retrieval; deflection is planned (phase 12) and there is no human handoff, so it means resolved in-copilot vs an honest “can't answer” |
-| 4 | One-item baskets | Session-aware item-to-item CF + `build_outfit` with `total ≤ budget` enforced in code | **AOV ↑**, **copilot assisted-add rate ↑** | **Offline:** HR@10 **7.96% vs 0.18%** for popularity — **+4,322% relative** ([recommendation eval](./pipelines/results/recs_eval.json)); AOV from orders is planned (phase 9) |
+| 4 | One-item baskets | Session-aware item-to-item CF + `build_outfit` with `total ≤ budget` enforced in code | **AOV ↑**, **copilot assisted-add rate ↑** | **Offline:** HR@10 **7.96% vs 0.18%** for popularity — **+4,322% relative** ([recommendation eval](./pipelines/results/recs_eval.json)); AOV from server-confirmed orders is live (phase 9) |
 | 5 | Ungrounded AI answers and token-cost exposure | Guardrail short-circuit, rate limits, 6-tool whitelist, server-validated cart actions | **cost per conversation ↓**, **cost per assisted order ↓** | Guardrail/tool behaviour is unit-tested in CI; **no cost figure is claimed** — tokens are logged in phase 9, unit economics in phase 13 |
 
 Offline nDCG/RAGAS/HR numbers are proxies on small evaluation sets; they justify shipping a feature,
-not a revenue claim. The live funnel endpoint reports its own caveats, and AOV is not exposed yet.
+not a revenue claim. The live funnel endpoint reports its own caveats; AOV and cohorts are now
+order-derived (phase 9), but the orders are still simulation rows.
 
 **Full business case** — personas, five falsifiable hypotheses, KPI tree, non-goals and honest
 limitations: **[docs/BUSINESS_CASE.md](./docs/BUSINESS_CASE.md)**. Every metric with its definition,

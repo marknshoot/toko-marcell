@@ -5,10 +5,11 @@ import logging
 import os
 
 from config import get_settings
+from db import get_conn
 from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import JSONResponse, StreamingResponse
-from rate_limiter import check_copilot_rate_limit
-from schemas import CopilotChatV2In
+from rate_limiter import check_copilot_rate_limit, check_write_rate_limit
+from schemas import CopilotChatV2In, CopilotFeedbackIn
 
 logger = logging.getLogger(__name__)
 
@@ -132,6 +133,43 @@ async def copilot_chat_stream(payload: CopilotChatV2In, request: Request):
 def copilot_tools():
     """Returns the names of the deterministic tools the v2 copilot can call."""
     return {"tools": V2_TOOL_NAMES}
+
+
+# ── Feedback (phase 9) ───────────────────────────────────────────────────────
+
+@router.post("/copilot/feedback", status_code=201)
+def submit_copilot_feedback(payload: CopilotFeedbackIn, request: Request):
+    """Record one thumbs up/down vote for a copilot conversation.
+
+    Rate-limited like the other browser writes; feedback must never be able to
+    take the chat down, so the endpoint is a single insert and nothing else.
+    """
+    allowed, retry_after = check_write_rate_limit(_get_client_ip(request))
+    if not allowed:
+        raise HTTPException(
+            status_code=429,
+            detail="Too many feedback requests. Please slow down.",
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    with get_conn() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO copilot_feedback (thread_id, session_id, rating)
+                VALUES (%s, %s, %s)
+                RETURNING id
+                """,
+                (payload.thread_id, payload.session_id, payload.rating),
+            )
+            feedback_id = cur.fetchone()[0]
+        conn.commit()
+
+    return {
+        "id": feedback_id,
+        "thread_id": payload.thread_id,
+        "rating": payload.rating,
+    }
 
 
 # ── Thread memory (v2, design §2) ────────────────────────────────────────────

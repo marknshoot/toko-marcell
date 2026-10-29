@@ -16,6 +16,7 @@ from schemas import (
     CopilotChatV2In,
     CopilotChatV2Out,
     CopilotContextV2,
+    CopilotFeedbackIn,
 )
 
 
@@ -107,3 +108,32 @@ class TestResponseV2:
                 took_ms=1.0,
                 ui_actions=[{"type": "size_form"}],
             )
+
+
+class TestFeedback:
+    def test_valid_upvote(self):
+        m = CopilotFeedbackIn(thread_id="t1", rating=1)
+        assert m.rating == 1
+        assert m.session_id is None
+
+    def test_valid_downvote_with_session(self):
+        m = CopilotFeedbackIn(thread_id="t1", session_id="sess-12345", rating=-1)
+        assert m.rating == -1
+        assert m.session_id == "sess-12345"
+
+    def test_rejects_zero_and_out_of_range(self):
+        for rating in (0, 2, -2):
+            with pytest.raises(ValidationError):
+                CopilotFeedbackIn(thread_id="t1", rating=rating)
+
+    def test_rejects_extra_fields(self):
+        with pytest.raises(ValidationError):
+            CopilotFeedbackIn(thread_id="t1", rating=1, turn_id="turn-1")
+
+    def test_rejects_invalid_thread_id(self):
+        with pytest.raises(ValidationError):
+            CopilotFeedbackIn(thread_id="../bad thread", rating=1)
+
+    def test_thread_id_required(self):
+        with pytest.raises(ValidationError):
+            CopilotFeedbackIn(rating=1)
