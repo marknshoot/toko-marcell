@@ -79,13 +79,3 @@ def get_product_reviews(product_id: int, limit: int = Query(10, ge=1, le=50)):
             if row is None:
                 raise HTTPException(status_code=404, detail="Product not found")
             return _fetch_reviews_for_asin(cur, row[0], limit=limit)
-
-
-@router.get("/reviews/{asin}")
-def get_asin_reviews(asin: str, limit: int = Query(10, ge=1, le=50)):
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT 1 FROM products WHERE asin = %s", (asin,))
-            if cur.fetchone() is None:
-                raise HTTPException(status_code=404, detail="Product not found")
-            return _fetch_reviews_for_asin(cur, asin, limit=limit)

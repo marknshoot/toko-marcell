@@ -3,6 +3,7 @@
 Pure logic (no DB) — part of the offline CI subset.
 """
 
+import json
 import sys
 from pathlib import Path
 
@@ -38,6 +39,24 @@ class TestRegistry:
             ctx.register({"asin": f"A{i}", "title": str(i)})
         assert len(ctx.registry) <= MAX_REGISTRY
 
+    def test_register_from_prior_turn_is_resolvable_but_not_a_current_card(self):
+        ctx = _ctx()
+        ref = ctx.register({"asin": "A1", "title": "one"}, from_current_turn=False)
+        assert ctx.turn_products() == []
+        assert ctx.resolve_ref("1") == "A1"
+
+        # showing the same product again this turn promotes it to a card
+        assert ctx.register({"asin": "A1", "title": "one"}) == ref
+        assert [p["ref"] for p in ctx.turn_products()] == [ref]
+
+    def test_turn_products_only_lists_this_turn(self):
+        ctx = _ctx()
+        ctx.register({"asin": "OLD", "title": "old"}, from_current_turn=False)
+        ctx.register({"asin": "A1", "title": "one"})
+        ctx.register({"asin": "A2", "title": "two"})
+        assert [p["asin"] for p in ctx.turn_products()] == ["A1", "A2"]
+        assert len(ctx.turn_products(limit=1)) == 1
+
 
 class TestResolveRef:
     def test_resolve_numeric_ref(self):
@@ -53,6 +72,21 @@ class TestResolveRef:
         ctx.register({"asin": "A2", "title": "two"})
         assert ctx.resolve_ref("nomor 2") == "A2"
         assert ctx.resolve_ref("yang ke 1") == "A1"
+
+    def test_resolve_ordinal_words(self):
+        ctx = _ctx()
+        for i in range(1, 7):
+            ctx.register({"asin": f"A{i}", "title": str(i)})
+        assert ctx.resolve_ref("yang kedua") == "A2"
+        assert ctx.resolve_ref("pertama") == "A1"
+        assert ctx.resolve_ref("yang ketiga dong") == "A3"
+        assert ctx.resolve_ref("the second one") == "A2"
+        assert ctx.resolve_ref("keenam") == "A6"
+
+    def test_resolve_ordinal_without_registry_entry_falls_through(self):
+        ctx = _ctx()
+        ctx.register({"asin": "A1", "title": "one"})
+        assert ctx.resolve_ref("yang kedua") == "yang kedua"
 
     def test_resolve_this_uses_page_asin(self):
         ctx = _ctx(page_asin="PAGE1")
@@ -103,6 +137,57 @@ class TestAddToCartAction:
         assert ctx.ui_actions == [action]
 
 
+class TestCheckpointSeeding:
+    class _FakeCheckpointer:
+        def __init__(self, messages):
+            self._messages = messages
+
+        def get_tuple(self, config):
+            from types import SimpleNamespace
+
+            return SimpleNamespace(checkpoint={"channel_values": {"messages": self._messages}})
+
+    def test_seed_registers_prior_turn_products(self):
+        import copilot_agent
+        from langchain_core.messages import ToolMessage
+
+        messages = [
+            ToolMessage(
+                content=json.dumps([{"asin": "A1", "title": "one", "priceIdr": 100}]),
+                tool_call_id="c1",
+            ),
+            ToolMessage(
+                content=json.dumps({"asin": "A2", "title": "two", "priceIdr": 200}),
+                tool_call_id="c2",
+            ),
+            ToolMessage(
+                content=json.dumps({
+                    "within_budget": True,
+                    "items": {"top": {"asin": "A3", "title": "three", "priceIdr": 300}},
+                }),
+                tool_call_id="c3",
+            ),
+        ]
+        ctx = _ctx()
+        copilot_agent._seed_registry_from_checkpoint(
+            ctx, self._FakeCheckpointer(messages), "thread-1"
+        )
+
+        # prior-turn products are resolvable, but not shown as this turn's cards
+        assert ctx.turn_products() == []
+        assert ctx.resolve_ref("nomor 1") == "A1"
+        assert ctx.resolve_ref("yang kedua") == "A2"
+        assert ctx.resolve_ref("yang ketiga") == "A3"
+
+    def test_seed_is_a_noop_without_checkpointer_or_thread(self):
+        import copilot_agent
+
+        ctx = _ctx()
+        copilot_agent._seed_registry_from_checkpoint(ctx, None, "thread-1")
+        copilot_agent._seed_registry_from_checkpoint(ctx, self._FakeCheckpointer([]), None)
+        assert ctx.registry == {}
+
+
 class TestSqlAndPoolHardening:
     def test_catalog_categories_uses_ttl_cache(self, monkeypatch):
         import contextlib
@@ -139,41 +224,6 @@ class TestSqlAndPoolHardening:
         assert c1 == ["Pants", "Shirts"]
         assert c2 == ["Pants", "Shirts"]
         assert len(calls) == 1
-
-    def test_get_product_reviews_caps_topic_keywords_at_5(self, monkeypatch):
-        import contextlib
-
-        executed = []
-
-        class _FakeCur:
-            def execute(self, sql, params=None):
-                executed.append((sql, params))
-
-            def fetchone(self):
-                return (3, 4.5, 2, 1, 0, 0, 0)
-
-            def fetchall(self):
-                return [(1, 5.0, "Great", "Comfortable fit", "Buyer", True, "2025-01-01")]
-
-            def __enter__(self):
-                return self
-
-            def __exit__(self, *a):
-                pass
-
-        class _FakeConn:
-            def cursor(self):
-                return _FakeCur()
-
-        @contextlib.contextmanager
-        def _fake_connect(_url):
-            yield _FakeConn()
-
-        monkeypatch.setattr(agent_tools, "_connect", _fake_connect)
-        agent_tools.get_product_reviews("B01", topic="one two three four five six seven eight nine")
-        # 2nd query is the topic-filtered SELECT: asin + (5 keywords * 2) + limit = 12 params max
-        _, params = executed[1]
-        assert len(params) == 12
 
     def test_score_policy_chunks_lexical_ranks_bilingual_keywords(self):
         import agent_tools

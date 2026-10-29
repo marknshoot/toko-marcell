@@ -34,8 +34,6 @@ describe("CopilotChat v2", () => {
       reply: "Halo kak!",
       thread_id: "t1",
       products: [],
-      citations: [],
-      suggestions: [{ label: "Should not render", prompt: "ignored" }],
       ui_actions: [],
       guardrail: "greeting",
       took_ms: 10,
@@ -55,9 +53,8 @@ describe("CopilotChat v2", () => {
     fireEvent.keyDown(input, { key: "Enter" });
 
     await waitFor(() => expect(getByText("Halo kak!")).toBeTruthy());
-    // Starter chips disappear after first message, and follow-up suggestions are not rendered
+    // Starter chips disappear after the first message
     expect(queryByText("Coba tanya:")).toBeNull();
-    expect(queryByText("Should not render")).toBeNull();
   });
 
   it("shows product-page chips when pageAsin is set", () => {
@@ -186,7 +183,6 @@ describe("CopilotChat v2", () => {
       reply: "Sudah mimin masukin ke keranjang ya kak",
       thread_id: "t1",
       products: [],
-      suggestions: [],
       ui_actions: [
         {
           type: "add_to_cart",
@@ -241,7 +237,6 @@ describe("CopilotChat v2", () => {
           brand: "Volcom",
         },
       ],
-      suggestions: [],
       ui_actions: [],
       guardrail: null,
       took_ms: 20,
@@ -269,7 +264,6 @@ describe("CopilotChat v2", () => {
       reply: "hi",
       thread_id: "t1",
       products: [],
-      suggestions: [],
       ui_actions: [],
       guardrail: "greeting",
       took_ms: 1,

@@ -27,6 +27,22 @@ logger = logging.getLogger(__name__)
 
 MAX_REGISTRY = 10
 
+# Ordinal words shoppers use instead of "nomor 2" (Indonesian + English).
+_ORDINAL_REFS: dict[str, int] = {
+    "pertama": 1,
+    "first": 1,
+    "kedua": 2,
+    "second": 2,
+    "ketiga": 3,
+    "third": 3,
+    "keempat": 4,
+    "fourth": 4,
+    "kelima": 5,
+    "fifth": 5,
+    "keenam": 6,
+    "sixth": 6,
+}
+
 
 @dataclass
 class ToolContext:
@@ -37,24 +53,44 @@ class ToolContext:
     referenced_asins: list[str] = field(default_factory=list)
     # registry: ref(int) -> product dict (title, asin, priceIdr, ...)
     registry: dict[int, dict] = field(default_factory=dict)
+    # refs shown during the *current* turn (what the response cards should show)
+    _turn_refs: set[int] = field(default_factory=set)
     # ui_actions accumulated by tools (e.g. add_to_cart)
     ui_actions: list[dict] = field(default_factory=list)
     _next_ref: int = 1
 
-    def register(self, product: dict) -> int:
-        """Add a product to the registry (if not already present) and return its ref."""
+    def register(self, product: dict, *, from_current_turn: bool = True) -> int:
+        """Add a product to the registry (if not already present) and return its ref.
+
+        ``from_current_turn=False`` is used when seeding the registry from a
+        previous turn's checkpoint: the ref stays resolvable, but it is not
+        reported back as a product card for *this* turn.
+        """
         asin = product.get("asin")
         for ref, p in self.registry.items():
             if p.get("asin") == asin:
+                if from_current_turn:
+                    self._turn_refs.add(ref)
                 return ref
         if len(self.registry) >= MAX_REGISTRY:
             # drop the lowest ref to keep the window bounded
             oldest = min(self.registry)
             del self.registry[oldest]
+            self._turn_refs.discard(oldest)
         ref = self._next_ref
         self._next_ref += 1
         self.registry[ref] = product
+        if from_current_turn:
+            self._turn_refs.add(ref)
         return ref
+
+    def turn_products(self, limit: int = 6) -> list[dict]:
+        """Products shown during this turn (not merely rehydrated from history)."""
+        return [
+            {"ref": ref, **self.registry[ref]}
+            for ref in sorted(self._turn_refs)
+            if ref in self.registry
+        ][:limit]
 
     def resolve_ref(self, token: str | int) -> str | None:
         """Resolve a 'ref' number, ASIN, or page/pinned reference to an ASIN."""
@@ -65,13 +101,18 @@ class ToolContext:
             t = token.strip().lower()
             if t in ("ini", "produk ini", "this", "yang ini") and self.page_asin:
                 return self.page_asin
-            # numeric ref like "2" / "nomor 2" / "yang kedua"
+            # numeric ref like "2" / "nomor 2"
             import re
             m = re.search(r"\d+", t)
             if m:
                 ref = int(m.group())
                 if ref in self.registry:
                     return self.registry[ref]["asin"]
+            else:
+                # ordinal word like "yang kedua" / "the second one" / "pertama"
+                for word, word_ref in _ORDINAL_REFS.items():
+                    if re.search(rf"\b{re.escape(word)}\b", t) and word_ref in self.registry:
+                        return self.registry[word_ref]["asin"]
         if isinstance(token, int) and token in self.registry:
             return self.registry[token]["asin"]
         # fall through: treat as literal ASIN/id
@@ -149,13 +190,6 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         return res
 
     @tool
-    def get_product_reviews(ref_or_asin: str, topic: str | None = None) -> dict:
-        """Fetch customer reviews for a product. ``topic`` filters by aspect:
-        'fit', 'size', 'fabric', or 'durability'. Accepts a ref number or ASIN."""
-        asin = ctx.resolve_ref(ref_or_asin)
-        return agent_tools.get_product_reviews(asin=asin, topic=topic, db_url=ctx.db_url)
-
-    @tool
     def recommend_size(
         height_cm: float,
         weight_kg: float,
@@ -212,7 +246,6 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
     return [
         search_catalog,
         get_product_details,
-        get_product_reviews,
         recommend_size,
         build_outfit,
         lookup_store_policy,

@@ -299,8 +299,6 @@ export async function streamCopilotMessage({ message, threadId, context = null, 
       reply: fullReply,
       thread_id: threadId,
       products: [],
-      citations: [],
-      suggestions: [],
       ui_actions: [],
       guardrail: null,
     }

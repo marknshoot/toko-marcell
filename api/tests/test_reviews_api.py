@@ -49,17 +49,6 @@ def test_get_product_reviews_valid():
         assert 1.0 <= r["rating"] <= 5.0
 
 
-def test_get_asin_reviews_valid():
-    status, prod = api_request("GET", "/products/1")
-    assert status == 200
-    asin = prod["asin"]
-
-    status, body = api_request("GET", f"/reviews/{asin}")
-    assert status == 200
-    assert body["asin"] == asin
-    assert isinstance(body["reviews"], list)
-
-
 def test_get_reviews_limit():
     status, body = api_request("GET", "/products/1/reviews?limit=3")
     assert status == 200
@@ -68,9 +57,6 @@ def test_get_reviews_limit():
 
 def test_get_reviews_product_not_found():
     status, body = api_request("GET", "/products/9999999/reviews")
-    assert status == 404
-
-    status, body = api_request("GET", "/reviews/NON_EXISTENT_ASIN_XYZ")
     assert status == 404
 
 

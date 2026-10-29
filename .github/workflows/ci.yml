@@ -93,9 +93,9 @@ jobs:
         run: |
           python -m pytest api/tests/test_search_unit.py pipelines/tests/test_pipeline_math.py -v
 
-      - name: Run SSRF validation tests
+      - name: Run guardrails, rate limiter & copilot unit tests
         run: |
-          python -m pytest api/tests/test_ssrf_image_validation.py api/tests/test_rate_limiter.py -v
+          python -m pytest api/tests/test_rate_limiter.py api/tests/test_guardrail_unit.py api/tests/test_copilot_tools_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_sizing_unit.py -v
 
       - name: Run full API test suite
         env:
