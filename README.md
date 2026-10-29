@@ -30,6 +30,38 @@
 
 ---
 
+## Problem → Solution → Measured impact
+
+**Who it is for:** an Indonesian online-fashion shopper who searches in mixed Indonesian/English and
+needs fit and policy answers, and a small store owner who needs conversion without unmeasured AI
+spend.
+
+**North star:** **conversion and AOV of sessions that use an AI/search/rec surface** — reported as two
+metrics, never blended into one score. **Guardrail:** **cost per assisted order**. Recommendation-rail
+impressions are not instrumented yet, so today's definition covers search and copilot sessions; AOV
+moves to server-confirmed `orders` in phase 9.
+
+| # | Problem | Feature | KPI it moves | Measured impact (committed artifact) |
+|---|---|---|---|---|
+| 1 | Mixed Indonesian/English or casual queries return nothing or the wrong products | Tri-modal bilingual retrieval: BM25 + multilingual MiniLM + CLIP → RRF, optional reranker | **zero-result rate ↓**, **search-to-PDP ↑** | **Offline:** overall nDCG@10 **0.794 → 0.894**, Indonesian nDCG@10 **0.334 → 0.765**, HR@10 **100%** ([multilingual eval](./pipelines/results/search_eval_multilingual.json)) |
+| 2 | Size uncertainty blocks the add-to-cart and creates returns | Deterministic `recommend_size` (category-aware in phase 10b) + authored brand cut rules + policy/size-guide RAG | **copilot assisted-add rate ↑**, **unanswered rate ↓** | **Offline retrieval:** RAGAS Context Recall **1.0000**, Context Precision **0.9167** ([RAG eval](./pipelines/results/rag_eval.json)); sizing has no fit-accuracy benchmark yet |
+| 3 | Repetitive shipping/returns/payment questions consume the owner's time | `lookup_store_policy`: hypothetical-question + chunk + IDF lexical RRF | **deflection ↑**, **unanswered rate ↓** | Same RAGAS artifact for retrieval; deflection is planned (phase 12) and there is no human handoff, so it means resolved in-copilot vs an honest “can't answer” |
+| 4 | One-item baskets | Session-aware item-to-item CF + `build_outfit` with `total ≤ budget` enforced in code | **AOV ↑**, **copilot assisted-add rate ↑** | **Offline:** HR@10 **7.96% vs 0.18%** for popularity — **+4,322% relative** ([recommendation eval](./pipelines/results/recs_eval.json)); AOV from orders is planned (phase 9) |
+| 5 | Ungrounded AI answers and token-cost exposure | Guardrail short-circuit, rate limits, 6-tool whitelist, server-validated cart actions | **cost per conversation ↓**, **cost per assisted order ↓** | Guardrail/tool behaviour is unit-tested in CI; **no cost figure is claimed** — tokens are logged in phase 9, unit economics in phase 13 |
+
+Offline nDCG/RAGAS/HR numbers are proxies on small evaluation sets; they justify shipping a feature,
+not a revenue claim. The live funnel endpoint reports its own caveats, and AOV is not exposed yet.
+
+**Full business case** — personas, five falsifiable hypotheses, KPI tree, non-goals and honest
+limitations: **[docs/BUSINESS_CASE.md](./docs/BUSINESS_CASE.md)**. Every metric with its definition,
+formula, source table and caveats: **[docs/METRICS.md](./docs/METRICS.md)**.
+
+**What is not claimed:** revenue, profit or ROI. Checkout is a simulation, there is no inventory or
+margin data, cohort comparison is correlational (no live A/B), and brand size rules are authored demo
+data. See [Honest limitations](#-honest-limitations--what-is-not-built).
+
+---
+
 ## TL;DR
 
 **Toko Marcell is a working e-commerce engine, not a UI mock** — a Next.js storefront, a FastAPI
@@ -124,7 +156,7 @@ It exists to demonstrate four things a hiring manager can verify rather than tak
    standard RAGAS context precision and recall metrics.
 3. **Hardened agentic LLM engineering** — a LangChain v1 `create_agent` loop that can only speak
    from tool results, fronted by an LLM guardrail with a 3-turn history window (3 user + 3 assistant),
-   indirect prompt-injection isolation (`<store_context>` tags + header sanitization), a 7-tool
+   indirect prompt-injection isolation (`<store_context>` tags + header sanitization), a 6-tool
    whitelist, and token/call-count safeguards.
 4. **Backend systems that survive production constraints** — raw `psycopg` v3 connection pooling
    without ORM bloat, 100% parameterized SQL, bounded sliding-window rate limiting, non-blocking
@@ -138,6 +170,7 @@ Nothing is invented. Where something is simplified or unfinished, it is written 
 
 ## Table of contents
 
+- [Problem → Solution → Measured impact](#problem--solution--measured-impact)
 - [TL;DR](#tldr)
 - [System architecture](#-system-architecture)
 - [Tri-modal bilingual hybrid retrieval](#-tri-modal-bilingual-hybrid-retrieval)
@@ -184,7 +217,7 @@ flowchart TD
         subgraph Orchestration["Agentic copilot (LangChain v1 create_agent + OpenRouter)"]
             Guard["Deterministic guardrail node<br/>(greeting / off-topic / injection → 0 LLM calls)"]
             Agent["create_agent loop<br/>+ middleware (context injection,<br/>history trim, 3-call cap)"]
-            Tools7["7 grounding tools"]
+            Tools6["6 grounding tools"]
         end
     end
 
@@ -209,11 +242,11 @@ flowchart TD
     Wakeup --> API
     ClientState --> UI
     API --> Guard
-    Guard -. "needs tools" .-> Agent --> Tools7
-    Tools7 --> BM25 & MiniLM & CLIP
+    Guard -. "needs tools" .-> Agent --> Tools6
+    Tools6 --> BM25 & MiniLM & CLIP
     BM25 & MiniLM & CLIP --> RRF --> Storage
     RRF -. "copilot, ENABLE_RERANKER" .-> CE
-    Tools7 --> RAG
+    Tools6 --> RAG
     Agent --> Ckpt
     Agent --> Chat
     Cache --> PG
@@ -564,8 +597,8 @@ In the storefront (`CopilotChat.js`), shoppers can search and attach up to 3 pro
 [`store_policies.md`](./api/knowledge/store_policies.md)) by section header, embeds each chunk with
 MiniLM, and upserts them into `store_knowledge` (**23 chunks** in the seed). It also generates **82
 hypothetical questions** (3–5 ID+EN per chunk) into `store_knowledge_questions` and indexes those —
-embedding questions a shopper would actually ask rather than the raw policy text roughly triples
-HR@1 (see [Research pillar 2](#-research-pillar-2--tri-modal-hybrid-retrieval)). Nothing here is
+embedding questions a shopper would actually ask rather than the raw policy text improves retrieval
+quality on the committed [RAGAS evaluation](./pipelines/results/rag_eval.json). Nothing here is
 scraped; it is authored store policy, which is why the copilot can be trusted about shipping, returns
 and sizing.
 
@@ -850,7 +883,7 @@ manual/
 │   ├── search.py                 #   BM25 + multilingual embeddings + RRF + fastembed CLIP encoders
 │   ├── reranker.py               #   Stage-2 ONNX cross-encoder
 │   ├── copilot_agent.py          #   LangChain v1 create_agent loop + middleware
-│   ├── copilot_tools.py          #   the 7 grounding tools (schema bound to the agent)
+│   ├── copilot_tools.py          #   the 6 grounding tools (schema bound to the agent)
 │   ├── copilot_llm.py            #   provider chain (.with_fallbacks) + COPILOT_FAKE_LLM
 │   ├── copilot_memory.py         #   LangGraph PostgresSaver + thread activity / TTL
 │   ├── guardrail.py              #   LLM-based 3-turn guardrail + deterministic regex fallback
@@ -859,6 +892,9 @@ manual/
 │   ├── knowledge_seed.py         #   markdown → embedded store_knowledge + hypothetical questions
 │   ├── knowledge/                #   authored size_charts.md + size_chart.json + policies (RAG source)
 │   └── tests/                    #   pytest suite (unit + RAGAS + live API, fake-LLM copilot)
+├── docs/                         # business framing, no code
+│   ├── BUSINESS_CASE.md          #   personas, problems → features → KPIs, hypotheses, KPI tree
+│   └── METRICS.md                #   KPI definitions, formulas, sources, caveats, phase status
 ├── shop/                         # Next.js 16 storefront
 │   └── src/{app,components,lib}  #   routes, UI (CopilotChat + ProductCopilotEntry), API client, session & cart state
 ├── pipelines/                    # offline data & retrieval engineering
