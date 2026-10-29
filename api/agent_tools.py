@@ -48,7 +48,13 @@ _DEFAULT_ALLOWED_HOSTS = "images-na.ssl-images-amazon.com,m.media-amazon.com"
 
 
 def _get_allowed_hosts() -> frozenset[str]:
-    raw = os.environ.get("IMAGE_FETCH_ALLOWED_HOSTS", _DEFAULT_ALLOWED_HOSTS)
+    raw = os.environ.get("IMAGE_FETCH_ALLOWED_HOSTS")
+    if not raw:
+        try:
+            from config import get_settings
+            raw = get_settings().IMAGE_FETCH_ALLOWED_HOSTS
+        except Exception:
+            raw = _DEFAULT_ALLOWED_HOSTS
     return frozenset(h.strip().lower() for h in raw.split(",") if h.strip())
 
 
@@ -216,8 +222,9 @@ def search_catalog(
         filters.append("department = %s")
         params.append(department)
     if category:
-        filters.append("category ILIKE %s")
-        params.append(f"%{category}%")
+        escaped_cat = category.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+        filters.append("category ILIKE %s ESCAPE '\\'")
+        params.append(f"%{escaped_cat}%")
     if price_max and price_max > 0:
         filters.append("price_idr <= %s")
         params.append(price_max)
@@ -349,7 +356,7 @@ def get_product_reviews(
             topic_filter = ""
             params: list[Any] = [asin]
             if topic:
-                keywords = re.findall(r"\w+", topic.lower())
+                keywords = re.findall(r"\w+", topic.lower())[:5]
                 if keywords:
                     kw_clauses = " OR ".join(["comment ILIKE %s OR summary ILIKE %s"] * len(keywords))
                     topic_filter = f"AND ({kw_clauses})"
@@ -486,18 +493,8 @@ def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -
     vec_str = "[" + ",".join(f"{x:.6f}" for x in q_vec) + "]"
     with _connect(db_url) as conn:
         with conn.cursor() as cur:
-            # Prefer the question index when it exists and is populated.
-            use_questions = False
-            try:
-                cur.execute("SELECT to_regclass('store_knowledge_questions')")
-                if cur.fetchone()[0] is not None:
-                    cur.execute("SELECT 1 FROM store_knowledge_questions LIMIT 1")
-                    use_questions = cur.fetchone() is not None
-            except Exception:
-                use_questions = False
-
             rows = []
-            if use_questions:
+            try:
                 # Pull extra question matches, then dedupe to parent chunks.
                 cur.execute(
                     """
@@ -521,6 +518,9 @@ def lookup_store_policy(query: str, limit: int = 3, db_url: str | None = None) -
                     rows.append(r[:4])
                     if len(rows) >= limit:
                         break
+            except Exception:
+                conn.rollback()
+                rows = []
 
             if not rows:
                 cur.execute(

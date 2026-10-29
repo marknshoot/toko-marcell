@@ -22,7 +22,7 @@ import re
 import time
 from typing import Any
 
-import psycopg
+from agent_tools import _connect
 from copilot_llm import build_chat_model, llm_available
 from copilot_tools import ToolContext, build_tools
 from guardrail import classify, trim_guardrail_history
@@ -142,7 +142,7 @@ def build_context_block(ctx: ToolContext, session_id: str | None) -> str:
     """Assemble the authoritative context string injected before the model call."""
     parts: list[str] = []
     if ctx.page_asin or ctx.referenced_asins or session_id:
-        with psycopg.connect(ctx.db_url) as conn:
+        with _connect(ctx.db_url) as conn:
             with conn.cursor() as cur:
                 if ctx.page_asin:
                     blk = _read_product_block(cur, ctx.page_asin, "[Produk yang sedang dilihat]")
@@ -230,12 +230,23 @@ class TrimHistoryMiddleware(AgentMiddleware):
         return await handler(self._trim(request))
 
 
+_CATEGORIES_CACHE: dict[str, tuple[float, list[str]]] = {}
+_CATEGORIES_TTL_SECONDS = 300.0
+
+
 def _catalog_categories(db_url: str) -> list[str]:
+    now = time.time()
+    cached = _CATEGORIES_CACHE.get(db_url)
+    if cached and (now - cached[0]) < _CATEGORIES_TTL_SECONDS:
+        return cached[1]
     try:
-        with psycopg.connect(db_url) as conn:
+        with _connect(db_url) as conn:
             with conn.cursor() as cur:
                 cur.execute("SELECT DISTINCT category FROM products WHERE category <> '' ORDER BY category")
-                return [r[0] for r in cur.fetchall()]
+                cats = [r[0] for r in cur.fetchall()]
+                if cats:
+                    _CATEGORIES_CACHE[db_url] = (now, cats)
+                return cats
     except Exception:
         return []
 
