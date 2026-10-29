@@ -36,12 +36,12 @@ def row_to_product(row):
         "category": row[7],
         "categoryPath": row[8],
         "description": row[9],
-        "features": row[10],
+        "features": row[10] if isinstance(row[10], list) else [],
         "imageUrl": row[11],
         "avgRating": float(row[12]) if row[12] is not None else None,
         "ratingCount": row[13],
-        "alsoBuy": row[14],
-        "alsoView": row[15],
+        "alsoBuy": row[14] if isinstance(row[14], list) else [],
+        "alsoView": row[15] if isinstance(row[15], list) else [],
     }
 
 

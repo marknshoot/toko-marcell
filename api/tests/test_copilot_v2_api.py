@@ -101,7 +101,8 @@ def test_agent_path_shape():
     assert body["guardrail"] is None
     assert "reply" in body and isinstance(body["reply"], str)
     assert "products" in body and isinstance(body["products"], list)
-    assert "suggestions" in body
+    assert "citations" not in body
+    assert "suggestions" not in body
     assert "took_ms" in body
 
 

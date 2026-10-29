@@ -72,7 +72,6 @@ life of the process and would otherwise serve a stale catalog.
 | `TRUST_PROXY` | | `false` | Set `true` on Render (behind their LB) so `X-Forwarded-For` is trusted for rate-limiting |
 | `COPILOT_RATE_LIMIT_PER_MIN` | | `10` | Max copilot requests per client IP per minute |
 | `COPILOT_RATE_LIMIT_PER_DAY` | | `100` | Max copilot requests per client IP per day |
-| `IMAGE_FETCH_ALLOWED_HOSTS` | | `images-na.ssl-images-amazon.com,m.media-amazon.com` | HTTPS hosts the copilot may fetch images from |
 | `ENABLE_TRIMODAL` | | `false` (set `true` in local Compose) | Enable `mode=trimodal`; it loads both MiniLM and the CLIP text ONNX (`Qdrant/clip-ViT-B-32-text`), so it needs ≥1 GB RAM |
 | `ENABLE_RERANKER` | | `false` (set `true` in local Compose) | Cross-encoder reranking for `/search?rerank=true` and the copilot's `search_catalog` |
 | `FASTEMBED_CACHE_DIR` | | `/tmp/fastembed_cache` | Cache for MiniLM and CLIP `fastembed` ONNX models |
@@ -98,10 +97,9 @@ from booting, and catalog browsing never pays for a search model it does not use
 | `GET` | `/recs/popular` | Popularity baseline (optionally by `department`) |
 | `GET` | `/recs/item/{asin}` | Item-to-item recommendations with a category-popularity fallback |
 | `GET` | `/recs/session` | Session-based recommendations from the current visit's events; cold → popularity |
-| `GET` | `/reviews/{asin}` | Reviews for an ASIN · `404` if the product is unknown |
 | `POST` | `/copilot/chat` | Agentic copilot turn (v2: deterministic guardrail → `create_agent` loop → grounded reply); text-only |
 | `POST` | `/copilot/chat/stream` | Stream an agentic copilot turn via Server-Sent Events (`token` + `done` events) |
-| `GET` | `/copilot/tools` | The 7 deterministic tool names the v2 copilot can call |
+| `GET` | `/copilot/tools` | The 6 deterministic tool names the v2 copilot can call |
 | `GET` | `/copilot/threads/{thread_id}` | Replay a conversation thread's display messages (may be empty) |
 | `DELETE` | `/copilot/threads/{thread_id}` | Reset a conversation (delete all persisted checkpointer state) → `204` |
 | `POST` | `/events` | Record a funnel event → `201` · `422` on unknown type |
@@ -154,7 +152,7 @@ api/
 │   ├── catalog.py            # GET /categories, /products, /products/{id}
 │   ├── search.py             # GET /search, POST /search/image, POST /search/reindex
 │   ├── recs.py               # GET /recs/popular, /recs/item/{asin}, /recs/session
-│   ├── reviews.py            # GET /products/{id}/reviews, /reviews/{asin}
+│   ├── reviews.py            # GET /products/{id}/reviews
 │   ├── events.py             # POST /events, GET /events/summary (incl. copilot block)
 │   ├── checkout.py           # POST /checkout/confirm, GET /orders/{token}
 │   └── copilot.py            # POST /copilot/chat, POST /copilot/chat/stream, GET /copilot/tools, GET/DELETE /copilot/threads/{id}
@@ -162,7 +160,7 @@ api/
 ├── reranker.py               # Stage-2 ONNX cross-encoder (ms-marco-MiniLM-L-6-v2)
 ├── guardrail.py              # deterministic pre-agent guardrail (greeting/off-topic/injection, zero LLM)
 ├── copilot_agent.py          # LangChain v1 create_agent orchestrator (run_turn) + middleware
-├── copilot_tools.py          # the 7 deterministic @tool functions bound to the agent
+├── copilot_tools.py          # the 6 deterministic @tool functions bound to the agent
 ├── copilot_llm.py            # provider fallback chain (OpenRouter → generic → Gemini) + fake LLM
 ├── copilot_memory.py         # LangGraph PostgresSaver checkpointer + thread activity / TTL cleanup
 ├── sizing.py                 # deterministic recommend_size logic (TB/BB chart + brand cut rules)
@@ -280,11 +278,11 @@ HR@5, MRR@10 and nDCG@10 against random and global-popularity baselines.
 
 ## Reviews
 
-`GET /reviews/{asin}` and `GET /products/{id}/reviews` return an aggregate (count, average, 1–5 star
+`GET /products/{id}/reviews` returns an aggregate (count, average, 1–5 star
 breakdown) plus up to `limit` authentic reviews. These are real Amazon reviews extracted for the
 catalog (`../pipelines/extract_reviews.py`, ≤10 per ASIN), stored in the `reviews` table — the seed
-contains **46,700** of them. The copilot can reason over them for aspect-level social proof
-(e.g. "buyers say it runs small").
+contains **46,700** of them. They power the product-page review UI; the copilot has no review
+tool (its sizing guidance comes from the authored brand cut rules, not from review mining).
 
 ---
 
@@ -312,7 +310,7 @@ field and no image tool). Photo search still exists as a first-class storefront 
 Guardrail (deterministic, 0 LLM calls)  ─ greeting / off-topic / injection → canned reply
       │ (anything else)
       ▼
-create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply + cards + citations
+create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply + cards
 ```
 
 1. **Pre-agent guardrail (`guardrail.py`).** Before the tool-calling agent runs, `classify(message, history)`
@@ -326,28 +324,29 @@ create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply
    quota can't be drained by a loop. User messages are sanitized against spoofed context headers, and
    the injected context block is wrapped in `<store_context>` tags with explicit untrusted-data prompt rules.
 3. **Grounded answer.** The reply may only use tool evidence, in the "Admin Toko Marcell" voice
-   (Indonesian or English, mirroring the shopper), with structured product cards and citations.
+   (Indonesian or English, mirroring the shopper), with structured product cards.
 
-### The 7 bound tools (`copilot_tools.py`)
+### The 6 bound tools (`copilot_tools.py`)
 
 | Tool | Backed by | Purpose |
 |---|---|---|
 | `search_catalog` | BM25 + multilingual MiniLM (`embedding_ml`, pgvector) fused with RRF, optional reranker, department/category/budget filters | bilingual product discovery |
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
-| `get_product_reviews` | `reviews`, topic filter (fit / size / fabric / durability, capped at 5 keywords) | aspect-level social proof |
 | `recommend_size` | `sizing.py` (TB/BB, 2-layer: store baseline chart → brand cut rule) | advisory sizing, framed as guidance never a certainty |
 | `build_outfit` | catalog search for top + bottom + shoes | the total is **summed and verified ≤ budget in code**, not by the LLM |
 | `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` + IDF-weighted lexical RRF | bilingual sizing (TB/BB), shipping, returns, QRIS demo |
 | `add_to_cart` | re-reads `products.price_idr` server-side | returns a `ui_action` the browser executes |
 
-`GET /copilot/tools` returns exactly these 7 names. There is deliberately **no order-status tool**:
+`GET /copilot/tools` returns exactly these 6 names. There is deliberately **no order-status tool**:
 checkout is a demo simulation with no fulfillment, shipping or tracking to report on.
 
 ### Middleware
 
 - **`ContextInjectionMiddleware`** — injects the page / pinned product (re-read from the DB), a
   numbered `[Produk dalam percakapan ini] [1]…` shown-products registry so follow-ups like "yang
-  kedua" resolve to a real ASIN, and recent browsing context.
+  kedua" resolve to a real ASIN, and recent browsing context. Because the per-request context is
+  new each turn, `run_turn` / `stream_turn` re-seed the registry from the previous turns'
+  `ToolMessage` results in the checkpointer (only products shown *this* turn become response cards).
 - **`TrimHistoryMiddleware`** — keeps the prompt inside a 2,000-token budget (char/4 estimate).
 - **`ModelCallLimitMiddleware`** — hard cap of 3 model calls per turn.
 
@@ -373,8 +372,7 @@ replays the display messages; `DELETE /copilot/threads/{thread_id}` resets the c
 ```
 
 Response (`CopilotChatV2Out`, or streamed via `POST /copilot/chat/stream` as SSE `token` + `done` events): `reply`, `thread_id`, `products` (≤6, each with a stable `ref` number),
-`citations`, `suggestions`, `ui_actions`
-(`add_to_cart`), `tool_calls`, `guardrail` (`greeting` | `off_topic` | `injection` |
+`ui_actions` (`add_to_cart`), `tool_calls`, `guardrail` (`greeting` | `off_topic` | `injection` |
 `null`) and `took_ms`. Errors: `422` (malformed/oversized), `429` (rate limit), `503` (no LLM key),
 `502` (upstream failure).
 
@@ -593,7 +591,7 @@ grouped by concern:
 | `test_search_api.py` | modes, semantic/SKU queries, plural equivalence, filters, reindex |
 | `test_catalog_api.py` | health, facets, pagination boundaries, detail 404/422 |
 | `test_checkout_and_events_api.py` | valid/invalid events (incl. copilot types), **price-tampering rejection**, duplicate-ASIN aggregation, order lookup |
-| `test_copilot_api.py` | tool registry (7 names), guardrails, thread memory, the v2 shopping/ops use cases (fake LLM) |
+| `test_copilot_api.py` | tool registry (6 names), guardrails, thread memory, the v2 shopping/ops use cases (fake LLM) |
 | `test_recs_api.py` | popular, department filter, item CF + fallback, session cold vs warm |
 | `test_reviews_api.py` | review aggregates, limits, 404s |
 | `test_search_image_api.py` | valid image, department filter, bad MIME, tiny file |
@@ -625,8 +623,9 @@ service restored from the seed with `COPILOT_FAKE_LLM=1`, alongside the frontend
 - Client-side filtering means `results_count` is not catalog-wide.
 - No Alembic; `init_db()` is additive, not a versioned migration system.
 - Reindex is manual after a reseed.
-- The copilot is bound to 7 tools (search, details, reviews, size, outfit, policy, add-to-cart);
-  there is intentionally **no order-status tool** (checkout is a simulation).
+- The copilot is bound to 6 tools (search, details, size, outfit, policy, add-to-cart);
+  there is intentionally **no order-status tool** (checkout is a simulation), and reviews
+  are surfaced on the product page rather than in chat.
 - Render free tier cold-starts (see the cold-start overlay in the storefront).
 
 ---

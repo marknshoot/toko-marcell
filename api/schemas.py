@@ -111,17 +111,6 @@ class CopilotProductV2(BaseModel):
     department: str | None = None
 
 
-class CopilotCitationV2(BaseModel):
-    type: Literal["policy", "product", "reviews"]
-    title: str
-    ref: str
-
-
-class CopilotSuggestionV2(BaseModel):
-    label: str
-    prompt: str
-
-
 class CopilotUIActionV2(BaseModel):
     """A browser-executed action: ``add_to_cart`` (server-validated)."""
 
@@ -144,8 +133,6 @@ class CopilotChatV2Out(BaseModel):
     reply: str
     thread_id: str
     products: list[CopilotProductV2] = Field(default_factory=list, max_length=6)
-    citations: list[CopilotCitationV2] = Field(default_factory=list)
-    suggestions: list[CopilotSuggestionV2] = Field(default_factory=list)
     ui_actions: list[CopilotUIActionV2] = Field(default_factory=list)
     tool_calls: list[CopilotToolCallV2] = Field(default_factory=list)
     guardrail: Literal["greeting", "off_topic", "injection"] | None = None

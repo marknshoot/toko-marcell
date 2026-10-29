@@ -18,7 +18,6 @@ router = APIRouter()
 V2_TOOL_NAMES = [
     "search_catalog",
     "get_product_details",
-    "get_product_reviews",
     "recommend_size",
     "build_outfit",
     "lookup_store_policy",

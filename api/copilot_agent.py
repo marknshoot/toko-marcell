@@ -17,6 +17,7 @@ is wired in a later slice; here the agent runs statelessly per call and the
 router passes recent history explicitly.
 """
 
+import json
 import logging
 import re
 import time
@@ -24,11 +25,11 @@ from typing import Any
 
 from agent_tools import _connect
 from copilot_llm import build_chat_model, llm_available
-from copilot_tools import ToolContext, build_tools
+from copilot_tools import ToolContext, _slim, build_tools
 from guardrail import classify, trim_guardrail_history
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
-from langchain_core.messages import AIMessage, HumanMessage
+from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,6 @@ VOICE
 TOOLS (call them — don't guess)
 - Product availability / style / outfit / budget → search_catalog.
 - Fabric, specs, exact price, comparisons → get_product_details.
-- Social proof / sizing reality / durability → get_product_reviews (topic: fit/size/fabric/durability).
 - Size advice from TB/BB → recommend_size (store size chart + brand cut rules; it is advisory, never a guarantee).
 - Full outfit under a budget → build_outfit (the total is verified in code to be within budget).
 - Shipping / returns / QRIS demo / size chart → lookup_store_policy.
@@ -100,6 +100,59 @@ def _resolve_guardrail_history(
         except Exception:
             return []
     return []
+
+
+def _iter_product_dicts(value: Any):
+    """Yield product-shaped dicts (asin + title) from a tool result of any shape.
+
+    Handles the list returned by ``search_catalog``, the dict returned by
+    ``get_product_details``, and the ``items`` dict returned by ``build_outfit``
+    (also when the tool message content is a JSON string).
+    """
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except Exception:
+            return
+    if isinstance(value, dict):
+        if value.get("asin") and value.get("title"):
+            yield value
+            return
+        for nested in value.values():
+            yield from _iter_product_dicts(nested)
+    elif isinstance(value, (list, tuple)):
+        for nested in value:
+            yield from _iter_product_dicts(nested)
+
+
+def _seed_registry_from_checkpoint(
+    ctx: ToolContext,
+    checkpointer: Any,
+    thread_id: str | None,
+) -> None:
+    """Re-register products shown in earlier turns so their refs stay resolvable.
+
+    The checkpointer restores the conversation for the model, but the per-request
+    ``ToolContext`` starts empty — so "nomor 2" / "yang kedua" would fail on a
+    follow-up turn. We replay the prior ``ToolMessage`` results into the
+    registry without marking them as part of the current turn.
+    """
+    if checkpointer is None or not thread_id:
+        return
+    try:
+        state = checkpointer.get_tuple({"configurable": {"thread_id": thread_id}})
+    except Exception as e:
+        logger.info("[copilot] checkpoint seed skipped: %s", e)
+        return
+    if not state:
+        return
+
+    values = (getattr(state, "checkpoint", None) or {}).get("channel_values") or {}
+    for msg in values.get("messages") or []:
+        if not isinstance(msg, ToolMessage):
+            continue
+        for item in _iter_product_dicts(getattr(msg, "content", None)):
+            ctx.register(_slim(item), from_current_turn=False)
 
 
 def _read_product_block(cur, asin: str, label: str) -> str | None:
@@ -312,8 +365,6 @@ async def run_turn(
         return {
             "reply": canned,
             "products": [],
-            "citations": [],
-            "suggestions": [],
             "ui_actions": [],
             "tool_calls": [],
             "guardrail": label,
@@ -325,6 +376,7 @@ async def run_turn(
         page_asin=page_asin,
         referenced_asins=referenced_asins or [],
     )
+    _seed_registry_from_checkpoint(ctx, checkpointer, thread_id)
     agent = build_agent(ctx, session_id, fake=fake, checkpointer=checkpointer)
     if agent is None:
         from fastapi import HTTPException
@@ -380,19 +432,13 @@ async def run_turn(
         for tc in getattr(m, "tool_calls", None) or []:
             tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
 
-    # Products come from the registry (what the tools showed), capped at 6.
-    products = []
-    for ref in sorted(ctx.registry):
-        p = ctx.registry[ref]
-        products.append({"ref": ref, **p})
-    products = products[:6]
+    # Products shown during this turn (not merely rehydrated from history), capped at 6.
+    products = ctx.turn_products(limit=6)
 
     took_ms = round((time.perf_counter() - started) * 1000, 2)
     return {
         "reply": reply,
         "products": products,
-        "citations": [],
-        "suggestions": [],
         "ui_actions": ctx.ui_actions,
         "tool_calls": tool_calls,
         "guardrail": None,
@@ -441,8 +487,6 @@ async def stream_turn(
             "reply": canned,
             "thread_id": thread_id,
             "products": [],
-            "citations": [],
-            "suggestions": [],
             "ui_actions": [],
             "tool_calls": [],
             "guardrail": label,
@@ -455,6 +499,7 @@ async def stream_turn(
         page_asin=page_asin,
         referenced_asins=referenced_asins or [],
     )
+    _seed_registry_from_checkpoint(ctx, checkpointer, thread_id)
     agent = build_agent(ctx, session_id, fake=fake, checkpointer=checkpointer)
     if agent is None:
         from fastapi import HTTPException
@@ -508,8 +553,6 @@ async def stream_turn(
                 "reply": "".join(streamed_parts) or fallback_err,
                 "thread_id": thread_id,
                 "products": [],
-                "citations": [],
-                "suggestions": [],
                 "ui_actions": [],
                 "tool_calls": [],
                 "guardrail": None,
@@ -551,11 +594,7 @@ async def stream_turn(
         for tc in getattr(m, "tool_calls", None) or []:
             tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
 
-    products = []
-    for ref in sorted(ctx.registry):
-        p = ctx.registry[ref]
-        products.append({"ref": ref, **p})
-    products = products[:6]
+    products = ctx.turn_products(limit=6)
 
     took_ms = round((time.perf_counter() - started) * 1000, 2)
     yield {
@@ -563,8 +602,6 @@ async def stream_turn(
         "reply": reply,
         "thread_id": thread_id,
         "products": products,
-        "citations": [],
-        "suggestions": [],
         "ui_actions": ctx.ui_actions,
         "tool_calls": tool_calls,
         "guardrail": None,

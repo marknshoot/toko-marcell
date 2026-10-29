@@ -233,7 +233,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
             streamingInserted = true;
             setMessages((prev) => [
               ...prev,
-              { role: "assistant", content: fullText, products: [], citations: [], uiActions: [] },
+              { role: "assistant", content: fullText, products: [], uiActions: [] },
             ]);
           } else {
             setMessages((prev) => {
@@ -252,7 +252,6 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
         role: "assistant",
         content: res.reply,
         products: res.products || [],
-        citations: res.citations || [],
         uiActions: res.ui_actions || [],
         guardrail: res.guardrail || null,
       };

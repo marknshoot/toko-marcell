@@ -41,7 +41,7 @@ backend and PostgreSQL + pgvector, over a real 4,670-product catalog, deployed l
 |---|---|---|---|
 | 1 | **Bilingual hybrid retrieval** — BM25 + multilingual MiniLM (`paraphrase-multilingual-MiniLM-L12-v2`, 384-d) + pre-trained CLIP (`fastembed`, 512-d) → RRF (`k=60`) + optional ONNX cross-encoder reranker | lifts overall hybrid **nDCG@10 0.794 → 0.894** (`100%` HR@10) and Indonesian **nDCG@10 0.334 → 0.765** | [API internals](./api/README.md#search--how-it-ranks) |
 | 2 | **RAGAS-evaluated store policy & sizing RAG** — hypothetical-question vectors + direct-chunk vectors + IDF-weighted bilingual lexical RRF | **1.0000 Context Recall** & **0.9167 Context Precision** on 12 bilingual ID+EN queries (`ragas.evaluate`) | [`pipelines/eval_rag.py`](./pipelines/eval_rag.py) |
-| 3 | **Hardened agentic copilot** — LangChain v1 `create_agent` + OpenRouter, LLM guardrail with 3-turn history window (3 user + 3 assistant), `<store_context>` indirect prompt-injection defense, 7 tools, LangGraph Postgres memory | answers only from tool evidence; blocks off-topic and multi-turn injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
+| 3 | **Hardened agentic copilot** — LangChain v1 `create_agent` + OpenRouter, LLM guardrail with 3-turn history window (3 user + 3 assistant), `<store_context>` indirect prompt-injection defense, 6 tools, LangGraph Postgres memory | answers only from tool evidence; blocks off-topic and multi-turn injection attempts | [copilot](./README.md#-the-agentic-copilot-admin-toko-marcell) |
 | 4 | **Recommendations from real behaviour** — 3.36 M interactions | co-occurrence + Bayesian popularity, session-aware, cold-start safe (**+4,322% HR@10** vs popularity) | [recommendation engine](./README.md#-recommendation-engine) |
 | 5 | **Raw `psycopg` v3 backend engineering** — connection pooling (`psycopg_pool`), zero ORM, 100% parameterized SQL (`psycopg.sql.Identifier`), bounded sliding-window rate limiting, and non-blocking async I/O | zero SQL injection vectors, bounded memory under IP churn, non-blocking ONNX inference | [backend security](./README.md#-production-reliability-caching--defensive-security) |
 
@@ -465,7 +465,7 @@ sequenceDiagram
     participant API as /copilot/chat
     participant G as Guardrail (deterministic, 0 LLM)
     participant A as create_agent loop (≤ 3 model calls)
-    participant T as 7 tools
+    participant T as 6 tools
     participant D as Postgres + pgvector (incl. checkpointer)
     S->>API: {thread_id, message, context?}
     API->>G: classify
@@ -474,11 +474,11 @@ sequenceDiagram
     G->>A: otherwise, run the agent
     Note over A: middleware injects page/pinned product,<br/>shown-products registry, browsing context;<br/>trims history; caps model calls at 3
     A->>T: tool calls
-    T->>D: catalog / details / reviews / size / outfit / policy / cart
+    T->>D: catalog / details / size / outfit / policy / cart
     D-->>T: authoritative rows
     T-->>A: compacted evidence
     A->>D: persist turn (PostgresSaver, thread_id)
-    A-->>S: reply + products[≤6] + citations + suggestions + ui_actions
+    A-->>S: reply + products[≤6] + ui_actions
 ```
 
 1. **LLM-based pre-agent guardrail (`api/guardrail.py`).** Before the tool-calling agent runs,
@@ -499,13 +499,12 @@ sequenceDiagram
 
 ### The tool layer
 
-Seven tools are bound to the agent (`GET /copilot/tools` lists them):
+Six tools are bound to the agent (`GET /copilot/tools` lists them):
 
 | Tool | Reads from | Answers |
 |---|---|---|
 | `search_catalog` | BM25 + MiniLM (pgvector) fused with RRF, optional reranker, real category enum + budget filters | "do you have…", style, outfit, budget |
 | `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
-| `get_product_reviews` | `reviews`, with a topic filter (fit / size / fabric / durability) | aspect-level social proof |
 | `recommend_size` | `size_chart.json` + brand cut rules, 2-layer (store baseline → brand offset) | TB/BB sizing advisory, never a certainty |
 | `build_outfit` | catalog search; total summed and verified ≤ budget **in code** | top + bottom + shoes within budget |
 | `lookup_store_policy` | `store_knowledge` / `store_knowledge_questions` (hypothetical-question RAG) | sizing (TB/BB), shipping, returns, QRIS demo |
@@ -539,7 +538,9 @@ checkpoint tables are created by the saver at runtime, not shipped in the seed.
 
 Before the agent runs, `ContextInjectionMiddleware` also injects the shopper's recent
 `view_product` / `add_to_cart` events and any page/pinned product — so "do you have these in black?"
-has a referent.
+has a referent. The per-turn registry is rebuilt from scratch, so it is re-seeded from the previous
+turns' `ToolMessage` results; a follow-up like "nomor 2" or "yang kedua" keeps resolving to the
+same product even though the tool context is new.
 
 ### Provider chain and deterministic testing
 
@@ -552,9 +553,9 @@ exercises the full agent and tool path **without ever calling a real LLM**.
 
 `POST /copilot/chat` (JSON) and `POST /copilot/chat/stream` (Server-Sent Events emitting `token` and `done` events) accept `{session_id?, thread_id, message (1..2000), context?: {page_asin?,
 referenced_asins[≤3]}}` with `extra="forbid"`. The turn payload contains `{reply, thread_id, products[≤6] (each
-with a `ref`), citations, suggestions, ui_actions (`add_to_cart`), tool_calls, guardrail, took_ms}`.
+with a `ref`), ui_actions (`add_to_cart`), tool_calls, guardrail, took_ms}`.
 In the storefront (`CopilotChat.js`), shoppers can search and attach up to 3 products via the paperclip (`📎`) menu (`referenced_asins`), see a pulsing `"Sedang berpikir..."` indicator while waiting for the first token, and view streamed replies rendered as GitHub Flavored Markdown (`react-markdown` + `remark-gfm`). Errors are `422` (validation), `429` (rate limit),
-`503` (no LLM key) and `502` (upstream failure). `GET /copilot/tools` returns the 7 tool names.
+`503` (no LLM key) and `502` (upstream failure). `GET /copilot/tools` returns the 6 tool names.
 
 ### Knowledge base (RAG)
 
@@ -842,7 +843,7 @@ manual/
 │   │   ├── catalog.py            #     categories, products, product detail + row_to_product
 │   │   ├── search.py             #     text search, image search, reindex
 │   │   ├── recs.py               #     popular, item-to-item, session recommendations
-│   │   ├── reviews.py            #     product & ASIN reviews
+│   │   ├── reviews.py            #     product reviews
 │   │   ├── events.py             #     funnel events + summary
 │   │   ├── checkout.py           #     confirm checkout, order lookup
 │   │   └── copilot.py            #     AI copilot chat + tool listing

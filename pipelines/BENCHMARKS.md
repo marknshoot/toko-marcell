@@ -171,7 +171,7 @@ are read directly from `pipelines/build_recs.py` (Tier A).
 
 | Suite | Count | Tier | Command |
 |---|---:|:---:|---|
-| Offline Unit Tests (guardrail, tools, RAGAS, search, sizing, SSRF, rate limiter) | 115 passed + 1 skipped | B | `python3 -m pytest api/tests/test_rate_limiter.py api/tests/test_copilot_tools_unit.py api/tests/test_guardrail_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_search_unit.py api/tests/test_sizing_unit.py api/tests/test_ssrf_image_validation.py pipelines/tests/test_pipeline_math.py` |
+| Offline Unit Tests (guardrail, tools, RAGAS, search, sizing, schemas, rate limiter) | 109 passed + 1 skipped | B | `python3 -m pytest api/tests/test_rate_limiter.py api/tests/test_copilot_tools_unit.py api/tests/test_guardrail_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_search_unit.py api/tests/test_sizing_unit.py pipelines/tests/test_pipeline_math.py` |
 | Full API Integration Suite (needs Postgres; copilot runs on fake LLM) | 180+ passed | B | `COPILOT_FAKE_LLM=1 uvicorn main:app` then `cd api && python3 -m pytest tests/` |
 | Frontend (Vitest) | 23 (5 files) | B | `cd shop && npm test` |
 

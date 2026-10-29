@@ -19,10 +19,9 @@ from typing import TYPE_CHECKING
 
 import psycopg
 from config import get_settings
-from psycopg_pool import ConnectionPool
 
 if TYPE_CHECKING:
-    pass
+    from psycopg_pool import ConnectionPool
 
 logger = logging.getLogger(__name__)
 
@@ -34,6 +33,10 @@ def open_pool() -> None:
     global _pool
     if _pool is not None:
         return
+    # Imported lazily so modules that only need offline helpers (e.g. the
+    # ``agent_tools`` unit tests) don't require psycopg_pool to be installed.
+    from psycopg_pool import ConnectionPool
+
     s = get_settings()
     _pool = ConnectionPool(
         conninfo=s.DATABASE_URL,

@@ -73,8 +73,6 @@ class TestResponseV2:
             products=[{
                 "ref": 1, "asin": "B01", "title": "Chino", "priceIdr": 199000,
             }],
-            citations=[{"type": "product", "title": "Chino", "ref": "B01"}],
-            suggestions=[{"label": "Mirip lebih murah", "prompt": "yang mirip tapi lebih murah"}],
             ui_actions=[{
                 "type": "add_to_cart", "id": 5, "asin": "B01", "qty": 1, "title": "Chino",
                 "priceIdr": 199000, "imageUrl": "https://example.com/chino.jpg",
@@ -87,7 +85,6 @@ class TestResponseV2:
         assert out.ui_actions[0].type == "add_to_cart"
         assert out.ui_actions[0].id == 5
         assert out.ui_actions[0].imageUrl == "https://example.com/chino.jpg"
-        assert out.citations[0].type == "product"
 
     def test_products_max_6(self):
         with pytest.raises(ValidationError):

@@ -63,11 +63,6 @@ class Settings(BaseSettings):
     FASTEMBED_CACHE_DIR: str = "/tmp/fastembed_cache"
     HF_HUB_CACHE: str = "/tmp/hf_cache"
 
-    # ── Image fetch (SSRF protection) ───────────────────────────────────────
-    IMAGE_FETCH_ALLOWED_HOSTS: str = (
-        "images-na.ssl-images-amazon.com,m.media-amazon.com"
-    )
-
     # ── Rate limiting ───────────────────────────────────────────────────────
     COPILOT_RATE_LIMIT_PER_MIN: int = 10
     COPILOT_RATE_LIMIT_PER_DAY: int = 100

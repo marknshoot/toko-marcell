@@ -52,7 +52,8 @@ def test_real_question_runs_agent():
     r = _run(run_turn("ada celana chino hitam?", db_url=DB_URL, fake=True))
     assert r["guardrail"] is None
     assert isinstance(r["reply"], str) and r["reply"]
-    assert r["suggestions"] == []
+    assert "citations" not in r
+    assert "suggestions" not in r
     assert isinstance(r["took_ms"], float)
 
 
