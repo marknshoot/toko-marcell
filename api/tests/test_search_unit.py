@@ -269,6 +269,175 @@ def test_embed_query_uses_model_when_dense_enabled(monkeypatch):
     assert search.embed_query("sepatu lari") == [0.1, 0.2, 0.3]
 
 
+# ── Embedding model loading (custom HF, local dir, catalog fallback) ───────
+
+_BASE_MULTILINGUAL_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+_PRUNED_HF_MODEL = "Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx"
+
+
+@pytest.fixture(autouse=True)
+def _clear_embedding_singleton():
+    """Isolate the module-level embedding singleton between tests."""
+    import search
+
+    search.reset_embed_model()
+    yield
+    search.reset_embed_model()
+
+
+def _configure_embedding(monkeypatch, model_name, cache_dir="/tmp/test-fastembed-cache"):
+    import config
+
+    settings = config.Settings(TEXT_EMBED_MODEL=model_name, FASTEMBED_CACHE_DIR=cache_dir)
+    monkeypatch.setattr(config, "get_settings", lambda: settings)
+    for env_var in ("TEXT_EMBED_MODEL", "FASTEMBED_CACHE_DIR", "FASTEMBED_THREADS"):
+        monkeypatch.delenv(env_var, raising=False)
+
+
+def _patch_embedding_loaders(monkeypatch, calls, snapshot_dir="/tmp/hf-snapshot"):
+    """Replace the network/ONNX loaders and record how they are called."""
+    import fastembed
+    import fastembed.text.pooled_embedding as pooled_embedding
+    import huggingface_hub
+
+    def fake_snapshot_download(**kwargs):
+        calls.append(("snapshot_download", kwargs))
+        return snapshot_dir
+
+    class FakePooledEmbedding:
+        def __init__(self, **kwargs):
+            calls.append(("PooledEmbedding", kwargs))
+
+    class FakeTextEmbedding:
+        def __init__(self, **kwargs):
+            calls.append(("TextEmbedding", kwargs))
+
+    monkeypatch.setattr(huggingface_hub, "snapshot_download", fake_snapshot_download)
+    monkeypatch.setattr(pooled_embedding, "PooledEmbedding", FakePooledEmbedding)
+    monkeypatch.setattr(fastembed, "TextEmbedding", FakeTextEmbedding)
+    return FakePooledEmbedding, FakeTextEmbedding
+
+
+def test_get_embed_model_downloads_custom_hf_snapshot(monkeypatch):
+    import search
+
+    calls: list[tuple[str, dict]] = []
+    fake_pooled, _ = _patch_embedding_loaders(monkeypatch, calls)
+    _configure_embedding(monkeypatch, _PRUNED_HF_MODEL)
+
+    model = search.get_embed_model()
+
+    assert isinstance(model, fake_pooled)
+    assert calls == [
+        (
+            "snapshot_download",
+            {"repo_id": _PRUNED_HF_MODEL, "cache_dir": "/tmp/test-fastembed-cache"},
+        ),
+        (
+            "PooledEmbedding",
+            {
+                "model_name": _BASE_MULTILINGUAL_MODEL,
+                "specific_model_path": "/tmp/hf-snapshot",
+                "threads": 1,
+                "enable_cpu_mem_arena": False,
+            },
+        ),
+    ]
+
+    # The singleton is reused: no second download or model construction.
+    assert search.get_embed_model() is model
+    assert len(calls) == 2
+
+
+def test_get_embed_model_downloads_other_custom_hf_repos(monkeypatch):
+    import search
+
+    calls: list[tuple[str, dict]] = []
+    _patch_embedding_loaders(monkeypatch, calls)
+    _configure_embedding(monkeypatch, "acme/custom-minilm-onnx")
+
+    search.get_embed_model()
+
+    assert calls[0] == (
+        "snapshot_download",
+        {"repo_id": "acme/custom-minilm-onnx", "cache_dir": "/tmp/test-fastembed-cache"},
+    )
+    assert calls[1][0] == "PooledEmbedding"
+
+
+def test_get_embed_model_loads_local_directory(monkeypatch, tmp_path):
+    import search
+
+    model_dir = tmp_path / "pruned-model"
+    model_dir.mkdir()
+    (model_dir / "model_optimized.onnx").write_bytes(b"not-a-real-onnx")
+
+    calls: list[tuple[str, dict]] = []
+    fake_pooled, _ = _patch_embedding_loaders(monkeypatch, calls)
+    _configure_embedding(monkeypatch, str(model_dir))
+
+    model = search.get_embed_model()
+
+    assert isinstance(model, fake_pooled)
+    assert calls == [
+        (
+            "PooledEmbedding",
+            {
+                "model_name": _BASE_MULTILINGUAL_MODEL,
+                "specific_model_path": str(model_dir),
+                "threads": 1,
+                "enable_cpu_mem_arena": False,
+            },
+        )
+    ]
+
+
+@pytest.mark.parametrize(
+    "model_name",
+    ["BAAI/bge-small-en-v1.5", "sentence-transformers/all-MiniLM-L6-v2"],
+)
+def test_get_embed_model_uses_text_embedding_for_catalog_models(monkeypatch, model_name):
+    import search
+
+    calls: list[tuple[str, dict]] = []
+    _, fake_text = _patch_embedding_loaders(monkeypatch, calls)
+    _configure_embedding(monkeypatch, model_name)
+
+    model = search.get_embed_model()
+
+    assert isinstance(model, fake_text)
+    assert calls == [
+        (
+            "TextEmbedding",
+            {
+                "model_name": model_name,
+                "cache_dir": "/tmp/test-fastembed-cache",
+                "threads": 1,
+                "enable_cpu_mem_arena": False,
+            },
+        )
+    ]
+
+
+def test_reset_embed_model_clears_cached_singleton(monkeypatch):
+    import search
+
+    calls: list[tuple[str, dict]] = []
+    _patch_embedding_loaders(monkeypatch, calls)
+    _configure_embedding(monkeypatch, _PRUNED_HF_MODEL)
+
+    first = search.get_embed_model()
+    assert search.get_embed_model() is first
+    assert len(calls) == 2
+
+    search.reset_embed_model()
+
+    assert search._EMBED_MODEL is None
+    second = search.get_embed_model()
+    assert second is not first
+    assert len(calls) == 4
+
+
 class _FakeCursor:
     def __init__(self):
         self._rows: list[tuple] = []

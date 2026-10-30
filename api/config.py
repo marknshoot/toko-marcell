@@ -66,12 +66,21 @@ class Settings(BaseSettings):
 
     # ── Feature flags (memory-constrained deployments) ──────────────────────
     ENABLE_RERANKER: bool = False
-    # Dense retrieval loads a 225 MB ONNX model + 17 MB tokenizer (~630 MB RSS).
-    # Disable on hosts where that does not fit; BM25 + query rewriting still work.
+    # Dense retrieval uses a vocabulary-pruned multilingual ONNX model:
+    # 113,070 Latin/Indonesian/English tokens instead of 250,002, a 124 MB
+    # ONNX file instead of 225 MB, and ~380 MB RSS with one ONNX thread and
+    # the CPU memory arena disabled. That fits Render's 512 MB free tier, so
+    # hybrid dense + lexical search stays enabled by default. Set false only
+    # for hosts where even the pruned model does not fit; BM25 + query
+    # rewriting continue to work without embeddings.
     ENABLE_DENSE_SEARCH: bool = True
 
     # ── Text embedding model switch (multilingual ID/EN default) ────────────
-    TEXT_EMBED_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+    # 100% numerically equivalent to sentence-transformers/paraphrase-
+    # multilingual-MiniLM-L12-v2; only the unused non-Latin vocabulary rows
+    # (Cyrillic, Chinese, Arabic, Devanagari) were pruned. Hosted on Hugging
+    # Face and loaded through fastembed's PooledEmbedding.
+    TEXT_EMBED_MODEL: str = "Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx"
     TEXT_EMBED_COLUMN: str = "embedding_ml"
 
     # ── Model paths / caches ────────────────────────────────────────────────
