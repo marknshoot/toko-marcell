@@ -9,7 +9,7 @@ sales copilot, and the operations KPI dashboard.
 | **Database** | PostgreSQL 16 + pgvector (HNSW cosine indexes) |
 | **Embeddings** | `fastembed` ONNX — 384-d pruned multilingual MiniLM (113k tokens, 124 MB) |
 | **Agent** | LangChain v1 `create_agent` on LangGraph, checkpointed in PostgreSQL |
-| **Migrations** | Alembic, hand-written SQL, head revision `0005` |
+| **Migrations** | Alembic, hand-written SQL, head revision `0006` |
 | **Tests** | pytest (unit + integration), Ruff |
 
 ---
@@ -134,6 +134,10 @@ Base URL locally: `http://localhost:8001`. Interactive OpenAPI docs: `/docs`.
 | `POST` | `/checkout/confirm` | Create a paid order from server-priced items |
 | `GET` | `/orders/{token}` | Read an order by its secret token |
 | `GET` | `/admin/kpi` | Bearer-JWT-gated executive KPI dashboard payload (legacy token fallback) |
+| `POST` | `/auth/login` | Verify Argon2id credentials; issue an access JWT and an HttpOnly refresh cookie |
+| `POST` | `/auth/refresh` | Rotate the refresh token and return a fresh access JWT (reuse revokes the family) |
+| `POST` | `/auth/logout` | Revoke the presented refresh token and clear its cookie |
+| `GET` | `/auth/me` | Identity of the authenticated admin, re-read from `admin_users` |
 
 Common status codes:
 
@@ -453,6 +457,41 @@ importing or downloading fastembed:
 - `store_knowledge_questions` — **120 hypothetical shopper questions** in Indonesian and English,
   each embedded and linked to its parent chunk.
 
+How ingestion and retrieval fit together:
+
+```mermaid
+flowchart TB
+    subgraph OFFLINE["Offline ingestion"]
+        direction TB
+        SRC["api/knowledge/*.md<br/>store_policies.md + size_charts.md"] --> CHUNK["Chunking<br/>34 policy + sizing chunks"]
+        CHUNK --> HYP["Hypothetical questions<br/>120 Indonesian + English shopper questions"]
+        CHUNK --> EMB["FastEmbed MiniLM<br/>384-d multilingual ONNX"]
+        HYP --> EMB
+        EMB --> K[("store_knowledge<br/>chunk text + embedding")]
+        EMB --> KQ[("store_knowledge_questions<br/>question + chunk_id + embedding")]
+        EMB --> CACHE[("knowledge_seed_cache.json<br/>precomputed vectors")]
+    end
+
+    subgraph ONLINE["Online retrieval — lookup_store_policy"]
+        direction TB
+        Q["Shopper question<br/>Indonesian, English, or code-switched"] --> TTL{"10-minute TTL cache<br/>256 entries"}
+        TTL -->|hit| ANSWER
+        TTL -->|miss| QEMB["Embed query<br/>384-d MiniLM"]
+        QEMB --> S1["Signal 1 — direct chunk vector<br/>pgvector cosine over every chunk"]
+        QEMB --> S2["Signal 2 — hypothetical question vector<br/>top 5x limit, deduplicated to parent chunk"]
+        Q --> S3["Signal 3 — bilingual BM25 / IDF lexical<br/>over chunk title + content"]
+        K -.-> S1
+        KQ -.-> S2
+        K -.-> S3
+        S1 --> RRF["Reciprocal Rank Fusion<br/>k = 60"]
+        S2 --> RRF
+        S3 --> RRF
+        RRF --> TOP3["Top-3 grounded policy chunks"]
+        TOP3 --> STORE["Store result in the TTL cache"]
+        STORE --> ANSWER["Copilot answer<br/>with grounded policy citations"]
+    end
+```
+
 Retrieval (`lookup_store_policy`) fuses three ranked lists with RRF (`k=60`):
 
 1. Direct chunk-vector similarity.
@@ -473,6 +512,43 @@ Evaluation uses RAGAS (`pipelines/eval_rag.py`) with ID-based and non-LLM contex
 `create_agent` runs on a LangGraph state machine. The graph holds message history in PostgreSQL via
 `PostgresSaver`, keyed by the browser-generated `thread_id`; a sidecar activity table enables TTL
 cleanup of abandoned threads.
+
+One turn end to end — deterministic triage first, then a bounded agent loop:
+
+```mermaid
+flowchart TB
+    MSG["Shopper message<br/>thread_id + session_id"] --> SAN["Sanitization<br/>strip control characters, trim, cap length"]
+    SAN --> TRIAGE{"Pre-agent guardrail triage<br/>guardrail.classify()"}
+    TRIAGE -->|greeting| GREET["Canned greeting reply<br/>0 agent model calls"]
+    TRIAGE -->|off_topic| OFF["Polite scope deflection<br/>0 agent model calls"]
+    TRIAGE -->|injection| INJ["Prompt-injection refusal<br/>0 agent model calls"]
+    TRIAGE -->|on_topic| ASSEMBLE["Dynamic context assembly"]
+
+    GREET --> FASTLOG[("Fast log path → copilot_turns<br/>guardrail label, outcome = guardrail")]
+    OFF --> FASTLOG
+    INJ --> FASTLOG
+
+    ASSEMBLE --> CONTEXT["Authoritative context block<br/>pinned page product re-read from the DB<br/>shown-products registry<br/>recent browsing events"]
+
+    subgraph AGENT["LangGraph agent execution loop — create_agent"]
+        direction TB
+        CONTEXT --> MODEL["Model call<br/>OpenRouter primary, Gemini failover"]
+        MODEL --> CAP{"ModelCallLimitMiddleware<br/>cap = 3 model calls"}
+        CAP -->|tool calls| TOOLS["7 deterministic tools<br/>search_catalog, get_product_details<br/>recommend_size, build_outfit<br/>lookup_store_policy, add_to_cart<br/>flag_unanswered"]
+        TOOLS --> INV["Code invariants enforced<br/>outfit total summed against budget<br/>product price re-read server-side<br/>size refusal instead of a guess"]
+        INV --> MODEL
+        CAP -->|end| REPLY["Grounded reply<br/>product cards + ui_actions"]
+    end
+
+    REPLY --> CKPT[("PostgresSaver checkpoint<br/>thread state keyed by thread_id")]
+    REPLY --> METRICS["OpenTelemetry-aligned turn metrics<br/>guardrail, outcome, tools, latency<br/>tokens, model, cost_usd"]
+    METRICS --> TURNS[("copilot_turns")]
+    FASTLOG --> TURNS
+```
+
+Guardrail labels never enter the agent loop, so a greeting, deflection, or refusal costs zero agent
+model calls. With `GUARDRAIL_LLM_MODE=ambiguous`, a decisive regex label also skips the small
+classifier call, making the entire triage path LLM-free.
 
 ### Guardrails
 
@@ -576,17 +652,177 @@ variables taking precedence. Unknown variables are ignored.
 
 ## Database schema
 
-Defined by Alembic revisions `0001` → `0005`. Revision `0005` drops the retired `products.image_embedding`
-column and its HNSW index.
+Defined by Alembic revisions `0001` → `0006`. Revision `0005` drops the retired
+`products.image_embedding` column and its HNSW index; revision `0006` adds the admin-authentication
+tables and seeds the demo `admin` user with an Argon2id hash generated at migration time.
 
 ```mermaid
 erDiagram
+    %% ── Catalog ──────────────────────────────────────────────
+    products {
+        INTEGER id PK "internal product id"
+        TEXT asin UK "Amazon-style product key"
+        TEXT title "display title, search dedupe key"
+        TEXT brand
+        NUMERIC price_usd "source price"
+        INTEGER price_idr "server-authoritative IDR price"
+        TEXT department "facet"
+        TEXT category "facet"
+        JSONB category_path
+        TEXT description
+        JSONB features
+        TEXT image_url
+        NUMERIC avg_rating
+        INTEGER rating_count
+        JSONB also_buy
+        JSONB also_view
+        VECTOR embedding "optional English MiniLM, 384-d, HNSW"
+        VECTOR embedding_ml "default multilingual column, 384-d, HNSW"
+    }
+    reviews {
+        SERIAL id PK
+        TEXT asin "logical FK to products.asin, not enforced"
+        NUMERIC rating
+        TEXT summary
+        TEXT comment
+        TEXT author
+        BOOLEAN verified
+        TEXT review_date
+        TIMESTAMPTZ created_at
+    }
+    item_recommendations {
+        TEXT asin PK "logical FK to products.asin"
+        JSONB recs "ordered ASIN neighbours"
+    }
+
+    %% ── Orders ───────────────────────────────────────────────
+    orders {
+        BIGSERIAL id PK
+        TEXT token UK "secret receipt token"
+        INTEGER total_idr "server-computed total"
+        INTEGER item_count
+        TEXT status "paid"
+        TEXT session_id "anonymous session correlation"
+        TIMESTAMPTZ created_at
+    }
+    order_items {
+        BIGSERIAL id PK
+        BIGINT order_id FK "ON DELETE CASCADE to orders.id"
+        TEXT asin "logical FK to products.asin"
+        TEXT title "snapshot at purchase"
+        INTEGER qty
+        INTEGER unit_price_idr "snapshot at purchase"
+    }
+
+    %% ── Telemetry ────────────────────────────────────────────
+    events {
+        BIGSERIAL id PK
+        TEXT session_id
+        TEXT event_type "view_product, search, add_to_cart, checkout_start, purchase_mock, copilot"
+        TEXT asin "logical FK to products.asin"
+        TEXT query
+        INTEGER results_count
+        INTEGER qty
+        INTEGER price_idr
+        TIMESTAMPTZ created_at
+    }
+    copilot_turns {
+        BIGSERIAL id PK
+        TEXT thread_id "LangGraph thread, logical key"
+        TEXT session_id
+        TIMESTAMPTZ created_at
+        TEXT guardrail "greeting, off_topic, injection, or null"
+        TEXT outcome "answered, guardrail, unanswered, cart, error"
+        TEXT_ARRAY tool_names "text[] of tools invoked"
+        REAL latency_ms
+        INTEGER input_tokens
+        INTEGER output_tokens
+        TEXT model
+        NUMERIC cost_usd
+        TEXT unanswered_question "populated by flag_unanswered"
+    }
+    copilot_feedback {
+        BIGSERIAL id PK
+        TEXT thread_id "logical key to a copilot thread"
+        TEXT session_id
+        SMALLINT rating "-1 or +1"
+        TIMESTAMPTZ created_at
+    }
+
+    %% ── RAG knowledge ────────────────────────────────────────
+    store_knowledge {
+        SERIAL id PK
+        TEXT category
+        TEXT title
+        TEXT content
+        VECTOR embedding "384-d multilingual, HNSW cosine"
+    }
+    store_knowledge_questions {
+        SERIAL id PK
+        INTEGER chunk_id FK "ON DELETE CASCADE to store_knowledge.id"
+        TEXT question "hypothetical ID/EN shopper question"
+        TEXT lang "id or en"
+        VECTOR embedding "384-d, HNSW cosine"
+    }
+
+    %% ── Admin auth ───────────────────────────────────────────
+    admin_users {
+        SERIAL id PK
+        VARCHAR username UK "login name"
+        VARCHAR password_hash "Argon2id digest"
+        VARCHAR role "admin"
+        TIMESTAMPTZ created_at
+    }
+    admin_refresh_tokens {
+        SERIAL id PK
+        INTEGER user_id FK "ON DELETE CASCADE to admin_users.id"
+        VARCHAR token_hash UK "SHA-256 of the raw refresh token"
+        TIMESTAMPTZ expires_at
+        BOOLEAN revoked
+        TIMESTAMPTZ created_at
+    }
+
     products ||--o{ reviews : "asin"
     products ||--o{ item_recommendations : "asin"
+    products ||--o{ events : "asin"
     orders ||--o{ order_items : "order_id"
+    orders ||--o{ events : "session_id"
     store_knowledge ||--o{ store_knowledge_questions : "chunk_id"
-    orders ||--o{ events : "session correlation"
+    admin_users ||--o{ admin_refresh_tokens : "user_id"
+    copilot_turns }o--o{ copilot_feedback : "thread_id"
 ```
+
+Legend: `PK` primary key, `UK` unique key, `FK` enforced foreign key. Relationships without an
+enforced constraint (`reviews.asin`, `item_recommendations.asin`, `events.asin`, `events.session_id`,
+`copilot_feedback.thread_id`) are correlated logical keys, not database constraints. `VECTOR` is a
+pgvector `vector(384)`; `TEXT_ARRAY` is PostgreSQL `text[]`.
+
+The schema is **12 tables**: the **10 core domain tables** plus the two auth tables from `0006`.
+
+| Domain | Tables | Introduced by |
+|---|---|---|
+| **Catalog** | `products`, `reviews`, `item_recommendations` | `0001`, `0002` (`0005` drops `image_embedding`) |
+| **Orders** | `orders`, `order_items` | `0001` |
+| **Telemetry** | `events`, `copilot_turns`, `copilot_feedback` | `0001`, `0003`, `0004` |
+| **RAG** | `store_knowledge`, `store_knowledge_questions` | `0001` |
+| **Admin auth** | `admin_users`, `admin_refresh_tokens` | `0006` |
+
+### Indexes
+
+| Table | Index | Definition |
+|---|---|---|
+| `products` | `products_department_idx`, `products_category_idx` | btree (`department`), btree (`category`) |
+| `products` | `products_embedding_idx`, `products_embedding_ml_idx` | HNSW cosine (`embedding`), HNSW cosine (`embedding_ml`) |
+| `reviews` | `reviews_asin_idx`, `reviews_rating_idx` | btree (`asin`), btree (`rating`) |
+| `item_recommendations` | `item_recs_asin_idx` | btree (`asin`) |
+| `events` | `events_session_idx`, `events_type_created_idx` | btree (`session_id`), btree (`event_type`, `created_at DESC`) |
+| `orders` | `orders_created_idx` | btree (`created_at DESC`) |
+| `order_items` | `order_items_order_idx` | btree (`order_id`) |
+| `store_knowledge` | `store_knowledge_category_idx`, `store_knowledge_embedding_idx` | btree (`category`), HNSW cosine (`embedding`) |
+| `store_knowledge_questions` | `store_knowledge_q_chunk_idx`, `store_knowledge_q_embedding_idx` | btree (`chunk_id`), HNSW cosine (`embedding`) |
+| `copilot_turns` | `copilot_turns_created_idx`, `copilot_turns_thread_idx` | btree (`created_at DESC`), btree (`thread_id`) |
+| `copilot_feedback` | `copilot_feedback_created_idx` | btree (`created_at DESC`) |
+| `admin_refresh_tokens` | `admin_refresh_tokens_token_hash_idx`, `admin_refresh_tokens_user_idx` | btree (`token_hash`), btree (`user_id`) |
 
 ### Catalog
 
@@ -672,7 +908,7 @@ Indexes: `events_session_idx`, `events_type_created_idx`.
 
 | Column | Type | Notes |
 |---|---|---|
-| `id` | `SERIAL PK` |
+| `id` | `SERIAL PK` | |
 | `chunk_id` | `INTEGER FK → store_knowledge(id)` | `ON DELETE CASCADE` |
 | `question` | `TEXT NOT NULL` | Hypothetical shopper question |
 | `lang` | `TEXT NOT NULL DEFAULT 'id'` | `id` or `en` |
@@ -682,25 +918,71 @@ Both tables carry HNSW cosine indexes; questions are additionally indexed by `ch
 
 ### Copilot telemetry
 
-**`copilot_turns`** — one row per turn.
+#### `copilot_turns`
 
-| Column | Type | Notes |
-|---|---|---|
-| `id` | `BIGSERIAL PK` | |
-| `thread_id`, `session_id` | `TEXT` | Attribution |
-| `created_at` | `TIMESTAMPTZ DEFAULT now()` | |
-| `guardrail` | `TEXT` | `greeting`, `off_topic`, `injection`, or `null` |
-| `outcome` | `TEXT NOT NULL` | `answered`, `guardrail`, `unanswered`, `cart`, `error` |
-| `tool_names` | `TEXT[]` | Tools invoked |
-| `latency_ms` | `REAL` | End-to-end turn latency |
-| `input_tokens`, `output_tokens` | `INTEGER` | Usage |
-| `model` | `TEXT` | Provider/model id |
-| `cost_usd` | `NUMERIC` | Estimated from configured token prices |
-| `unanswered_question` | `TEXT` | Populated by `flag_unanswered` |
+One row per turn, written for the deterministic guardrail fast path as well as full agent turns.
 
-Indexes: `copilot_turns_created_idx`, `copilot_turns_thread_idx`.
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | `BIGSERIAL` | `PK` | Turn id |
+| `thread_id` | `TEXT` | | LangGraph thread; logical key to the checkpointer |
+| `session_id` | `TEXT` | | Anonymous shopper session |
+| `guardrail` | `TEXT` | | `greeting`, `off_topic`, `injection`, or `NULL` for on-topic turns |
+| `outcome` | `TEXT` | `NOT NULL`, `CHECK` | `answered`, `guardrail`, `unanswered`, `cart`, or `error` |
+| `tool_names` | `TEXT[]` | `NOT NULL DEFAULT '{}'` | Tools invoked during the turn |
+| `latency_ms` | `REAL` | | End-to-end turn latency |
+| `input_tokens` | `INTEGER` | | Prompt tokens reported by the provider |
+| `output_tokens` | `INTEGER` | | Completion tokens reported by the provider |
+| `model` | `TEXT` | | Provider/model id, or `fake` in CI |
+| `cost_usd` | `NUMERIC` | | Estimated from the configured per-million-token prices |
+| `unanswered_question` | `TEXT` | | Populated by `flag_unanswered` for the operations backlog |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` | |
 
-**`copilot_feedback`** — `id`, `thread_id`, `session_id`, `rating` (`-1` or `1`), `created_at`.
+Indexes: `copilot_turns_created_idx` (`created_at DESC`), `copilot_turns_thread_idx` (`thread_id`).
+
+#### `copilot_feedback`
+
+Explicit thumbs up/down votes, keyed to a conversation rather than a single turn.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | `BIGSERIAL` | `PK` | Feedback id |
+| `thread_id` | `TEXT` | `NOT NULL` | Copilot thread the vote applies to |
+| `session_id` | `TEXT` | | Anonymous shopper session |
+| `rating` | `SMALLINT` | `NOT NULL`, `CHECK (rating IN (-1, 1))` | `1` thumbs up, `-1` thumbs down |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` | |
+
+Indexes: `copilot_feedback_created_idx` (`created_at DESC`).
+
+### Admin authentication
+
+#### `admin_users`
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | `SERIAL` | `PK` | Admin user id |
+| `username` | `VARCHAR(50)` | `UNIQUE NOT NULL` | Login name |
+| `password_hash` | `VARCHAR(255)` | `NOT NULL` | Argon2id digest; the demo user is seeded by `0006` |
+| `role` | `VARCHAR(20)` | `NOT NULL DEFAULT 'admin'` | Role claim copied into the access JWT |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` | |
+
+#### `admin_refresh_tokens`
+
+One row per issued rotating refresh token. Only the SHA-256 digest is stored, so a database read
+cannot recover a usable token.
+
+| Column | Type | Constraints | Notes |
+|---|---|---|---|
+| `id` | `SERIAL` | `PK` | Token row id |
+| `user_id` | `INTEGER` | `FK → admin_users(id)`, `ON DELETE CASCADE` | Token owner |
+| `token_hash` | `VARCHAR(64)` | `UNIQUE NOT NULL` | SHA-256 of the raw refresh token |
+| `expires_at` | `TIMESTAMPTZ` | `NOT NULL` | `REFRESH_TOKEN_EXPIRE_DAYS` from issue time |
+| `revoked` | `BOOLEAN` | `NOT NULL DEFAULT FALSE` | Set on rotation, logout, expiry, or reuse detection |
+| `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` | |
+
+Indexes: `admin_refresh_tokens_token_hash_idx` (`token_hash`),
+`admin_refresh_tokens_user_idx` (`user_id`). Rotation locks the row with
+`SELECT … FOR UPDATE`, so two concurrent refreshes cannot both succeed.
 
 ### LangGraph checkpoints
 
