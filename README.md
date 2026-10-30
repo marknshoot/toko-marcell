@@ -25,6 +25,7 @@ PostgreSQL 16 + pgvector, and LangGraph agent runtime run in Docker locally and 
 | **Executive Key Performance Indicator (KPI) dashboard** | [https://toko-marcell.vercel.app/admin/kpi](https://toko-marcell.vercel.app/admin/kpi) — demo login: `admin` / `marcell-admin-2026` |
 | **API documentation (OpenAPI)** | [https://toko-marcell-api.onrender.com/docs](https://toko-marcell-api.onrender.com/docs) |
 | **Health check** | [https://toko-marcell-api.onrender.com/health](https://toko-marcell-api.onrender.com/health) |
+| **Hugging Face embedding model** | [`Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx`](https://huggingface.co/Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx) — 124 MB pruned multilingual ONNX |
 
 > The backend runs on Render's free tier and sleeps after inactivity. The first request can take
 > 30–50 seconds; the storefront shows an explicit wake-up state instead of failing silently.
@@ -36,8 +37,9 @@ PostgreSQL 16 + pgvector, and LangGraph agent runtime run in Docker locally and 
 1. [The Business Problem & Commercial Value](#1-the-business-problem--commercial-value)
 2. [The Six Core Technical Systems](#2-the-six-core-technical-systems)
 3. [Empirical Benchmarks & Verification](#3-empirical-benchmarks--verification)
-4. [Quickstart & Local Development](#4-quickstart--local-development)
-5. [Repository Map](#5-repository-map)
+4. [Data Architecture & Schema](#4-data-architecture--schema)
+5. [Quickstart & Local Development](#5-quickstart--local-development)
+6. [Repository Map](#6-repository-map)
 
 ---
 
@@ -222,6 +224,41 @@ instead of hallucinations.
 - Evaluation uses **RAGAS** (`ragas.evaluate`) with ID-based and non-LLM context metrics over 12
   bilingual policy queries at `k=3`.
 
+How the pipeline works end to end:
+
+```mermaid
+flowchart TB
+    subgraph OFFLINE["Offline ingestion"]
+        direction TB
+        SRC["api/knowledge/*.md<br/>store_policies.md + size_charts.md"] --> CHUNK["Chunking<br/>34 policy + sizing chunks"]
+        CHUNK --> HYP["Hypothetical questions<br/>120 Indonesian + English shopper questions"]
+        CHUNK --> EMB["FastEmbed MiniLM<br/>384-d multilingual ONNX"]
+        HYP --> EMB
+        EMB --> K[("store_knowledge<br/>chunk text + embedding")]
+        EMB --> KQ[("store_knowledge_questions<br/>question + chunk_id + embedding")]
+        EMB --> CACHE[("knowledge_seed_cache.json<br/>precomputed vectors")]
+    end
+
+    subgraph ONLINE["Online retrieval — lookup_store_policy"]
+        direction TB
+        Q["Shopper question<br/>Indonesian, English, or code-switched"] --> TTL{"10-minute TTL cache<br/>256 entries"}
+        TTL -->|hit| ANSWER
+        TTL -->|miss| QEMB["Embed query<br/>384-d MiniLM"]
+        QEMB --> S1["Signal 1 — direct chunk vector<br/>pgvector cosine over every chunk"]
+        QEMB --> S2["Signal 2 — hypothetical question vector<br/>top 5x limit, deduplicated to parent chunk"]
+        Q --> S3["Signal 3 — bilingual BM25 / IDF lexical<br/>over chunk title + content"]
+        K -.-> S1
+        KQ -.-> S2
+        K -.-> S3
+        S1 --> RRF["Reciprocal Rank Fusion<br/>k = 60"]
+        S2 --> RRF
+        S3 --> RRF
+        RRF --> TOP3["Top-3 grounded policy chunks"]
+        TOP3 --> STORE["Store result in the TTL cache"]
+        STORE --> ANSWER["Copilot answer<br/>with grounded policy citations"]
+    end
+```
+
 **Measured result:** **1.0000 Context Recall** and **0.9167 Context Precision** — the hybrid strategy
 recovers every ground-truth chunk while keeping the context window small.
 
@@ -245,6 +282,43 @@ is safe, bounded, and cheap. This system is the difference between a demo and a 
 - **Provider resilience:** OpenRouter is preferred, Gemini is the fallback, and rate limits are
   enforced per client IP. `COPILOT_FAKE_LLM=1` provides a deterministic fake tool-calling model so CI
   never depends on a live provider.
+
+How one turn flows through the hardened runtime:
+
+```mermaid
+flowchart TB
+    MSG["Shopper message<br/>thread_id + session_id"] --> SAN["Sanitization<br/>strip control characters, trim, cap length"]
+    SAN --> TRIAGE{"Pre-agent guardrail triage<br/>guardrail.classify()"}
+    TRIAGE -->|greeting| GREET["Canned greeting reply<br/>0 agent model calls"]
+    TRIAGE -->|off_topic| OFF["Polite scope deflection<br/>0 agent model calls"]
+    TRIAGE -->|injection| INJ["Prompt-injection refusal<br/>0 agent model calls"]
+    TRIAGE -->|on_topic| ASSEMBLE["Dynamic context assembly"]
+
+    GREET --> FASTLOG[("Fast log path → copilot_turns<br/>guardrail label, outcome = guardrail")]
+    OFF --> FASTLOG
+    INJ --> FASTLOG
+
+    ASSEMBLE --> CONTEXT["Authoritative context block<br/>pinned page product re-read from the DB<br/>shown-products registry<br/>recent browsing events"]
+
+    subgraph AGENT["LangGraph agent execution loop — create_agent"]
+        direction TB
+        CONTEXT --> MODEL["Model call<br/>OpenRouter primary, Gemini failover"]
+        MODEL --> CAP{"ModelCallLimitMiddleware<br/>cap = 3 model calls"}
+        CAP -->|tool calls| TOOLS["7 deterministic tools<br/>search_catalog, get_product_details<br/>recommend_size, build_outfit<br/>lookup_store_policy, add_to_cart<br/>flag_unanswered"]
+        TOOLS --> INV["Code invariants enforced<br/>outfit total summed against budget<br/>product price re-read server-side<br/>size refusal instead of a guess"]
+        INV --> MODEL
+        CAP -->|end| REPLY["Grounded reply<br/>product cards + ui_actions"]
+    end
+
+    REPLY --> CKPT[("PostgresSaver checkpoint<br/>thread state keyed by thread_id")]
+    REPLY --> METRICS["OpenTelemetry-aligned turn metrics<br/>guardrail, outcome, tools, latency<br/>tokens, model, cost_usd"]
+    METRICS --> TURNS[("copilot_turns")]
+    FASTLOG --> TURNS
+```
+
+Guardrail labels never enter the agent loop, so a greeting, deflection, or refusal costs zero agent
+model calls. With `GUARDRAIL_LLM_MODE=ambiguous`, a decisive regex label also skips the small
+classifier call, making the entire triage path LLM-free.
 
 ### System 6 — Production Operations Telemetry & KPI Dashboard
 
@@ -321,7 +395,199 @@ cd shop && npm test -- --run
 
 ---
 
-## 4. Quickstart & Local Development
+## 4. Data Architecture & Schema
+
+The schema is owned by Alembic revisions `0001` → `0006` and is visualised once, below, so the
+catalog, order, telemetry, retrieval and authentication planes can be read together. The column-level
+dictionary, per-table notes and the full index list live in
+[`api/README.md#database-schema`](./api/README.md#database-schema).
+
+```mermaid
+erDiagram
+    %% ── Catalog ──────────────────────────────────────────────
+    products {
+        INTEGER id PK "internal product id"
+        TEXT asin UK "Amazon-style product key"
+        TEXT title "display title, search dedupe key"
+        TEXT brand
+        NUMERIC price_usd "source price"
+        INTEGER price_idr "server-authoritative IDR price"
+        TEXT department "facet"
+        TEXT category "facet"
+        JSONB category_path
+        TEXT description
+        JSONB features
+        TEXT image_url
+        NUMERIC avg_rating
+        INTEGER rating_count
+        JSONB also_buy
+        JSONB also_view
+        VECTOR embedding "optional English MiniLM, 384-d, HNSW"
+        VECTOR embedding_ml "default multilingual column, 384-d, HNSW"
+    }
+    reviews {
+        SERIAL id PK
+        TEXT asin "logical FK to products.asin, not enforced"
+        NUMERIC rating
+        TEXT summary
+        TEXT comment
+        TEXT author
+        BOOLEAN verified
+        TEXT review_date
+        TIMESTAMPTZ created_at
+    }
+    item_recommendations {
+        TEXT asin PK "logical FK to products.asin"
+        JSONB recs "ordered ASIN neighbours"
+    }
+
+    %% ── Orders ───────────────────────────────────────────────
+    orders {
+        BIGSERIAL id PK
+        TEXT token UK "secret receipt token"
+        INTEGER total_idr "server-computed total"
+        INTEGER item_count
+        TEXT status "paid"
+        TEXT session_id "anonymous session correlation"
+        TIMESTAMPTZ created_at
+    }
+    order_items {
+        BIGSERIAL id PK
+        BIGINT order_id FK "ON DELETE CASCADE to orders.id"
+        TEXT asin "logical FK to products.asin"
+        TEXT title "snapshot at purchase"
+        INTEGER qty
+        INTEGER unit_price_idr "snapshot at purchase"
+    }
+
+    %% ── Telemetry ────────────────────────────────────────────
+    events {
+        BIGSERIAL id PK
+        TEXT session_id
+        TEXT event_type "view_product, search, add_to_cart, checkout_start, purchase_mock, copilot"
+        TEXT asin "logical FK to products.asin"
+        TEXT query
+        INTEGER results_count
+        INTEGER qty
+        INTEGER price_idr
+        TIMESTAMPTZ created_at
+    }
+    copilot_turns {
+        BIGSERIAL id PK
+        TEXT thread_id "LangGraph thread, logical key"
+        TEXT session_id
+        TIMESTAMPTZ created_at
+        TEXT guardrail "greeting, off_topic, injection, or null"
+        TEXT outcome "answered, guardrail, unanswered, cart, error"
+        TEXT_ARRAY tool_names "text[] of tools invoked"
+        REAL latency_ms
+        INTEGER input_tokens
+        INTEGER output_tokens
+        TEXT model
+        NUMERIC cost_usd
+        TEXT unanswered_question "populated by flag_unanswered"
+    }
+    copilot_feedback {
+        BIGSERIAL id PK
+        TEXT thread_id "logical key to a copilot thread"
+        TEXT session_id
+        SMALLINT rating "-1 or +1"
+        TIMESTAMPTZ created_at
+    }
+
+    %% ── RAG knowledge ────────────────────────────────────────
+    store_knowledge {
+        SERIAL id PK
+        TEXT category
+        TEXT title
+        TEXT content
+        VECTOR embedding "384-d multilingual, HNSW cosine"
+    }
+    store_knowledge_questions {
+        SERIAL id PK
+        INTEGER chunk_id FK "ON DELETE CASCADE to store_knowledge.id"
+        TEXT question "hypothetical ID/EN shopper question"
+        TEXT lang "id or en"
+        VECTOR embedding "384-d, HNSW cosine"
+    }
+
+    %% ── Admin auth ───────────────────────────────────────────
+    admin_users {
+        SERIAL id PK
+        VARCHAR username UK "login name"
+        VARCHAR password_hash "Argon2id digest"
+        VARCHAR role "admin"
+        TIMESTAMPTZ created_at
+    }
+    admin_refresh_tokens {
+        SERIAL id PK
+        INTEGER user_id FK "ON DELETE CASCADE to admin_users.id"
+        VARCHAR token_hash UK "SHA-256 of the raw refresh token"
+        TIMESTAMPTZ expires_at
+        BOOLEAN revoked
+        TIMESTAMPTZ created_at
+    }
+
+    products ||--o{ reviews : "asin"
+    products ||--o{ item_recommendations : "asin"
+    products ||--o{ events : "asin"
+    orders ||--o{ order_items : "order_id"
+    orders ||--o{ events : "session_id"
+    store_knowledge ||--o{ store_knowledge_questions : "chunk_id"
+    admin_users ||--o{ admin_refresh_tokens : "user_id"
+    copilot_turns }o--o{ copilot_feedback : "thread_id"
+```
+
+Legend: `PK` primary key, `UK` unique key, `FK` enforced foreign key. Relationships drawn without an
+enforced constraint (`reviews.asin`, `item_recommendations.asin`, `events.asin`, `events.session_id`,
+`copilot_feedback.thread_id`) are correlated logical keys, not database constraints. `VECTOR` is a
+pgvector `vector(384)`; `TEXT_ARRAY` is PostgreSQL `text[]`.
+
+The complete schema is **12 tables**: the **10 core domain tables** (`products`, `reviews`,
+`item_recommendations`, `orders`, `order_items`, `events`, `copilot_turns`, `copilot_feedback`,
+`store_knowledge`, `store_knowledge_questions`) plus the two authentication tables added by revision
+`0006` (`admin_users`, `admin_refresh_tokens`).
+
+The LangGraph checkpointer tables (`checkpoints`, `checkpoint_blobs`, `checkpoint_writes`) and the
+`copilot_thread_activity` TTL sidecar are created at runtime by `PostgresSaver.setup()`, not by
+Alembic, so they are intentionally outside the migration-owned ERD.
+
+### 4.1 Domains and ownership
+
+| Domain | Tables | Purpose | Introduced by |
+|---|---|---|---|
+| **Catalog** | `products`, `reviews`, `item_recommendations` | Products, multilingual embeddings, review text, offline item-to-item neighbours | `0001`, `0002` (drops `image_embedding` in `0005`) |
+| **Orders** | `orders`, `order_items` | Server-priced orders with prices snapshotted at purchase | `0001` |
+| **Telemetry** | `events`, `copilot_turns`, `copilot_feedback` | Funnel events, per-turn unit economics, thumbs feedback | `0001`, `0003`, `0004` |
+| **RAG** | `store_knowledge`, `store_knowledge_questions` | 34 policy chunks and 120 hypothetical questions with 384-d vectors | `0001` |
+| **Admin auth** | `admin_users`, `admin_refresh_tokens` | Argon2id credentials and SHA-256 refresh-token rotation with reuse detection | `0006` |
+
+### 4.2 Indexes
+
+| Table | Index | Definition |
+|---|---|---|
+| `products` | `products_department_idx` | btree (`department`) |
+| `products` | `products_category_idx` | btree (`category`) |
+| `products` | `products_embedding_idx` | HNSW cosine (`embedding`) |
+| `products` | `products_embedding_ml_idx` | HNSW cosine (`embedding_ml`) |
+| `reviews` | `reviews_asin_idx`, `reviews_rating_idx` | btree (`asin`), btree (`rating`) |
+| `item_recommendations` | `item_recs_asin_idx` | btree (`asin`) |
+| `events` | `events_session_idx`, `events_type_created_idx` | btree (`session_id`), btree (`event_type`, `created_at DESC`) |
+| `orders` | `orders_created_idx` | btree (`created_at DESC`) |
+| `order_items` | `order_items_order_idx` | btree (`order_id`) |
+| `store_knowledge` | `store_knowledge_category_idx`, `store_knowledge_embedding_idx` | btree (`category`), HNSW cosine (`embedding`) |
+| `store_knowledge_questions` | `store_knowledge_q_chunk_idx`, `store_knowledge_q_embedding_idx` | btree (`chunk_id`), HNSW cosine (`embedding`) |
+| `copilot_turns` | `copilot_turns_created_idx`, `copilot_turns_thread_idx` | btree (`created_at DESC`), btree (`thread_id`) |
+| `copilot_feedback` | `copilot_feedback_created_idx` | btree (`created_at DESC`) |
+| `admin_refresh_tokens` | `admin_refresh_tokens_token_hash_idx`, `admin_refresh_tokens_user_idx` | btree (`token_hash`), btree (`user_id`) |
+
+Every retrieval path is index-backed: `/search` reads `products_embedding_ml_idx`,
+`lookup_store_policy` reads both HNSW knowledge indexes, the funnel aggregates `events_type_created_idx`,
+and the KPI dashboard reads `copilot_turns_created_idx`.
+
+---
+
+## 5. Quickstart & Local Development
 
 The entire stack is containerised: Next.js storefront, FastAPI backend, and PostgreSQL 16 with
 pgvector. The database is auto-seeded on first boot with the catalog, reviews, embeddings,
@@ -401,7 +667,7 @@ The full reference is in [`api/README.md`](./api/README.md#environment-variables
 
 ---
 
-## 5. Repository Map
+## 6. Repository Map
 
 ```
 toko-marcell/

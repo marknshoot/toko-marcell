@@ -120,6 +120,102 @@ the right ASIN and the product starter chips appear. It renders no chat of its o
   the visit is cold) and exposes a "load more" control.
 - `ProductReviews` renders the star breakdown and real review text from `/products/{id}/reviews`.
 
+### 8. Executive KPI dashboard (`app/admin/kpi/page.js`)
+
+The operations surface at **`/admin/kpi`** is a client page that reads `GET /admin/kpi` and renders
+the v2 executive dashboard. It is gated end to end: no KPI request is made until an admin session
+exists, and a `401`/`403` tears the session down and returns to the login gate.
+
+**What the v2 dashboard shows**
+
+- A **7 / 30 / 90-day** window switcher, a manual **Refresh** control with an `aria-busy` spinner, and
+  a **Sign Out** button next to the signed-in username.
+- **Overview** — revenue, paid-order count, sessions, average order value, and session → order
+  conversion with its "roughly 1 in N" reading.
+- **Conversion funnel** — view → add-to-cart → checkout → paid order, with the biggest stage-to-stage
+  drop called out. Bars and rates use session counts while revenue uses order counts (one session can
+  place more than one order); the UI states that distinction instead of hiding it.
+- **Cohort lift & unit economics** — copilot versus non-copilot cohorts, explicitly labelled
+  *observational — not a randomized trial*, beside cost per turn / conversation / resolved
+  conversation / assisted order.
+- **Assistant & demand** — copilot quality (total turns, unanswered and deflection rates, thumbs
+  up/down, latency) and search health (searches, zero-result rate, top zero-result queries).
+- A permanent **“Demo data”** banner with a `<details>` caveat, because the numbers are derived from
+  seeded/simulated data, not audited revenue.
+- Published **chart rules**: one quantity per encoding from a zero baseline, labelled scales, rates as
+  text rather than bars, colour only for categories, and every bar duplicated by a real number for
+  screen readers.
+
+`getAdminKpi()` never caches (`cache: "no-store"`) and prefers the current session's access token, so
+an access token rotated by a silent refresh is not replayed.
+
+### 8b. Admin login (`components/AdminLoginModal.js`)
+
+- `TokenGate` renders the modal as a **non-dismissible gate** (`dismissible={false}`) when no access
+  token is available; there is no read-only or blurred-data fallback.
+- **Demo login** fills and submits `admin` / `marcell-admin-2026`; the manual form validates that both
+  fields are non-empty before calling `adminLogin()`.
+- Accessibility: `role="dialog"`, `aria-modal="true"`, labelled title and description via `useId`,
+  focus moved to the username field on open, **Escape** closes it when dismissible, and the submit
+  button is disabled while the request is in flight.
+- Errors from the API (`401` → "Invalid username or password") are rendered inline without leaking
+  internals. A legacy `?token=` link is stored as a one-shot admin token and stripped from the URL, so
+  scripts keep working without leaving the secret in browser history.
+
+### 8c. Dual-JWT + HttpOnly rotating refresh-token lifecycle
+
+The dashboard uses two credentials with different lifetimes and different exposure:
+
+| Credential | Lifetime | Storage | Purpose |
+|---|---|---|---|
+| **Access JWT** (`HS256`) | 15 minutes (`ACCESS_TOKEN_EXPIRE_MINUTES`) | In-memory + `sessionStorage` (`toko_admin_access_token`) | `Authorization: Bearer …` on `/admin/kpi` |
+| **Refresh token** | 7 days (`REFRESH_TOKEN_EXPIRE_DAYS`) | **HttpOnly** cookie `refresh_token`, `Path=/auth`, `SameSite=Lax`, `Secure` on HTTPS | Redeeming a fresh access JWT |
+
+The refresh token is a 48-byte `secrets.token_urlsafe` value. The database stores **only its SHA-256
+digest** in `admin_refresh_tokens.token_hash`, so neither JavaScript nor a database dump can replay it.
+
+```mermaid
+sequenceDiagram
+    participant B as Browser (shop)
+    participant A as FastAPI /auth
+    participant P as Postgres
+
+    B->>A: POST /auth/login {username, password}
+    A->>P: SELECT admin_users (Argon2id verify)
+    A->>P: INSERT admin_refresh_tokens (sha256, expires_at)
+    A-->>B: 200 {access_token} + Set-Cookie: refresh_token (HttpOnly)
+    B->>A: GET /admin/kpi (Authorization: Bearer …)
+    A-->>B: 401 when the 15-minute access JWT expires
+    B->>A: POST /auth/refresh (cookie sent automatically)
+    A->>P: SELECT … FOR UPDATE, revoke old row, INSERT new row
+    A-->>B: 200 {new access_token} + rotated Set-Cookie
+    B->>A: GET /admin/kpi (fresh Bearer token)
+    A-->>B: 200 KPI payload
+    B->>A: POST /auth/logout
+    A->>P: UPDATE admin_refresh_tokens SET revoked = TRUE
+    A-->>B: 200 {ok} + expired refresh cookie
+```
+
+Lifecycle rules enforced server-side:
+
+1. **Login** verifies Argon2id credentials, inserts a refresh-token hash, and returns a 15-minute
+   access JWT. The refresh cookie is set with `HttpOnly`, `SameSite=Lax`, `Path=/auth`, and `Secure`
+   whenever the request arrived over HTTPS.
+2. **Every admin request** sends the access JWT as a Bearer token. A `401` triggers exactly one
+   silent `POST /auth/refresh` (with `credentials: "include"`); if that fails, the stored session is
+   cleared and the login gate returns.
+3. **Rotation on every use.** A successful refresh revokes the presented row and inserts a new one
+   inside `SELECT … FOR UPDATE`, issuing both a new access JWT and a new cookie. Refresh tokens are
+   single-use.
+4. **Reuse detection.** Presenting an already-revoked token is treated as theft: every active refresh
+   token for that user is revoked, the reason is logged, and `401` is returned — the whole family of
+   sessions is shut down, not just the replayed token.
+5. **Expiry and logout.** Expired tokens are marked revoked and rejected; logout revokes the presented
+   token server-side and clears the cookie. `adminLogout()` clears in-memory and `sessionStorage`
+   state in a `finally` block, so signing out still works when the API is unreachable.
+6. **Legacy fallback.** `X-Admin-Token` (or `?token=`) and the static `ADMIN_TOKEN` environment
+   variable remain accepted for scripts; the dashboard prefers JWT auth whenever it is available.
+
 ---
 
 ## Tech stack
@@ -151,7 +247,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8001
 
 ```bash
 npm run dev      # http://localhost:3000
-npm test         # 21 tests across 5 suites
+npm test         # 38 tests across 7 suites
 npm run lint
 npm run build
 ```
@@ -182,6 +278,7 @@ src/
 │   ├── page.js                   # home: hero, RecommendationsRail, Catalog (Suspense)
 │   ├── globals.css               # Tailwind v4 theme + design tokens
 │   ├── product/[id]/page.js      # PDP with ISR (revalidate = 300), metadata, recs, reviews
+│   ├── admin/kpi/page.js         # executive KPI dashboard v2 + login gate + refresh/sign-out
 │   ├── cart/page.js              # cart overview
 │   └── checkout/
 │       ├── page.js               # order summary (fires checkout_start)
@@ -203,6 +300,7 @@ src/
 │   ├── ServerWakeup.js           # cold-start health ping + overlay
 │   ├── CopilotChat.js            # v2 copilot panel (streaming SSE, react-markdown, paperclip product search/attach, undo)
 │   ├── ProductCopilotEntry.js    # "Tanya soal produk ini" button on the PDP; opens the floating copilot pinned to the product (copilot:open event)
+│   ├── AdminLoginModal.js        # accessible admin login dialog (demo + manual credentials)
 │   └── FloatingCopilot.js        # lazy, client-only mount for the copilot
 └── lib/
     ├── api.js                    # the ONLY place that knows the API URL; all fetches
@@ -242,14 +340,16 @@ sequenceDiagram
 npm test
 ```
 
-**23 tests across 5 suites**:
+**38 tests across 7 suites**:
 
 | Suite | Tests | Covers |
 |---|:---:|---|
 | `components/__tests__/CartProvider.test.jsx` | 7 | empty cart, add, duplicate merge, quantity, remove-at-zero, clear, multi-item subtotal |
 | `components/__tests__/AddToCartButton.test.jsx` | 3 | add with quantity, navigate home, existing-quantity display |
 | `components/__tests__/ServerWakeup.test.jsx` | 2 | ready indicator on healthy check, spinner while waiting |
-| `components/__tests__/CopilotChat.test.jsx` | 9 | no image-upload or TB/BB form, starter chips only when empty, product-page chips, `copilot:open` event attaches product, paperclip search & attach, pulsing `"Sedang berpikir..."` + streaming markdown, `add_to_cart` ui_action, numbered product cards, reset deletes thread |
+| `components/__tests__/CopilotChat.test.jsx` | 10 | no image-upload or TB/BB form, starter chips only when empty, product-page chips, `copilot:open` event attaches product, paperclip search & attach, pulsing `"Sedang berpikir..."` + streaming markdown, `add_to_cart` ui_action, numbered product cards, reset deletes thread |
+| `components/__tests__/SizeAdvisor.test.jsx` | 7 | height/weight for tops, foot length for footwear, waist for belts, head circumference for hats, dimensions note, unsupported category without a guess, one-size note |
+| `app/admin/kpi/__tests__/page.test.jsx` | 7 | demo login renders KPIs, manual login, window switch and refresh refetch, sign out, 401 returns to the login gate, tab-restored session, legacy `?token=` consumption |
 | `lib/__tests__/session.test.js` | 2 | id persists in `sessionStorage`, stable across calls |
 
 CI also runs `npm run lint` and `npm run build` so the Next build cannot regress silently.
