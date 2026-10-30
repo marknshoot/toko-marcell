@@ -105,7 +105,8 @@ def test_upgrade_empty_database_to_head(temp_db_url):
     run_migrations(temp_db_url)
 
     assert APP_TABLES <= _tables(temp_db_url)
-    assert {"embedding", "image_embedding", "embedding_ml"} <= _columns(temp_db_url, "products")
+    assert {"embedding", "embedding_ml"} <= _columns(temp_db_url, "products")
+    assert "image_embedding" not in _columns(temp_db_url, "products")
     assert {
         "thread_id",
         "session_id",
@@ -122,7 +123,6 @@ def test_upgrade_empty_database_to_head(temp_db_url):
     assert {"thread_id", "session_id", "rating"} <= _columns(temp_db_url, "copilot_feedback")
     assert {
         "products_embedding_idx",
-        "products_image_embedding_idx",
         "products_embedding_ml_idx",
         "store_knowledge_embedding_idx",
         "store_knowledge_q_embedding_idx",
@@ -130,6 +130,7 @@ def test_upgrade_empty_database_to_head(temp_db_url):
         "copilot_turns_thread_idx",
         "copilot_feedback_created_idx",
     } <= _indexes(temp_db_url)
+    assert "products_image_embedding_idx" not in _indexes(temp_db_url)
     assert _version(temp_db_url) == _head()
 
     # Re-running at head is a no-op.
@@ -162,6 +163,9 @@ def test_downgrade_roundtrip(temp_db_url):
 
     command.downgrade(cfg, "0003")
     assert "unanswered_question" not in _columns(temp_db_url, "copilot_turns")
+    # Revision 0005's downgrade restores the legacy visual-search column.
+    assert "image_embedding" in _columns(temp_db_url, "products")
+    assert "products_image_embedding_idx" in _indexes(temp_db_url)
 
     command.downgrade(cfg, "0001")
     assert "embedding_ml" not in _columns(temp_db_url, "products")

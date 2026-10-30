@@ -98,14 +98,13 @@ jobs:
 
       - name: Run guardrails, rate limiter & copilot unit tests
         run: |
-          python -m pytest api/tests/test_rate_limiter.py api/tests/test_guardrail_unit.py api/tests/test_copilot_tools_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_sizing_unit.py api/tests/test_knowledge_seed_unit.py api/tests/test_search_image_flag_unit.py -v
+          python -m pytest api/tests/test_rate_limiter.py api/tests/test_guardrail_unit.py api/tests/test_copilot_tools_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_sizing_unit.py api/tests/test_knowledge_seed_unit.py -v
 
       - name: Run full API test suite
         env:
           DATABASE_URL: postgresql://toko:toko@localhost:5432/toko
           ADMIN_TOKEN: ci-test-admin-token
           FASTEMBED_CACHE_DIR: /tmp/fastembed_cache
-          ENABLE_TRIMODAL: "true"
           ENABLE_RERANKER: "false"
           COPILOT_FAKE_LLM: "1"
         run: |

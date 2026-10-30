@@ -40,11 +40,11 @@ cd api && docker compose run --rm seed --reset
 
 ---
 
-## Information retrieval — BM25 vs hybrid (5-mode comparison)
+## Information retrieval — BM25 vs hybrid (4-mode comparison)
 
 **Artifact:** [`pipelines/results/search_eval.json`](./results/search_eval.json) (Tier A).
 `pipelines/eval_search.py` evaluates **32 queries** in four groups (Brand/SKU, Category/Attr,
-Semantic/Intent, Indonesian/casual) across **5 search modes** and reports HitRate@10, Precision@10,
+Semantic/Intent, Indonesian/casual) across **4 search modes** and reports HitRate@10, Precision@10,
 MRR@10 and nDCG@10.
 
 | Mode | P@10 | nDCG@10 | MRR@10 | HR@10 |
@@ -53,7 +53,6 @@ MRR@10 and nDCG@10.
 | Vector (MiniLM) | 0.759 | 0.841 | 0.863 | 96.9% |
 | Hybrid (BM25 + MiniLM + RRF) | 0.775 | 0.879 | 0.906 | 96.9% |
 | Hybrid + rerank (cross-encoder) | 0.794 | 0.893 | 0.885 | 100.0% |
-| Trimodal (BM25 + MiniLM + CLIP + RRF) | 0.844 | 0.908 | 0.932 | 100.0% |
 
 **Indonesian / cross-lingual group (8 queries):**
 
@@ -62,7 +61,6 @@ MRR@10 and nDCG@10.
 | BM25 | 0.350 | 0.334 | 0.375 |
 | Hybrid | 0.412 | 0.622 | 0.688 |
 | Hybrid + rerank | 0.537 | 0.739 | 0.750 |
-| Trimodal | 0.600 | 0.821 | 0.792 |
 
 Hybrid beats BM25 on all groups overall. The reranker improves P@10 and nDCG@10 overall (+1.6% nDCG
 absolute vs hybrid) with its strongest effect on the Indonesian group (+0.117 nDCG).
@@ -70,7 +68,7 @@ absolute vs hybrid) with its strongest effect on the Indonesian group (+0.117 nD
 ```bash
 # Reproduce (needs the running Docker stack):
 python3 pipelines/eval_search.py --api-url http://localhost:8001 \
-  --modes bm25,vector,hybrid,hybrid+rerank,trimodal \
+  --modes bm25,vector,hybrid,hybrid+rerank \
   --out pipelines/results/search_eval.json
 ```
 

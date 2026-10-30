@@ -1,830 +1,707 @@
-# `api/` — Toko Marcell backend (FastAPI + PostgreSQL/pgvector)
+# Toko Marcell API — Technical Reference
 
-Marcell's own backend, built from scratch. It owns **everything the frontend must not do**: REST
-validation, the catalog, hybrid search, recommendations, reviews, the funnel event log,
-server-authoritative checkout, and the grounded AI copilot.
+FastAPI service for bilingual product search, deterministic sizing, recommendations, the LangGraph
+sales copilot, and the operations KPI dashboard.
 
-```text
-Browser ──HTTP──► Next.js (../shop) ──REST/JSON──► FastAPI (this) ──SQL──► PostgreSQL 16 + pgvector
-```
-
-**Hard rule:** Next never opens a database connection. The frontend only ever talks HTTP. That keeps
-the client free of SQL, credentials and business rules, and makes the API the single place where a
-product, a price, or a policy can be authoritative.
-
-> **Live:** [https://toko-marcell-api.onrender.com/docs](https://toko-marcell-api.onrender.com/docs)
-> (Render free tier — the first request after idle can take 30–50 s to wake; the storefront shows a
-> cold-start overlay for exactly this).
-
----
-
-## Run it
-
-```bash
-cd manual/api
-docker compose up -d --build        # api on :8001 → container :8000, Postgres on :5432 (pgvector/pg16)
-curl -s localhost:8001/health       # {"status":"ok"}
-```
-
-Interactive docs: **http://localhost:8001/docs**
-
-The root [`docker-compose.yml`](../docker-compose.yml) also boots the storefront; `api/docker-compose.yml`
-is the backend-only stack. Both mount [`../data/seed/init.sql.gz`](../data/seed/init.sql.gz), so a fresh
-database restores the complete catalog, vectors, knowledge base and demo history within seconds.
-
-### Seeding the catalog (offline, by design)
-
-The API **creates the schema but never writes catalog rows** — that is an offline job, so
-`docker compose up` stays a server and the ML pipeline stays independent of request handling.
-
-```bash
-# 1. build the dataset once (~8 min) — see ../pipelines/README.md
-cd manual && python3 pipelines/build_catalog.py
-
-# 2. load it into Postgres (the `seed` service is behind a profile, so `up` never starts it)
-cd api
-docker compose run --rm seed              # upsert by asin
-docker compose run --rm seed --reset      # wipe + reload (after regenerating)
-```
-
-After a reseed, call `POST /search/reindex` (or restart the container): the BM25 index lives for the
-life of the process and would otherwise serve a stale catalog.
-
----
-
-## Configuration
-
-| Variable | Required | Default | Purpose |
-|---|:---:|---|---|
-| `DATABASE_URL` | ✅ | — | Postgres connection string (Neon in production, `postgresql://toko:toko@db:5432/toko` in compose) |
-| `OPENROUTER_API_KEY` | for copilot | — | **Preferred provider.** When set, the copilot uses OpenRouter; without any LLM key `/copilot/chat` returns `503`, everything else works |
-| `LLM_MODEL` | | `openrouter/free` | Any OpenRouter model id. `openrouter/free` auto-routes across the free pool and handles tool-calling + the guardrail well (verified end-to-end). To pin one: `inclusionai/ling-3.0-flash-sante:free`, or `nvidia/nemotron-3-super-120b-a12b:free` (may emit tool-call JSON as the reply) |
-| `LLM_BASE_URL` | | `https://openrouter.ai/api/v1` | OpenAI-compatible endpoint |
-| `LLM_FALLBACK_MODELS` | | *(empty)* | Optional comma-separated fallbacks passed via OpenRouter `models`; tried when the primary returns 429/503. Unnecessary with `openrouter/free` |
-| `LLM_FALLBACK_BASE_URL` / `LLM_FALLBACK_API_KEY` / `LLM_FALLBACK_MODEL` | | — | Optional **generic OpenAI-compatible** provider inserted into the copilot's `.with_fallbacks` chain between OpenRouter and Gemini |
-| `LLM_INPUT_COST_PER_MILLION` | | `0.15` | USD per 1M input tokens used by `estimate_cost_usd()`; a planning estimate, not an invoice |
-| `LLM_OUTPUT_COST_PER_MILLION` | | `0.60` | USD per 1M output tokens used by `estimate_cost_usd()` |
-| `GUARDRAIL_LLM_MODE` | | `always` | `always` calls the LLM guardrail for every non-injection message; `ambiguous` short-circuits decisive regex labels and only sends ambiguous messages to the LLM |
-| `COPILOT_FAKE_LLM` | | *(unset)* | `1` swaps in a deterministic in-process fake tool-calling model (no network, no key) so CI/tests never hit a real provider |
-| `GEMINI_API_KEY` | fallback | — | Google AI Studio key; the final link in the provider chain, used only when the others are absent |
-| `GEMINI_MODEL` | | `gemini-3.5-flash-lite` (code) / `gemini-2.5-flash` (compose) | Any Gemini chat model (fallback path) |
-| `TEXT_EMBED_MODEL` | | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | Multilingual (ID/EN) 384-d dense text embedding model (or `sentence-transformers/all-MiniLM-L6-v2` for English-only low-RAM mode) |
-| `TEXT_EMBED_COLUMN` | | `embedding_ml` | Which 384-d column `/search` and Copilot `search_catalog` query (`embedding_ml` default, or `embedding`) |
-| `CORS_ORIGINS` | | `http://localhost:3000,https://toko-marcell.vercel.app` | Comma-separated allowlist; `*` opens it up |
-| `ADMIN_TOKEN` | for admin | — | Secret token for `POST /search/reindex` and `GET /admin/kpi` (header `X-Admin-Token` or `?token=`); both return `503` when unset. Docker Compose defaults to `dev-admin-token`; set a strong value in production |
-| `TRUST_PROXY` | | `false` | Set `true` on Render (behind their LB) so `X-Forwarded-For` is trusted for rate-limiting |
-| `COPILOT_RATE_LIMIT_PER_MIN` | | `10` | Max copilot requests per client IP per minute |
-| `COPILOT_RATE_LIMIT_PER_DAY` | | `100` | Max copilot requests per client IP per day |
-| `ENABLE_TRIMODAL` | | `false` (set `true` in local Compose) | Enable `mode=trimodal`; it loads both MiniLM and the CLIP text ONNX (`Qdrant/clip-ViT-B-32-text`), so it needs ≥1 GB RAM |
-| `ENABLE_IMAGE_SEARCH` | | `true` (set `false` on 512 MB Render) | Visual search (`POST /search/image`); returns graceful 503 when disabled to stay under memory limits |
-| `FASTEMBED_THREADS` | | `1` | Number of threads for ONNX runtime to prevent thread pool memory inflation |
-| `SKIP_KNOWLEDGE_SEED` | | `false` | When `true`, skips startup knowledge base verification/seeding |
-| `ENABLE_RERANKER` | | `false` (set `true` in local Compose) | Cross-encoder reranking for `/search?rerank=true` and the copilot's `search_catalog` |
-| `FASTEMBED_CACHE_DIR` | | `/tmp/fastembed_cache` | Cache for MiniLM and CLIP `fastembed` ONNX models |
-| `HF_HUB_CACHE` | | `/tmp/hf_cache` | Cache for the ONNX cross-encoder |
-
-Models are loaded **lazily and cached per process**, so a model-download problem cannot stop the API
-from booting, and catalog browsing never pays for a search model it does not use.
-
----
-
-## Endpoints
-
-| Method | Path | Notes |
-|---|---|---|
-| `GET` | `/health` | Liveness; also the target of the frontend cold-start ping |
-| `GET` | `/categories` | Facets with real counts (departments + top 24 categories); in-memory TTL cache (~2 ms) |
-| `GET` | `/products` | Paginated catalog (`limit≤24`, `offset`, `department=`, `category=`) |
-| `GET` | `/products/{id}` | Single product · `404` missing · `422` invalid id |
-| `GET` | `/products/{id}/reviews` | Reviews + rating breakdown for a numeric product id |
-| `GET` | `/search` | Hybrid/BM25/vector/trimodal search: `q`, `mode`, `department`, `category`, `limit`, `offset`; one ID→EN retry on zero results |
-| `GET` | `/search/insights` | Search health from `events`: top queries, top zero-result queries, zero-result rate, session-level search-to-PDP |
-| `GET` | `/sizing/{asin}` | Category-aware size-kind + required inputs for one product; no LLM · `404` unknown ASIN |
-| `POST` | `/sizing/recommend` | Deterministic size advice from body measurements; `extra="forbid"`, bounds, write rate limit |
-| `POST` | `/search/image` | Visual similarity search from an uploaded image (multipart `file`) |
-| `POST` | `/search/reindex` | Rebuild the in-memory BM25 index and drop the facet cache → `202` |
-| `GET` | `/recs/popular` | Popularity baseline (optionally by `department`) |
-| `GET` | `/recs/item/{asin}` | Item-to-item recommendations with a category-popularity fallback |
-| `GET` | `/recs/session` | Session-based recommendations from the current visit's events; cold → popularity |
-| `POST` | `/copilot/chat` | Agentic copilot turn (v2: regex + LLM guardrail → `create_agent` loop → grounded reply); text-only |
-| `POST` | `/copilot/chat/stream` | Stream an agentic copilot turn via Server-Sent Events (`token` + `done` events) |
-| `GET` | `/copilot/tools` | The 7 deterministic tool names the v2 copilot can call |
-| `POST` | `/copilot/feedback` | Record a thumbs up/down vote for a copilot thread → `201` · rate-limited like other writes |
-| `GET` | `/copilot/threads/{thread_id}` | Replay a conversation thread's display messages (may be empty) |
-| `DELETE` | `/copilot/threads/{thread_id}` | Reset a conversation (delete all persisted checkpointer state) → `204` |
-| `POST` | `/events` | Record a funnel event → `201` · `422` on unknown type |
-| `GET` | `/events/summary` | Funnel + order revenue/AOV + copilot cohorts + copilot quality + `unit_economics`, with explicit caveats |
-| `GET` | `/admin/kpi` | Token-gated synthetic demo dashboard: revenue, funnel, cohorts, search health, copilot quality, `unit_economics` · `503` when unconfigured, `403` bad/missing token |
-| `POST` | `/checkout/confirm` | Create a paid order from `{items:[{asin,qty}], session_id}` → `201` |
-| `GET` | `/orders/{token}` | Read an order back by its secret token · `404` unknown |
-
-### Admin KPI dashboard (`GET /admin/kpi`)
-
-The operations dashboard is one aggregate read, gated by `ADMIN_TOKEN`. Authentication accepts
-either `X-Admin-Token: <token>` or `?token=<token>`, compared with
-`hmac.compare_digest` in `routers/admin.py`. The header is preferred because query strings can land
-in access logs:
-
-| Condition | Status |
+| | |
 |---|---|
-| `ADMIN_TOKEN` is empty/unset | `503 Admin dashboard is disabled` |
-| token missing or wrong | `403 Invalid admin token` |
-| valid token | `200` |
+| **Runtime** | Python 3.12, FastAPI, Uvicorn |
+| **Database** | PostgreSQL 16 + pgvector (HNSW cosine indexes) |
+| **Embeddings** | `fastembed` ONNX — 384-d multilingual MiniLM |
+| **Agent** | LangChain v1 `create_agent` on LangGraph, checkpointed in PostgreSQL |
+| **Migrations** | Alembic, hand-written SQL, head revision `0005` |
+| **Tests** | pytest (unit + integration), Ruff |
 
-`since_days` is bounded to `1–365` (default `30`). The response is explicitly labelled synthetic:
+---
 
-```json
-{
-  "metadata": {
-    "since_days": 30,
-    "generated_at": "2026-01-01T00:00:00+00:00",
-    "synthetic": true,
-    "environment": "demo",
-    "caveat": "All metrics are derived from seeded/simulated demo data; not real customer revenue."
-  },
-  "revenue": {"order_count": 0, "total_revenue_idr": 0, "aov_idr": null},
-  "funnel": {
-    "sessions": 0, "view_product_sessions": 0, "add_to_cart_sessions": 0,
-    "checkout_start_sessions": 0, "order_sessions": 0,
-    "rates": {
-      "view_to_cart": null, "cart_to_checkout": null,
-      "checkout_to_order": null, "overall_conversion": null
-    }
-  },
-  "cohorts": {
-    "copilot_sessions": {"sessions": 0, "add_to_cart_rate": null, "conversion_rate": null, "aov_idr": null},
-    "non_copilot_sessions": {"sessions": 0, "add_to_cart_rate": null, "conversion_rate": null, "aov_idr": null},
-    "caveat": "Observational comparison; copilot usage is self-selected, not a randomized trial."
-  },
-  "unit_economics": {
-    "total_cost_usd": null,
-    "avg_cost_per_turn_usd": null,
-    "cost_per_conversation_usd": null,
-    "cost_per_resolved_conversation_usd": null,
-    "cost_per_assisted_order_usd": null
-  },
-  "search_health": {
-    "total_searches": 0, "zero_result_searches": 0, "zero_result_rate": null,
-    "search_to_pdp_rate": null, "top_zero_result_queries": [], "top_queries": []
-  },
-  "copilot_quality": {
-    "total_turns": 0, "answered_turns": 0, "guardrail_turns": 0,
-    "unanswered_turns": 0, "unanswered_rate": null,
-    "deflection_eligible_conversations": 0,
-    "deflection_answered_conversations": 0, "deflection_rate": null,
-    "latency_p50_ms": null, "latency_p95_ms": null,
-    "thumbs_up": 0, "thumbs_down": 0, "thumbs_up_rate": null
-  }
-}
+## Contents
+
+- [Architecture](#architecture)
+- [Request lifecycle](#request-lifecycle)
+- [Module map](#module-map)
+- [REST API](#rest-api)
+- [Key endpoint contracts](#key-endpoint-contracts)
+- [Search internals](#search-internals)
+- [Store knowledge RAG](#store-knowledge-rag)
+- [Copilot and tools](#copilot-and-tools)
+- [Environment variables](#environment-variables)
+- [Database schema](#database-schema)
+- [Operations](#operations)
+- [Testing](#testing)
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+    FE[Next.js storefront] -->|HTTP / JSON| API[FastAPI]
+    API --> SEARCH[search.py<br/>BM25 + fastembed + RRF]
+    API --> SIZING[sizing.py<br/>deterministic charts]
+    API --> RECS[routers/recs.py]
+    API --> AGENT[copilot_agent.py<br/>LangGraph]
+    AGENT --> TOOLS[copilot_tools.py<br/>7 deterministic tools]
+    AGENT --> RAG[knowledge_seed.py<br/>store knowledge retrieval]
+    SEARCH --> PG[(PostgreSQL 16<br/>pgvector)]
+    SIZING --> PG
+    RECS --> PG
+    RAG --> PG
+    AGENT --> PG
+    API --> KPI[routers/admin.py<br/>/admin/kpi]
+    KPI --> PG
 ```
 
-Revenue and `funnel.order_sessions` come only from paid `orders`. Cohort AOV joins paid orders to
-the session cohort; it is observational, not an A/B lift. Deflection is the final-turn share of
-`answered / (answered + unanswered)` conversations, not human-agent deflection. Step session counts
-are independent, so raw funnel ratios can exceed 1 when a session enters mid-funnel.
+Design rules:
 
-The storefront page at `/admin/kpi` calls this endpoint with the token kept in `sessionStorage` (or
-read once from `?token=` and removed from the URL) and renders the four cards.
+- **Raw SQL over an ORM.** Queries are explicit `psycopg` statements; SQLAlchemy exists only as
+  Alembic's migration connection layer. Column and table names are composed with
+  `psycopg.sql.Identifier` / `sql.SQL`, never interpolated from user input.
+- **Business invariants live in code.** Prices are read server-side, outfit totals are summed and
+  validated in Python, and sizing refuses to guess.
+- **Every degraded path is explicit.** Missing LLM key → `503`; missing admin token → `503`; empty
+  denominator → `null` in metrics rather than a fabricated `0.0`.
+- **Startup is self-healing.** `init_db()` runs `alembic upgrade head` and seeds the knowledge base
+  when it is empty or stale. Idempotent revisions adopt pre-Alembic databases without a manual stamp.
 
-### Unit economics & SLOs
+---
 
-`copilot_turns.cost_usd` is estimated per turn from token usage:
-`input_tokens × LLM_INPUT_COST_PER_MILLION / 1e6 + output_tokens × LLM_OUTPUT_COST_PER_MILLION / 1e6`.
-A turn with no reported usage stays `NULL`. The `unit_economics` block is identical on
-`/events/summary` and `/admin/kpi`:
+## Request lifecycle
 
-| Field | Denominator |
-|---|---|
-| `total_cost_usd` | priced turns in the window |
-| `avg_cost_per_turn_usd` | all copilot turns |
-| `cost_per_conversation_usd` | distinct `thread_id` |
-| `cost_per_resolved_conversation_usd` | distinct threads with `outcome` `answered` or `cart` |
-| `cost_per_assisted_order_usd` | paid orders whose session has at least one copilot turn |
-
-Divisions return `null` without a denominator or known cost. The committed budgets are **<
-$0.005/conversation** and **< $0.02/assisted order**; latency, availability, error-budget, fallback
-and alert policy live in [`docs/SLOS.md`](../docs/SLOS.md). Cost is a configured estimate, not a
-provider invoice; the guardrail classifier's tokens are outside the recorded agent usage, so this is
-a lower bound when the guardrail runs. No SLO-attainment percentage is claimed for metrics that are
-not yet timed in the database.
-
-`GUARDRAIL_LLM_MODE=ambiguous` reduces guardrail tokens by returning decisive regex labels before an
-LLM call; `always` is the contextual default. `lookup_store_policy` uses a 10-minute, 256-entry
-per-process TTL cache keyed by normalized query + limit and cleared after knowledge re-seeding.
-
-### Response envelopes, never bare arrays
-
-`/products` and `/search` return:
-
-```json
-{ "items": [ ... ], "total": 4670, "limit": 24, "offset": 0 }
-```
-
-`/search` adds `{ "query", "mode", "deduped": true, "took_ms", "score" }` per item so the UI and the
-eval harness can tell *which ranker* produced a result set without guessing from a deployment. It
-also returns `{ rewritten, fallback_query, original_query }`; the three are `false`/`null`/`null`
-unless a zero-result retry actually recovered products.
-
-A product is the shape the storefront renders (camelCase, numbers as numbers):
-
-```json
-{
-  "id": 1, "asin": "B000YXC2LI",
-  "title": "Levi's Men's 501 Original-Fit Jean", "brand": "Levi's",
-  "priceUsd": 30.92, "priceIdr": 494700,
-  "department": "Men", "category": "Jeans",
-  "categoryPath": ["Men", "Clothing", "Jeans"],
-  "description": "A cultural icon. Worn by generations …",
-  "features": ["100% Cotton", "Imported"],
-  "imageUrl": "https://images-na.ssl-images-amazon.com/images/I/31Y1h0pJtLL.jpg",
-  "avgRating": 4.2, "ratingCount": 19693,
-  "alsoBuy": ["B00B58FQ5K"], "alsoView": []
-}
-```
+1. **Startup (`main.lifespan`)** — configure logging, run migrations, seed knowledge, open the
+   `psycopg_pool` connection pool, ensure copilot checkpoint tables, start daily thread TTL cleanup.
+2. **Middleware** — permissive CORS for `CORS_ORIGINS` plus `*.vercel.app` previews; proxy trust is
+   opt-in through `TRUST_PROXY` so rate limiting has the correct client IP.
+3. **Routing** — FastAPI validates path/query/body models. Pydantic rejects unknown fields on write
+   contracts (`extra="forbid"`) so typos fail loudly.
+4. **Data access** — pooled psycopg connections (`DB_POOL_MIN` / `DB_POOL_MAX`).
+5. **Response** — JSON. Collections are wrapped in objects (`{"items": [...]}`), never bare arrays, so
+   fields such as `total`, `strategy`, or `caveat` can be added without a breaking change.
 
 ---
 
 ## Module map
 
-```text
-api/
-├── main.py                   # thin app factory: lifespan, CORS, schema migration, include routers
-├── migrate.py                # programmatic `alembic upgrade head` (run on startup)
-├── alembic.ini · migrations/ # Alembic env + hand-written SQL revisions
-├── config.py                 # pydantic-settings Settings, one cached get_settings()
-├── db.py                     # psycopg_pool ConnectionPool, get_conn() context manager / Depends
-├── schemas.py                # shared Pydantic request/response models
-├── routers/
-│   ├── health.py             # GET /health
-│   ├── catalog.py            # GET /categories, /products, /products/{id}
-│   ├── search.py             # GET /search, /search/insights; POST /search/image, /search/reindex
-│   ├── recs.py               # GET /recs/popular, /recs/item/{asin}, /recs/session
-│   ├── reviews.py            # GET /products/{id}/reviews
-│   ├── events.py             # POST /events, GET /events/summary (funnel, revenue, cohorts, quality)
-│   ├── admin.py              # GET /admin/kpi (token-gated synthetic operations dashboard)
-│   ├── checkout.py           # POST /checkout/confirm, GET /orders/{token}
-│   ├── sizing.py             # GET /sizing/{asin}, POST /sizing/recommend (no LLM)
-│   └── copilot.py            # POST /copilot/chat, /chat/stream, /feedback; GET /tools, /threads/{id}
-├── search.py                 # BM25 index, embeddings, RRF, CLIP encoders (ONNX)
-├── reranker.py               # Stage-2 ONNX cross-encoder (ms-marco-MiniLM-L-6-v2)
-├── guardrail.py              # deterministic pre-agent guardrail (greeting/off-topic/injection, zero LLM)
-├── copilot_agent.py          # LangChain v1 create_agent orchestrator (run_turn) + middleware
-├── copilot_metrics.py        # best-effort copilot_turns telemetry + outcome/token extraction
-├── copilot_tools.py          # the 7 deterministic @tool functions bound to the agent
-├── copilot_llm.py            # provider fallback chain (OpenRouter → generic → Gemini) + fake LLM
-├── copilot_memory.py         # LangGraph PostgresSaver checkpointer + thread activity / TTL cleanup
-├── sizing.py                 # category-aware recommend_size: size_kind dispatch + honest fallback
-├── rate_limiter.py           # sliding-window per-IP rate limiter for /copilot/chat
-├── knowledge_seed.py         # markdown → embedded store_knowledge chunks + hypothetical questions
-├── knowledge/                # authored RAG source: size_charts.md, size_chart.json, size_kind_map.json, catalog_categories.json
-└── tests/                    # pytest suite (unit + live API integration)
-```
+| Path | Responsibility |
+|---|---|
+| `main.py` | App factory, lifespan, CORS, router registration |
+| `config.py` | Cached `Settings` (pydantic-settings), all environment variables |
+| `db.py` | Connection pool and dependency helpers |
+| `migrate.py` | Alembic programmatic runner |
+| `search.py` | BM25 index, multilingual embeddings, RRF, ID→EN query rewrite |
+| `sizing.py` | Category → size-kind resolution and deterministic size advice |
+| `reranker.py` | Optional cross-encoder stage-2 reranker |
+| `schemas.py` | Pydantic request/response contracts |
+| `agent_tools.py` | Copilot-facing catalog search and sizing adapters |
+| `copilot_agent.py` | LangGraph state machine, prompt, turn recording |
+| `copilot_llm.py` | Provider chain (OpenRouter → generic fallback → Gemini) |
+| `copilot_memory.py` | `PostgresSaver` checkpointer and thread TTL cleanup |
+| `copilot_tools.py` | Seven deterministic LangChain tools |
+| `copilot_metrics.py` | Token/cost estimation and turn telemetry |
+| `guardrail.py` | Regex + LLM classification: greeting, off-topic, injection, on-topic |
+| `knowledge_seed.py` | Knowledge chunking, hypothetical questions, embedding cache, seeding |
+| `rate_limiter.py` | Per-IP copilot limits and write limits |
+| `routers/` | HTTP endpoints grouped by domain |
 
 ---
 
-## Search — how it ranks
+## REST API
 
-Search is the heart of the backend, so the reasoning is documented where the code lives
-(`search.py`, `main.py`) and summarized here.
+Base URL locally: `http://localhost:8001`. Interactive OpenAPI docs: `/docs`.
 
-### BM25 (the lexical baseline)
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/health` | Liveness probe; also used by the storefront cold-start check |
+| `GET` | `/categories` | Department and category facets with counts (5-minute cache) |
+| `GET` | `/products` | Paginated catalog, optional `department` / `category` filter |
+| `GET` | `/products/{product_id}` | Single product; `404` when missing, `422` for invalid id |
+| `GET` | `/products/{product_id}/reviews` | Reviews and rating breakdown |
+| `GET` | `/search` | Hybrid, dense, or BM25 retrieval with filters and pagination |
+| `GET` | `/search/insights` | Search quality: top queries, zero-result queries, search-to-PDP rate |
+| `POST` | `/search/reindex` | Rebuild the in-memory BM25 index and clear facet cache (admin) |
+| `GET` | `/sizing/{asin}` | Size kind and required measurements for a product |
+| `POST` | `/sizing/recommend` | Deterministic size recommendation from body measurements |
+| `GET` | `/recs/popular` | Department popularity baseline |
+| `GET` | `/recs/item/{asin}` | Item-to-item recommendations with popularity fallback |
+| `GET` | `/recs/session` | Recommendations from the current anonymous session |
+| `POST` | `/copilot/chat` | One agentic copilot turn |
+| `POST` | `/copilot/chat/stream` | Same turn streamed as Server-Sent Events |
+| `GET` | `/copilot/tools` | Names of the seven deterministic tools |
+| `POST` | `/copilot/feedback` | Thumbs up/down for a thread |
+| `GET` | `/copilot/threads/{thread_id}` | Replay a thread's display messages |
+| `DELETE` | `/copilot/threads/{thread_id}` | Delete checkpointed conversation state |
+| `POST` | `/events` | Record a funnel event |
+| `GET` | `/events/summary` | Funnel, revenue, cohort, and unit-economics summary |
+| `POST` | `/checkout/confirm` | Create a paid order from server-priced items |
+| `GET` | `/orders/{token}` | Read an order by its secret token |
+| `GET` | `/admin/kpi` | Token-gated executive KPI dashboard payload |
 
-- **Scoring:** Robertson & Zaragoza BM25, `k1=1.5`, `b=0.75`, IDF with `+1` smoothing so a term in
-  every document scores 0, not negative.
-- **Field weights:** title 3.0 · brand 2.0 · category 1.5 · department 1.0 · features 1.0 ·
-  description 0.5. Weighted term frequencies are a practical alternative to one index per field, and
-  BM25's saturation handles fractional frequencies correctly.
-- **Tokenizer:** lowercase → NFKD accent folding → alphanumeric → stopwords → plural fold
-  (`sneakers→sneaker`, `jeans→jean`, `watches→watch`). It is a small suffix folder, **not** a Porter
-  stemmer — deliberate, and documented.
-- **Index:** hand-written, in-process, zero dependency. Built lazily on first search, cached for the
-  process, rebuilt by `/search/reindex`.
-- **Dedup:** duplicates by normalized title are removed **before** pagination, so `total` counts
-  rows a shopper can actually reach (842 of the 6,000 built products are title-sharing variants).
+Common status codes:
 
-**What it deliberately cannot do:** typos, synonyms, phrases, iconography. Those are the jobs of the
-other rankers — which is exactly why the baseline is measured first.
+| Code | Meaning |
+|---|---|
+| `200` / `201` / `202` | Success / created / accepted |
+| `204` | Deleted |
+| `400` | Invalid request semantics |
+| `403` | Invalid admin token |
+| `404` | Unknown product, ASIN, order, or thread |
+| `422` | Schema validation failure (FastAPI/Pydantic) |
+| `429` | Rate limited; `Retry-After` is set |
+| `503` | Feature disabled: no admin token, no LLM key, or model unavailable |
 
-### Dense + cross-modal (the vector half)
+---
 
-- 384-d `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` sentence embeddings → `products.embedding_ml` (HNSW cosine, bilingual ID/EN default; `products.embedding` with `all-MiniLM-L6-v2` also available).
-- 512-d pre-trained CLIP embeddings (`Qdrant/clip-ViT-B-32-vision` / `Qdrant/clip-ViT-B-32-text` via `fastembed` ONNX) → `products.image_embedding` (HNSW cosine).
-- `/search?mode=` switches ranker: `bm25`, `vector`, `hybrid` (default: BM25+vector), `trimodal`
-  (BM25+dense+CLIP-text). All fused lists go through **Reciprocal Rank Fusion** with `k=60`.
-  `trimodal` loads both the text MiniLM model and the CLIP text encoder, so it is gated behind
-  `ENABLE_TRIMODAL` (`false` on 512 MB deployments, `true` in local Compose).
+## Key endpoint contracts
 
-$$
-\text{RRF}(d) = \sum_{m \in M} \frac{1}{60 + r_m(d)}
-$$
+### `GET /search`
 
-RRF is chosen over score normalization because BM25 scores are unbounded positives while cosine is
-bounded; RRF needs only ranks, so heterogeneous rankers combine with no calibration.
+Hybrid retrieval over the product catalog: BM25 + 384-d multilingual dense vectors fused with RRF.
 
-### Zero-result recovery + `/search/insights`
+| Query parameter | Type | Default | Notes |
+|---|---|---:|---|
+| `q` | string | required | 1–100 characters |
+| `mode` | enum | `hybrid` | `hybrid`, `dense`, `bm25` (`vector` = deprecated alias for `dense`) |
+| `limit` | int | 24 | 1–24 |
+| `offset` | int | 0 | Pagination offset |
+| `department` | string | — | Exact facet filter |
+| `category` | string | — | Exact facet filter |
+| `rerank` | bool | false | Applies the cross-encoder only when `ENABLE_RERANKER=true` |
 
-`/search` runs the requested ranker once. If the deduped ranking is empty, it calls
-`rewrite_id_to_en()` (`search.py`), which translates a hand-maintained Indonesian→English shopping
-dictionary with multi-word phrases checked first (`celana jeans → jeans`, `sepatu lari → running
-shoes`, `jaket kulit → leather jacket`), then single terms (`sepatu → shoes`, `hitam → black`,
-`pria → men`). If a translation exists, the endpoint runs the same query pipeline once more with the
-same mode, department, category, facet ids, limit/offset and rerank setting. Only a successful retry
-sets `rewritten=true` and returns `fallback_query`/`original_query`; otherwise all three are
-`false`/`null`/`null`. The copilot's `search_catalog` applies the same single retry.
+```bash
+curl -s "http://localhost:8001/search?q=sepatu%20running&limit=3"
+```
 
-`GET /search/insights?since_days=30` aggregates the client-posted `search` events:
+```json
+{
+  "items": [
+    {
+      "id": 3398,
+      "asin": "B004BUZF9G",
+      "title": "Nike Women's Free Running Shoe",
+      "brand": "NIke",
+      "priceUsd": 49.99,
+      "priceIdr": 799800,
+      "department": "Women",
+      "category": "Running",
+      "categoryPath": ["Women", "Running"],
+      "description": "...",
+      "features": ["..."],
+      "imageUrl": "https://...",
+      "avgRating": 4.45,
+      "ratingCount": 304,
+      "alsoBuy": [],
+      "alsoView": [],
+      "score": 0.032
+    }
+  ],
+  "total": 113,
+  "limit": 3,
+  "offset": 0,
+  "query": "sepatu running",
+  "mode": "hybrid",
+  "reranked": false,
+  "deduped": true,
+  "rewritten": false,
+  "fallback_query": null,
+  "original_query": null,
+  "took_ms": 42.71
+}
+```
+
+Behavior worth knowing:
+
+- Results are deduplicated by normalized title **before** pagination.
+- A zero-result query is retried once with a deterministic Indonesian → English rewrite. When that
+  succeeds, `rewritten=true` and `fallback_query` carries the translated query.
+- A query containing only stopwords returns an empty page with `200`, not an error.
+- `score` is rank-fusion evidence, not a probability. Compare rankings, not raw values across modes.
+
+### `GET /search/insights`
+
+Aggregates the `events` table over a window (`since_days`, default 30).
 
 ```json
 {
   "since_days": 30,
-  "total_searches": 120,
-  "zero_result_searches": 18,
-  "zero_result_rate": 0.15,
-  "top_zero_result_queries": [{"query": "sepatu lari", "count": 4}],
-  "top_queries": [{"query": "sepatu lari", "count": 4, "zero_result": true}],
-  "search_to_pdp_rate": 0.42
+  "total_searches": 1420,
+  "zero_result_searches": 97,
+  "zero_result_rate": 0.0683,
+  "top_zero_result_queries": [{"query": "kemeja linen", "count": 9}],
+  "top_queries": [{"query": "sepatu running", "count": 84, "zero_result": false}],
+  "search_to_pdp_rate": 0.4127
 }
 ```
 
-`search_to_pdp_rate` is the same session-level proxy as `/events/summary`: a session that both
-searched and viewed a product. The event schema does not carry the search mode, so no by-mode
-breakdown is claimed.
+`search_to_pdp_rate` is session-level: distinct sessions with a search event divided into sessions
+with both a search and a `view_product` event.
 
-### Image search (`POST /search/image`)
+### `POST /sizing/recommend`
 
-1. Validate MIME (`image/*`) and size (50 B–10 MB).
-2. Offload synchronous image decoding, `fastembed` ONNX inference (`Qdrant/clip-ViT-B-32-vision`), and
-   PostgreSQL query execution to a worker thread (`asyncio.to_thread`) so the FastAPI event loop never blocks.
-3. Cosine search against `image_embedding`, ordered by HNSW, returning `visualSimilarity` per item and
-   `timings: { embed_ms, db_ms }`. To embed or refresh catalog image vectors:
-   `python3 pipelines/embed_images.py --overwrite` — see [`../pipelines/README.md`](../pipelines/README.md).
+Deterministic, zero-LLM sizing. Only the measurement required by the product's size kind is needed.
 
-### Stage-2 cross-encoder reranking (optional, copilot only)
-
-Used only by the copilot's `search_catalog` and only when `ENABLE_RERANKER=true`; `/search` returns
-the RRF order. `reranker.py` re-scores the retrieved candidates with `Xenova/ms-marco-MiniLM-L-6-v2` through ONNX
-Runtime (~15–25 ms for ~20 candidates). A cross-encoder sees query and document together, capturing
-interactions a bi-encoder cannot. If the model cannot be loaded, it logs and returns the Stage-1
-order — graceful degradation, never a hard failure.
-
-### Evaluation
-
-`../pipelines/eval_search.py` evaluates **32 queries** across four groups (exact brand/SKU, category +
-features, semantic/intent, Indonesian/casual) and reports HitRate@10, Precision@10, MRR@10 and nDCG@10
-for BM25 vs hybrid, with per-group breakdown and relative gains.
-
----
-
-## Recommendations
-
-Recommendations are the second half of the product story (search answers "find this"; recs answer
-"what next"). The serving layer is deliberately built so that **every request has an answer, even on
-a cold visit** — a fallback chain rather than a single model.
-
-| Endpoint | Mechanism | Cold fallback |
-|---|---|---|
-| `/recs/popular` | live query ordered by `rating_count DESC, avg_rating DESC`, optional department filter | — |
-| `/recs/item/{asin}` | offline item-to-item table `item_recommendations` (co-occurrence + metadata boosts), up to `limit` | same category, then department popularity (`category_popularity_fallback`) |
-| `/recs/session` | last 5 `view_product`/`add_to_cart` events for the anonymous session → union of their item recs, excluding already-seen ASINs | global popularity (`cold_popularity`) |
-
-Every response carries a `strategy` field (`item_cf`, `category_popularity_fallback`, `session_cf`,
-`cold_popularity`, `popularity_baseline`) so the UI and any dashboard can tell *how* a rail was
-produced instead of inferring it.
-
-### How the offline table is built (`../pipelines/build_recs.py`)
-
-1. **Popularity, Bayesian-smoothed** — `score = (n·r̄ + m·C) / (n + m)` with `m = 100`, `C = 4.31`,
-   so a 3-review item cannot outrank a 20k-review item. Global top-50 + top-30 per department,
-   title-deduped.
-2. **Item-to-item co-occurrence** — cosine similarity over per-item user sets,
-   `cos = co(i,j) / (√n_i · √n_j)`, capped at 5,000 sampled users for ultra-popular items.
-3. **Metadata boosts** — `also_buy` `+0.50`, `also_view` `+0.30`.
-4. **Title dedupe + cold fill** — variants collapsed; ≤12 recs/item; backfill from category then
-   department popularity when fewer than 6 remain.
-
-This is why the store has **no long-lived user profile** and still personalizes: identity is the
-anonymous `sessionStorage` id, so the online signal is the current visit, and the offline co-occurrence
-table carries the long-horizon behaviour. It is the cold-start problem answered at four levels
-(session → item → category → global).
-
-### Evaluation (`../pipelines/eval_recs.py`)
-
-Sequential **leave-one-out** on users with ≥5 interactions: target = the user's final interaction,
-context = the penultimate item (a realistic "current PDP"), everything else masked. Reports HR@10,
-HR@5, MRR@10 and nDCG@10 against random and global-popularity baselines.
-
----
-
-## Reviews
-
-`GET /products/{id}/reviews` returns an aggregate (count, average, 1–5 star
-breakdown) plus up to `limit` authentic reviews. These are real Amazon reviews extracted for the
-catalog (`../pipelines/extract_reviews.py`, ≤10 per ASIN), stored in the `reviews` table — the seed
-contains **46,700** of them. They power the product-page review UI; the copilot has no review
-tool (its sizing guidance comes from the authored brand cut rules, not from review mining).
-
----
-
-## The AI copilot (v2)
-
-The copilot is an **agentic RAG loop** built on **LangChain v1 `create_agent`** (langchain 1.4.3,
-langgraph 1.2.12), not a chat completion with the catalog pasted in. It replaced the earlier
-two-pass planner/synthesizer design.
-
-Provider chain (`copilot_llm.py`, wired with `.with_fallbacks`): **OpenRouter** (primary, whenever
-`OPENROUTER_API_KEY` is set) → an optional **generic OpenAI-compatible** endpoint
-(`LLM_FALLBACK_BASE_URL` / `LLM_FALLBACK_API_KEY` / `LLM_FALLBACK_MODEL`) → **Google Gemini**.
-`LLM_MODEL` defaults to `openrouter/free`, which auto-routes across OpenRouter's free pool; the
-active provider chain is printed once at startup. With no provider configured, `/copilot/chat`
-returns `503`. Setting `COPILOT_FAKE_LLM=1` swaps in a deterministic in-process fake tool-calling
-model so CI and tests never call a real LLM.
-
-**Text-only — no image in chat.** The v2 chat does **not** accept images (there is no `image_url`
-field and no image tool). Photo search still exists as a first-class storefront feature via
-`POST /search/image`; it is simply not part of the conversation.
-
-### Execution model
-
-```text
-Guardrail (regex fast-path + LLM classifier)  ─ greeting / off-topic / injection → canned reply
-      │ (anything else)
-      ▼
-create_agent loop  ─ LLM ⇄ tools (max 3 model calls/turn) → grounded reply + cards
+```bash
+curl -s -X POST http://localhost:8001/sizing/recommend \
+  -H 'Content-Type: application/json' \
+  -d '{"asin":"B000YPIEXQ","foot_length_cm":27.0}'
 ```
-
-1. **Pre-agent guardrail (`guardrail.py`).** Before the tool-calling agent runs, `classify(message, history)`
-   evaluates the user message alongside up to **3 user + 3 assistant history turns** using a fast
-   LLM classifier (with deterministic regex fast-path for pure greetings/injections and full offline
-   fallback when `COPILOT_FAKE_LLM=1`). Greetings, off-topic requests (code, SQL, math, politics,
-   medical/legal, creative) and prompt-injection attempts receive a canned "Admin Toko Marcell" reply
-   tagged with `guardrail` (`greeting` | `off_topic` | `injection`). With
-   `GUARDRAIL_LLM_MODE=ambiguous`, decisive regex labels skip the LLM entirely; only ambiguous
-   messages are sent to the classifier.
-2. **`create_agent` loop (`copilot_agent.py`).** The LLM plans and calls tools, iterating until it
-   has an answer. A `ModelCallLimitMiddleware` caps it at **3 model calls per turn** so a free-tier
-   quota can't be drained by a loop. User messages are sanitized against spoofed context headers, and
-   the injected context block is wrapped in `<store_context>` tags with explicit untrusted-data prompt rules.
-3. **Grounded answer.** The reply may only use tool evidence, in the "Admin Toko Marcell" voice
-   (Indonesian or English, mirroring the shopper), with structured product cards.
-
-### The 7 bound tools (`copilot_tools.py`)
-
-| Tool | Backed by | Purpose |
-|---|---|---|
-| `search_catalog` | BM25 + multilingual MiniLM (`embedding_ml`, pgvector) fused with RRF, optional reranker, department/category/budget filters; one ID→EN retry on empty | bilingual product discovery |
-| `get_product_details` | `products` by registry ref (`nomor 2`, `produk ini`), ASIN/id, or title fragment | fabric, specs, exact IDR price |
-| `recommend_size` | `sizing.py` (`size_kind` dispatch: TB/BB, foot length, waist, or head circumference) + demo brand cut rules | advisory sizing; unsupported categories return `applicable=false` instead of a guessed S/M/L |
-| `build_outfit` | catalog search for top + bottom + shoes | the total is **summed and verified ≤ budget in code**, not by the LLM |
-| `lookup_store_policy` | `store_knowledge` + `store_knowledge_questions` + IDF-weighted lexical RRF, 10-min/256-entry TTL cache | bilingual sizing (category-aware), shipping, returns, QRIS demo |
-| `add_to_cart` | re-reads `products.price_idr` server-side | returns a `ui_action` the browser executes |
-| `flag_unanswered` | no DB read; sets `ToolContext.unanswered` so the turn recorder logs the truncated question | honest fallback when tool evidence cannot answer; never guess |
-
-`GET /copilot/tools` returns exactly these 7 names. The prompt focuses the agent on three jobs —
-sizing, store policy, and outfit-under-budget — while product discovery stays short and points
-shoppers to the store search bar. There is deliberately **no order-status tool**: checkout is a demo
-simulation with no fulfillment, shipping or tracking to report on.
-
-### No-LLM sizing endpoints
-
-| Endpoint | Contract |
-|---|---|
-| `GET /sizing/{asin}` | `{asin, size_kind, applicable, required_inputs, reason}`. `404` for an unknown ASIN. |
-| `POST /sizing/recommend` | `{asin, height_cm?, weight_kg?, foot_length_cm?, waist_cm?, head_circumference_cm?}` (`extra="forbid"`, body-plausible bounds). Returns the core recommendation; `404` unknown ASIN, `429` write rate limit. |
-
-The product page (`shop/src/components/SizeAdvisor.js`) uses these endpoints to render adaptive
-inputs and a source/confidence badge, without calling an LLM or opening chat.
-
-### Middleware
-
-- **`ContextInjectionMiddleware`** — injects the page / pinned product (re-read from the DB), a
-  numbered `[Produk dalam percakapan ini] [1]…` shown-products registry so follow-ups like "yang
-  kedua" resolve to a real ASIN, and recent browsing context. Because the per-request context is
-  new each turn, `run_turn` / `stream_turn` re-seed the registry from the previous turns'
-  `ToolMessage` results in the checkpointer (only products shown *this* turn become response cards).
-- **`TrimHistoryMiddleware`** — keeps the prompt inside a 2,000-token budget (char/4 estimate).
-- **`ModelCallLimitMiddleware`** — hard cap of 3 model calls per turn.
-
-### Memory
-
-Conversation state lives in a **LangGraph `PostgresSaver`** keyed by a browser-generated UUID
-`thread_id` (stored in `localStorage` under `tm_copilot_thread`), with a sidecar
-`copilot_thread_activity` table and a 7-day TTL cleanup (on startup and daily). History lives in the
-checkpointer, not in the request — a turn sends a single `message`. `GET /copilot/threads/{thread_id}`
-replays the display messages; `DELETE /copilot/threads/{thread_id}` resets the conversation (`204`).
-
-### API contract (v2)
-
-`POST /copilot/chat` (`CopilotChatV2In`, `extra="forbid"`):
 
 ```json
 {
-  "session_id": "sess-abc12345",         // optional
-  "thread_id": "uuid-from-localStorage", // required (1..64 chars)
-  "message": "Ada jaket buat hujan?",    // required (1..2000 chars)
-  "context": { "page_asin": "B0001YRQHQ", "referenced_asins": ["B00XXXX"] }  // optional, ≤3 refs
+  "asin": "B000YPIEXQ",
+  "applicable": true,
+  "size_kind": "footwear",
+  "recommendation": "... tabel standar mengarah ke US 9 / UK 8 / EU 42.5.",
+  "suggested": {"foot_length_cm": 27.0, "us": 9.0, "uk": 8.0, "eu": 42.5},
+  "source": "standard",
+  "confidence": "high",
+  "required_inputs": ["foot_length_cm"],
+  "disclaimer": "Panduan ukuran ini adalah estimasi umum Toko Marcell...",
+  "reason": null
 }
 ```
 
-Response (`CopilotChatV2Out`, or streamed via `POST /copilot/chat/stream` as SSE `token` + `done` events): `reply`, `thread_id`, `products` (≤6, each with a stable `ref` number),
-`ui_actions` (`add_to_cart`), `tool_calls`, `guardrail` (`greeting` | `off_topic` | `injection` |
-`null`) and `took_ms`. Errors: `422` (malformed/oversized), `429` (rate limit), `503` (no LLM key),
-`502` (upstream failure).
+Request bounds (body-plausible, `extra="forbid"`):
 
-`POST /copilot/feedback` (`CopilotFeedbackIn`, `extra="forbid"`):
+| Field | Range |
+|---|---|
+| `height_cm` | 50–250 |
+| `weight_kg` | 10–400 |
+| `foot_length_cm` | 10–40 |
+| `waist_cm` | 30–200 |
+| `head_circumference_cm` | 30–100 |
+
+Missing inputs or unsupported categories return `applicable=false` plus `required_inputs` — the
+engine never invents a size. `GET /sizing/{asin}` returns the same `size_kind` contract before any
+measurements are supplied.
+
+### `GET /recs/item/{asin}`
+
+Item-to-item recommendations for the product page and cart.
 
 ```json
-{ "thread_id": "uuid-from-localStorage", "session_id": "sess-abc12345", "rating": 1 }
+{
+  "asin": "B000YXC2LI",
+  "items": [
+    {"id": 204, "asin": "B000ABC123", "title": "...", "priceIdr": 349000, "imageUrl": "..."}
+  ],
+  "count": 4,
+  "strategy": "item_cf"
+}
 ```
 
-`rating` is `1` (thumbs up) or `-1` (thumbs down); `session_id` is optional. The endpoint is
-rate-limited like `/events` and writes one `copilot_feedback` row. `GET /events/summary` aggregates it
-in `copilot_quality`.
+If the offline table is exhausted, `strategy` becomes `category_popularity_fallback` and the endpoint
+fills the response with same-category then department-popular products. A cold or unknown ASIN still
+returns a usable list rather than an error.
 
-### Grounding guarantees
+### `POST /copilot/chat`
 
-- Every product in a reply comes from a tool result; the prompt forbids invented brands, ASINs,
-  stock or discounts, and the tool results are the only catalog data in context.
-- Prices are always IDR, always from `products.price_idr`; `add_to_cart` re-reads the price server-side.
-- Sizing is answered by the deterministic, category-aware `recommend_size` tool and framed as
-  guidance. It first maps the product's `(department, category)` through
-  `knowledge/size_kind_map.json`, then uses the matching layer in `knowledge/size_chart.json`:
-  TB/BB for tops/bottoms/dress, foot length for footwear, waist for belts, head circumference for
-  headwear. Luggage is dimensions, one-size accessories need no body measurement, and
-  lingerie/kids/swimwear/costumes/unknown categories return `applicable=false` with a reason. The
-  demo brand cut rules are applied only after the category baseline. Sizing and fit come **only**
-  from that knowledge base — no per-product or review-derived signal.
-- Outfit budgets are summed and verified in code, not by the LLM.
-- Off-topic, coding, SQL, academic, medical/legal and prompt-injection requests are stopped by the
-  pre-agent guardrail. A regex fast-path catches explicit injections; the default mode also asks an
-  LLM classifier, while `GUARDRAIL_LLM_MODE=ambiguous` returns decisive regex labels without it.
-
-**Knowledge ingestion & RAGAS evaluation.** `knowledge_seed.py` splits `knowledge/*.md` by section header,
-embeds each chunk with `TEXT_EMBED_MODEL` (`paraphrase-multilingual-MiniLM-L12-v2`) into `store_knowledge`
-(**34 chunks**, HNSW index), and generates 3–5 bilingual (ID+EN) hypothetical questions per chunk into
-`store_knowledge_questions` (**120** questions). At query time, `lookup_store_policy` fuses
-hypothetical-question vectors, direct-chunk vectors, and IDF-weighted lexical keywords via RRF (`k=60`),
-achieving **1.0000 Context Recall** and **0.8750 Context Precision** in RAGAS evaluation
-(`../pipelines/eval_rag.py`).
-
-`seed_knowledge()` returns early when `sizing_example` rows already exist. On memory-constrained hosts
-(Render's free tier caps the process at 512 MB) it seeds from the precomputed
-`knowledge/knowledge_seed_cache.json` (mirrored in `../data/knowledge/`) and never loads fastembed at
-web startup; `FASTEMBED_THREADS=1` keeps the model's ONNX thread pool small when it is loaded at query
-time. Set `SKIP_KNOWLEDGE_SEED=1` to skip seeding entirely. After editing `knowledge/*.md`, run
-`python -m knowledge_seed --write-cache` from `api/` to regenerate both cache copies, then re-seed
-(the module's `__main__` forces a reload) instead of relying on startup seeding.
-
----
-
-## Events, funnel & checkout
-
-### Events (`M2`)
-
-One row per shopper action, grouped by an **anonymous** `session_id` generated in the browser
-(`sessionStorage` + `crypto.randomUUID()`). No accounts, no PII.
-
-| Event | Fired by | Extra fields |
-|---|---|---|
-| `view_product` | PDP mount | `asin` |
-| `search` | debounced catalog query | `query`, `results_count` |
-| `add_to_cart` | cart provider (every entry point) | `asin`, `qty`, `price_idr` |
-| `checkout_start` | first render of `/checkout` with a non-empty cart | `qty`, `price_idr` |
-| `purchase_mock` | written **by the server** inside checkout confirm | `qty`, `price_idr` |
-| `copilot_message` | a copilot chat turn | — |
-| `copilot_product_click` | a product card in a copilot reply is opened | `asin` |
-| `copilot_add_to_cart` | add-to-cart triggered from the copilot | `asin`, `qty` |
+One agentic turn. History is stored in the LangGraph checkpointer, not sent by the client.
 
 ```bash
-curl -s -X POST localhost:8001/events -H 'Content-Type: application/json' \
-  -d '{"event_type":"view_product","session_id":"sess-abc12345","asin":"B000YXC2LI"}'
-curl -s localhost:8001/events/summary | python3 -m json.tool
+curl -s -X POST http://localhost:8001/copilot/chat \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "session_id": "session-12345678",
+    "thread_id": "thread-abc123",
+    "message": "Rekomendasi outfit kerja pria budget 500 ribu",
+    "context": {"page_asin": null, "referenced_asins": []}
+  }'
 ```
 
-The frontend posts events **fire-and-forget** (`keepalive: true`, errors swallowed): losing a data
-point is cheaper than breaking a purchase.
+```json
+{
+  "reply": "Berikut outfit kerja yang muat di budget Rp500.000 ...",
+  "thread_id": "thread-abc123",
+  "products": [
+    {"ref": 1, "asin": "B000ABC123", "title": "...", "priceIdr": 189000, "imageUrl": "..."}
+  ],
+  "ui_actions": [],
+  "tool_calls": [{"name": "build_outfit", "args": {"budget_idr": 500000}}],
+  "guardrail": null,
+  "took_ms": 1840.22
+}
+```
 
-`GET /events/summary` returns the original funnel keys (`by_type`, `sessions_by_step`, `rates`,
-`search`, `copilot`, `caveats`) plus the phase-9 measurement blocks:
+- `guardrail` is `greeting`, `off_topic`, or `injection` when the turn short-circuited; those replies
+  never call the LLM tools.
+- `ui_actions` contains server-validated `add_to_cart` actions. The browser executes them; the model
+  cannot set a price.
+- `products` is capped at six and uses stable `ref` numbers so follow-ups can say "yang kedua".
+- `503` when no LLM provider is configured. `429` with `Retry-After` when rate-limited.
+- `POST /copilot/chat/stream` emits `token` events followed by one `done` event with the same payload.
 
-| Block | Contents | Source |
-|---|---|---|
-| `revenue` | `order_count`, `revenue_idr`, `aov_idr` (`null` without a denominator) | `orders` only — never browser events |
-| `cohorts` | `copilot` vs `non_copilot`: `sessions`, `sessions_with_add_to_cart`, `add_to_cart_rate`, `purchase_sessions`, `purchase_rate`; `purchase_source`; `caveat` | `events` + `orders` (joined on `session_id`) |
-| `copilot_quality` | `turns`, `unanswered_rate`, `guardrail_rate`, `avg_latency_ms`, `p50_latency_ms`, `p95_latency_ms`, `thumbs_up`, `thumbs_down`, `thumbs_up_rate` | `copilot_turns` + `copilot_feedback` |
-| `unit_economics` | `total_cost_usd`, `avg_cost_per_turn_usd`, `cost_per_conversation_usd`, `cost_per_resolved_conversation_usd`, `cost_per_assisted_order_usd` | `copilot_turns.cost_usd` + `orders` and distinct `thread_id` |
+### `GET /admin/kpi`
 
-The cohort caveat says plainly that the comparison is **correlational and self-selected** — there is
-no holdout. `copilot_quality.turns` counts all logged turns, so `unanswered_rate` and
-`guardrail_rate` share that denominator. `guardrail_rate` counts every guardrail label (regex or LLM),
-including greetings, not only unsafe blocks. The raw question behind an `unanswered` turn is
-stored in `copilot_turns.unanswered_question` (first 300 chars) for review; the public summary only
-exposes aggregate rates. `copilot` also keeps `messages`, `product_clicks`, `add_to_cart`,
-`total_add_to_cart` and `assisted_add_to_cart_rate` (= `copilot_add_to_cart` / all `add_to_cart`,
-`null` when there is no denominator); a copilot-driven add fires **both** events, so it is an
-attributed share, not an independent funnel.
-
-`orders` is the only revenue source. `purchase_mock` is written by the confirm handler today, but the
-public `/events` endpoint still accepts it from any client and historical rows may be browser-asserted;
-it remains a directional funnel signal. Rates are `null`, never `0.0`, when a denominator is missing.
-
-### Checkout — the authoritative step
-
-Before this existed, "paid" was a browser claim and `/checkout/success` confirmed an order to anyone
-who typed the URL. Now the truth is a row in `orders`.
+Executive dashboard payload. Requires `X-Admin-Token: <ADMIN_TOKEN>` (or `?token=`).
 
 ```bash
-curl -s -X POST localhost:8001/checkout/confirm -H 'Content-Type: application/json' \
-  -d '{"items":[{"asin":"B000YXC2LI","qty":2}],"session_id":"sess-abc12345"}'
-# → {"token":"tk_...","status":"paid","total_idr":989400,"item_count":2,"items":[...]}
-
-curl -s localhost:8001/orders/<token>
+curl -s "http://localhost:8001/admin/kpi?since_days=30" \
+  -H "X-Admin-Token: dev-admin-token"
 ```
 
-**The rule that matters: the client sends `{asin, qty}` and never a price.** The server looks up
-`products.price_idr` for every line and computes the total itself. `ConfirmIn` sets `extra="forbid"`,
-so a request that tries to send a total is rejected with `422` instead of being silently ignored —
-the rule is enforced at the edge and visible in the logs.
+Top-level sections:
 
-Consequences of putting the order on the server:
-
-- `/checkout/confirm/[token]` **fetches** the order, so it survives refresh, a new tab, or another
-  device. An invalid token renders a 404, not a fake receipt.
-- `orders` is the authoritative checkout record; `purchase_mock` is a funnel event only. The public
-  events endpoint still accepts a client-posted `purchase_mock`, so revenue/AOV never read it.
-- `session_id` is **required** on confirm; a purchase that cannot be attributed to a visit is useless.
-- The client cart gained `asin`, so the localStorage key moved to `toko-cart-v2`. A v1 cart line has no
-  asin and cannot be priced; the key bump is honest where a silent migration would have produced
-  unpriceable lines.
-
-**Known simplification:** confirm is **not idempotent** — a double-click could create two orders. The
-button disables in flight, but a production system wants an `Idempotency-Key` header.
-
----
-
-## Caching & defensive security
-
-Designed to be reliable on free infrastructure (Render + Neon + Vercel).
-
-### Multi-tier caching
-
-- **Edge ISR** (`../shop`): product detail routes export `revalidate = 300` → stale-while-revalidate on
-  Vercel's CDN.
-- **HTTP Cache-Control**: `/products`, `/products/{id}` and `/categories` emit
-  `public, max-age=60, s-maxage=300, stale-while-revalidate=60` (product detail uses a longer TTL).
-- **In-memory TTL**: `/categories` aggregates are cached for 300 s, turning a `GROUP BY` scan
-  (~60 ms) into ~2 ms. `/search/reindex` invalidates it.
-
-### Defensive boundaries
-
-- **AI token safeguard** — `/copilot/chat`: text-only, ≤2,000 chars/message (`extra="forbid"` rejects
-  anything malformed or oversized with a `422`), plus per-IP rate limiting.
-- **Server-authoritative checkout** — see above; a tampered price is a `422`, not a discount.
-- **Image search bounds** — MIME `image/*`, 50 B–10 MB.
-- **CORS** — configurable allowlist plus an explicit `^https://.*\.vercel\.app$` regex for preview
-  deployments. The shipped Render blueprint uses `CORS_ORIGINS=*` so any preview URL works without a
-  redeploy; this is a deliberate tradeoff because the API is stateless, credential-free and sets no
-  cookies. It is documented rather than hidden.
-- **Frontend headers** (`../shop/next.config.mjs`) — `nosniff`, `DENY`, strict referrer policy, and
-  `camera=(), microphone=(), geolocation=()`.
-- **Friendly errors** — the copilot returns a clean message on upstream failures instead of leaking
-  exception text to the shopper.
-
----
-
-## Schema
-
-The schema is versioned with **Alembic** (`alembic.ini`, `migrations/versions/`). Migrations are
-hand-written SQL via `op.execute` — there are no ORM models; SQLAlchemy is only Alembic's connection
-layer and all queries stay raw psycopg. On startup `init_db()` runs `alembic upgrade head`
-(`migrate.py`), so `docker compose up` and Render need no extra step.
-
-| Revision | Adds |
+| Section | Contents |
 |---|---|
-| `0001` baseline | every app table + indexes (incl. HNSW); drops the legacy v1 demo table (no `asin`) |
-| `0002` | `products.embedding_ml vector(384)` + HNSW index (opt-in multilingual) |
+| `metadata` | Window, generated timestamp, `synthetic`, `environment`, caveat |
+| `revenue` | Order count, revenue in IDR, AOV |
+| `funnel` | Session counts and view→cart→checkout→order rates |
+| `cohorts` | Copilot vs non-copilot sessions, conversion, AOV, caveat |
+| `unit_economics` | Total cost, cost per turn/conversation/resolved conversation/assisted order |
+| `search_health` | Search volume, zero-result rate, search-to-PDP, top queries |
+| `copilot_quality` | Outcomes, unanswered rate, deflection rate, p50/p95 latency, thumbs ratio |
 
-Each revision is idempotent (`IF NOT EXISTS`), so databases created before Alembic (the seed dump,
-Neon) are adopted by a plain `upgrade head` — no `alembic stamp` needed. The LangGraph checkpoint
-tables and their `copilot_thread_activity` sidecar are still created at runtime by
-`copilot_memory.py`.
+`503` when `ADMIN_TOKEN` is unset; `403` for a missing or wrong token. Metrics are explicitly marked
+as synthetic demo data — the endpoint never presents simulated revenue as audited revenue.
 
-```bash
-cd api
-alembic upgrade head            # or: python migrate.py
-alembic current
-alembic revision -m "add foo"   # then write upgrade()/downgrade() SQL by hand
+---
+
+## Search internals
+
+### BM25
+
+`search.py` implements Robertson & Zaragoza BM25 (`k1=1.5`, `b=0.75`) over the 4,670-product catalog.
+The index lives in process and rebuilds in under a second; there is no external search service.
+
+- Field weights: title 3.0, brand 2.0, category 1.5, department 1.0, features 1.0, description 0.5.
+- Tokenization: lowercase → NFKD accent folding → alphanumeric tokens → stopword removal → plural
+  folding.
+- A deterministic Indonesian → English vocabulary handles multi-word phrases before single tokens
+  (`celana jeans` → `jeans`, `sepatu lari` → `running shoes`).
+- Documents are deduplicated by normalized title, because 842 of the 6,000 source products are
+  variants that share a title.
+
+### Dense retrieval
+
+Queries are embedded with
+`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` through `fastembed` (quantized ONNX,
+384 dimensions, `FASTEMBED_THREADS` pinned for small containers). The configured column
+(`TEXT_EMBED_COLUMN`, default `embedding_ml`) is queried with cosine distance through a pgvector HNSW
+index, returning the top 100 candidates.
+
+### Reciprocal Rank Fusion
+
+RRF merges rankings without score calibration:
+
+```
+score(d) = Σ 1 / (k + rank_i(d))     with k = 60
 ```
 
-```sql
-products (
-  id INTEGER PRIMARY KEY, asin TEXT NOT NULL UNIQUE,
-  title TEXT NOT NULL, brand TEXT,
-  price_usd NUMERIC(10,2) NOT NULL, price_idr INTEGER NOT NULL,
-  department TEXT, category TEXT, category_path JSONB,
-  description TEXT, features JSONB, image_url TEXT,
-  avg_rating NUMERIC(3,2), rating_count INTEGER NOT NULL DEFAULT 0,
-  also_buy JSONB, also_view JSONB,
-  embedding vector(384),            -- MiniLM (default), HNSW cosine
-  embedding_ml vector(384),         -- paraphrase-multilingual-MiniLM-L12-v2 (opt-in A/B), HNSW cosine
-  image_embedding vector(512)       -- champion CLIP, HNSW cosine
-)
-events           (id BIGSERIAL, session_id, event_type, asin, query, results_count, qty, price_idr, created_at)
-copilot_turns    (id BIGSERIAL, thread_id, session_id, created_at, guardrail, outcome, tool_names, latency_ms,
-                  input_tokens, output_tokens, model, cost_usd, unanswered_question)
-copilot_feedback (id BIGSERIAL, thread_id, session_id, rating CHECK (-1,1), created_at)
-orders           (id BIGSERIAL, token UNIQUE, total_idr, item_count, status, session_id, created_at)
-order_items      (id BIGSERIAL, order_id → orders, asin, title, qty, unit_price_idr)
-item_recommendations (asin PRIMARY KEY, recs JSONB)
-reviews          (id SERIAL, asin, rating, summary, comment, author, verified, review_date, created_at)
-store_knowledge  (id SERIAL, category, title, content, embedding vector(384))        -- 34 chunks
-store_knowledge_questions (id SERIAL, knowledge_id → store_knowledge, question, embedding vector(384))  -- 120 hypothetical questions
-copilot_thread_activity (thread_id, last_touch)   -- sidecar for the 7-day TTL cleanup
+The hybrid path fuses the BM25 and dense top-100 lists, then deduplicates and paginates. If one
+retriever fails or returns nothing, the other list is used directly rather than failing the request.
+
+### Optional reranking
+
+When `ENABLE_RERANKER=true` and `rerank=true`, a cross-encoder rescores the top `max(limit+offset, 50)`
+fused candidates. It is disabled by default because the ONNX model is expensive on small instances;
+the lexical + dense + RRF stack is the production path.
+
+---
+
+## Store knowledge RAG
+
+`knowledge_seed.py` reads authored Markdown/JSON from `api/knowledge/` and maintains two tables:
+
+- `store_knowledge` — **34 policy and sizing chunks**, each with a 384-d embedding.
+- `store_knowledge_questions` — **120 hypothetical shopper questions** in Indonesian and English,
+  each embedded and linked to its parent chunk.
+
+Retrieval (`lookup_store_policy`) fuses three ranked lists with RRF (`k=60`):
+
+1. Direct chunk-vector similarity.
+2. Hypothetical-question-vector similarity, deduplicated to parent chunks.
+3. IDF-weighted bilingual lexical keyword matching.
+
+A 10-minute, 256-entry TTL cache absorbs repeated questions. The seed is skipped when
+`SKIP_KNOWLEDGE_SEED=true`, and precomputed vectors in `knowledge_seed_cache.json` avoid recomputing
+embeddings on every boot.
+
+Evaluation uses RAGAS (`pipelines/eval_rag.py`) with ID-based and non-LLM context metrics at `k=3`:
+**1.0000 Context Recall**, **0.9167 Context Precision** on 12 bilingual queries.
+
+---
+
+## Copilot and tools
+
+`create_agent` runs on a LangGraph state machine. The graph holds message history in PostgreSQL via
+`PostgresSaver`, keyed by the browser-generated `thread_id`; a sidecar activity table enables TTL
+cleanup of abandoned threads.
+
+### Guardrails
+
+`guardrail.classify()` returns `(label, canned_reply)` or `(None, None)`:
+
+| Label | Action |
+|---|---|
+| `injection` | Fixed refusal; never reaches the agent or tools |
+| `greeting` | Fast-path canned greeting; no model call |
+| `off_topic` | Fixed, polite scope deflection |
+| `on_topic` | Proceeds to the agent loop |
+
+`GUARDRAIL_LLM_MODE=always` uses the LLM classifier for every non-injection message;
+`ambiguous` lets decisive regex labels short-circuit and only sends ambiguous messages to the LLM.
+Trimming older turns from the classifier prompt prevents multi-turn injection from hiding in history.
+
+### The seven tools
+
+| Tool | Responsibility | Invariant |
+|---|---|---|
+| `search_catalog` | BM25 + multilingual dense search with filters | One ID→EN retry on empty results |
+| `get_product_details` | Resolve a product by `ref`, ASIN, id, or title fragment | Reads the server-side price |
+| `recommend_size` | Category-aware deterministic sizing | Returns `applicable=false` instead of guessing |
+| `build_outfit` | Top + bottom + footwear within a budget | `total <= budget` summed and verified in code |
+| `lookup_store_policy` | Policy and sizing RAG | Grounded citations from `store_knowledge` |
+| `add_to_cart` | Emit a validated UI action | Price re-read from `products`; qty bounds enforced |
+| `flag_unanswered` | Record an unanswerable question | Sets the turn outcome and backlog entry |
+
+### Provider chain
+
+1. **OpenRouter** (`OPENROUTER_API_KEY`, `LLM_MODEL`, `LLM_BASE_URL`, optional
+   `LLM_FALLBACK_MODELS`).
+2. **Generic OpenAI-compatible fallback** (`LLM_FALLBACK_BASE_URL`, `LLM_FALLBACK_API_KEY`,
+   `LLM_FALLBACK_MODEL`).
+3. **Google Gemini** (`GEMINI_API_KEY`, `GEMINI_MODEL`).
+
+`COPILOT_FAKE_LLM=1` swaps in a deterministic fake tool-calling model for CI: no network, no key, and
+stable assertions.
+
+### Turn telemetry
+
+Every turn writes to `copilot_turns`: guardrail label, outcome (`answered`, `guardrail`,
+`unanswered`, `cart`, `error`), tools called, latency, token counts, model, estimated `cost_usd`, and
+the `unanswered_question` when applicable. `GET /admin/kpi` and `GET /events/summary` aggregate these
+rows into the unit-economics and quality panels.
+
+---
+
+## Environment variables
+
+Settings are loaded by `config.Settings` from `../.env` and `.env`, with process environment
+variables taking precedence. Unknown variables are ignored.
+
+### Core
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `DATABASE_URL` | `postgresql://toko:toko@localhost:5432/toko` | PostgreSQL + pgvector DSN |
+| `DB_POOL_MIN` / `DB_POOL_MAX` | `1` / `5` | Connection pool bounds |
+| `CORS_ORIGINS` | local + Vercel storefront | Comma-separated allowlist; `*` opens it |
+| `ADMIN_TOKEN` | empty | Protects `/search/reindex` and `/admin/kpi`; empty disables both |
+| `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` (set `true` behind Render) |
+| `LOG_LEVEL` | `INFO` | Python logging level |
+
+### Embeddings and search
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `TEXT_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 384-d multilingual model |
+| `TEXT_EMBED_COLUMN` | `embedding_ml` | Vector column queried by `/search` and the copilot |
+| `FASTEMBED_CACHE_DIR` | `/tmp/fastembed_cache` | ONNX model cache |
+| `FASTEMBED_THREADS` | `1` | ONNX intra-op threads (memory control) |
+| `HF_HUB_CACHE` | `/tmp/hf_cache` | Hugging Face cache for the optional reranker |
+| `ENABLE_RERANKER` | `false` | Enable the cross-encoder stage-2 reranker |
+| `SKIP_KNOWLEDGE_SEED` | `false` | Skip startup knowledge verification/seeding |
+
+### Copilot
+
+| Variable | Default | Purpose |
+|---|---|---|
+| `OPENROUTER_API_KEY` | empty | Preferred provider; empty falls through the chain |
+| `LLM_MODEL` | `openrouter/free` | OpenRouter model id |
+| `LLM_BASE_URL` | `https://openrouter.ai/api/v1` | OpenAI-compatible endpoint |
+| `LLM_FALLBACK_MODELS` | empty | Comma-separated OpenRouter fallbacks for 429/503 |
+| `LLM_SITE_URL` | storefront URL | OpenRouter attribution header |
+| `LLM_FALLBACK_BASE_URL` / `_API_KEY` / `_MODEL` | empty | Generic OpenAI-compatible fallback |
+| `GEMINI_API_KEY` / `GOOGLE_API_KEY` | empty | Gemini fallback credentials |
+| `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model id |
+| `GUARDRAIL_LLM_MODE` | `always` | `always` or `ambiguous` classifier policy |
+| `COPILOT_RATE_LIMIT_PER_MIN` | `10` | Per-IP requests per minute |
+| `COPILOT_RATE_LIMIT_PER_DAY` | `100` | Per-IP requests per day |
+| `COPILOT_FAKE_LLM` | unset | `1` enables the deterministic fake model |
+| `LLM_INPUT_COST_PER_MILLION` | `0.15` | USD per 1M input tokens for cost estimates |
+| `LLM_OUTPUT_COST_PER_MILLION` | `0.60` | USD per 1M output tokens for cost estimates |
+
+---
+
+## Database schema
+
+Defined by Alembic revisions `0001` → `0005`. Revision `0005` drops the retired `products.image_embedding`
+column and its HNSW index.
+
+```mermaid
+erDiagram
+    products ||--o{ reviews : "asin"
+    products ||--o{ item_recommendations : "asin"
+    orders ||--o{ order_items : "order_id"
+    store_knowledge ||--o{ store_knowledge_questions : "chunk_id"
+    orders ||--o{ events : "session correlation"
 ```
 
-Indexes: `products(department)`, `products(category)`, HNSW on `products.embedding`,
-`products.embedding_ml` and `products.image_embedding`, HNSW on `store_knowledge.embedding` and
-`store_knowledge_questions.embedding`, plus events/orders/reviews indexes.
+### Catalog
 
-The LangGraph **checkpointer tables** (used by the copilot's `PostgresSaver`) are **created at
-runtime** by the saver, not shipped in the seed — they are ephemeral conversation state and are
-excluded from `data/seed/init.sql.gz`. The Phase 4 additions (`embedding_ml`,
-`store_knowledge_questions`) ship in the seed and are applied idempotently by
-`../pipelines/migrations/2026_10_phase4.sql`.
+**`products`**
 
-`pgvector` is enabled defensively: if the extension is unavailable the API still boots, just without
-an `embedding` column (search is disabled rather than crashing).
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `INTEGER PK` | Internal product id |
+| `asin` | `TEXT UNIQUE NOT NULL` | Amazon-style product key used across the app |
+| `title` | `TEXT NOT NULL` | Display title; dedupe key in search |
+| `brand` | `TEXT` | Brand facet |
+| `price_usd` | `NUMERIC(10,2) NOT NULL` | Source price |
+| `price_idr` | `INTEGER NOT NULL` | Server-authoritative IDR price |
+| `department` | `TEXT NOT NULL` | Top-level facet |
+| `category` | `TEXT NOT NULL` | Category facet |
+| `category_path` | `JSONB` | Hierarchical path |
+| `description` | `TEXT` | Long description (low BM25 weight) |
+| `features` | `JSONB` | Bullet list |
+| `image_url` | `TEXT` | Product image |
+| `avg_rating` / `rating_count` | `NUMERIC(3,2)` / `INTEGER` | Popularity baseline |
+| `also_buy` / `also_view` | `JSONB` | Source co-purchase signals |
+| `embedding` | `vector(384)` | English MiniLM embedding (optional) |
+| `embedding_ml` | `vector(384)` | Multilingual embedding (default search column) |
+
+Indexes: `products_department_idx`, `products_category_idx`, HNSW cosine indexes on `embedding` and
+`embedding_ml`.
+
+### Funnel and orders
+
+**`events`** — append-only shopper telemetry.
+
+| Column | Type |
+|---|---|
+| `id` | `BIGSERIAL PK` |
+| `session_id` | `TEXT NOT NULL` |
+| `event_type` | `TEXT NOT NULL` (`view_product`, `search`, `add_to_cart`, `checkout_start`, `purchase_mock`, copilot events) |
+| `asin`, `query` | `TEXT` |
+| `results_count`, `qty`, `price_idr` | `INTEGER` |
+| `created_at` | `TIMESTAMPTZ DEFAULT now()` |
+
+Indexes: `events_session_idx`, `events_type_created_idx`.
+
+**`orders`** — one row per confirmed order.
+
+| Column | Type |
+|---|---|
+| `id` | `BIGSERIAL PK` |
+| `token` | `TEXT UNIQUE NOT NULL` |
+| `total_idr` | `INTEGER NOT NULL` |
+| `item_count` | `INTEGER NOT NULL` |
+| `status` | `TEXT NOT NULL DEFAULT 'paid'` |
+| `session_id` | `TEXT` |
+| `created_at` | `TIMESTAMPTZ DEFAULT now()` |
+
+**`order_items`** — line items with the price snapshotted at purchase time (`order_id`, `asin`,
+`title`, `qty`, `unit_price_idr`).
+
+### Recommendations and reviews
+
+**`item_recommendations`** — offline item-to-item output.
+
+| Column | Type | Notes |
+|---|---|---|
+| `asin` | `TEXT PK` | Source product |
+| `recs` | `JSONB` | Ordered ASIN neighbours |
+
+**`reviews`** — `id`, `asin`, `rating`, `summary`, `comment`, `author`, `verified`, `review_date`,
+`created_at`; indexed on `asin` and `rating`.
+
+### Knowledge base
+
+**`store_knowledge`**
+
+| Column | Type |
+|---|---|
+| `id` | `SERIAL PK` |
+| `category` | `TEXT NOT NULL` |
+| `title` | `TEXT NOT NULL` |
+| `content` | `TEXT NOT NULL` |
+| `embedding` | `vector(384)` |
+
+**`store_knowledge_questions`**
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `SERIAL PK` |
+| `chunk_id` | `INTEGER FK → store_knowledge(id)` | `ON DELETE CASCADE` |
+| `question` | `TEXT NOT NULL` | Hypothetical shopper question |
+| `lang` | `TEXT NOT NULL DEFAULT 'id'` | `id` or `en` |
+| `embedding` | `vector(384)` | Question vector |
+
+Both tables carry HNSW cosine indexes; questions are additionally indexed by `chunk_id`.
+
+### Copilot telemetry
+
+**`copilot_turns`** — one row per turn.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | `BIGSERIAL PK` | |
+| `thread_id`, `session_id` | `TEXT` | Attribution |
+| `created_at` | `TIMESTAMPTZ DEFAULT now()` | |
+| `guardrail` | `TEXT` | `greeting`, `off_topic`, `injection`, or `null` |
+| `outcome` | `TEXT NOT NULL` | `answered`, `guardrail`, `unanswered`, `cart`, `error` |
+| `tool_names` | `TEXT[]` | Tools invoked |
+| `latency_ms` | `REAL` | End-to-end turn latency |
+| `input_tokens`, `output_tokens` | `INTEGER` | Usage |
+| `model` | `TEXT` | Provider/model id |
+| `cost_usd` | `NUMERIC` | Estimated from configured token prices |
+| `unanswered_question` | `TEXT` | Populated by `flag_unanswered` |
+
+Indexes: `copilot_turns_created_idx`, `copilot_turns_thread_idx`.
+
+**`copilot_feedback`** — `id`, `thread_id`, `session_id`, `rating` (`-1` or `1`), `created_at`.
+
+### LangGraph checkpoints
+
+Created at runtime by `PostgresSaver.setup()`, not by Alembic: `checkpoints`, `checkpoint_blobs`,
+`checkpoint_writes`, plus the sidecar `copilot_thread_activity` used by the TTL cleanup job.
+
+---
+
+## Operations
+
+### Caching
+
+| Layer | TTL | Scope |
+|---|---|---|
+| BM25 index | Process lifetime | Rebuilt lazily; reset by `POST /search/reindex` |
+| Category facets | 5 minutes + HTTP cache | `GET /categories` |
+| Policy retrieval | 10 minutes / 256 entries | `lookup_store_policy` |
+| Storefront catalog | Next.js ISR / edge cache | Product listing |
+
+### Rate limits
+
+- Copilot: `COPILOT_RATE_LIMIT_PER_MIN` and `COPILOT_RATE_LIMIT_PER_DAY` per client IP.
+- Writes (`/events`, `/checkout/confirm`, `/sizing/recommend`, `/copilot/feedback`): bounded per-IP
+  write limiter with `429` + `Retry-After`.
+
+### Admin protection
+
+`/search/reindex` and `/admin/kpi` compare the presented token in constant time
+(`hmac.compare_digest`). With `ADMIN_TOKEN` unset, both return `503` rather than falling open.
+
+### Cold starts
+
+Render's free tier sleeps after inactivity. The storefront probes `/health` and renders a wake-up
+state for 30–50 seconds. The BM25 index and embedding model are loaded lazily, so `/health` and
+catalog browsing never wait for model initialization.
 
 ---
 
 ## Testing
 
 ```bash
-# Pure unit tests — no database needed (also part of what CI runs)
-python3 -m pytest tests/test_search_unit.py
+# Full backend suite (requires the seeded database and a running API on :8001)
+pytest api/tests/
 
-# Full API suite — needs a running Postgres (docker compose up) and the champion vision ONNX for
-# image tests. The copilot tests run against the deterministic fake LLM (COPILOT_FAKE_LLM=1), so no
-# real LLM key is required.
-COPILOT_FAKE_LLM=1 python3 -m pytest tests/
+# Unit-only subsets (no database)
+pytest api/tests/test_search_unit.py api/tests/test_sizing_unit.py \
+       api/tests/test_guardrail_unit.py api/tests/test_copilot_tools_unit.py
+
+# Lint
+ruff check api/ pipelines/ scripts/
 ```
 
-The API suite is **292 passed + 4 skipped**. The skips are environment-gated (image/trimodal
-encoders, a rate-limit integration test, and an LLM-key case); the pipeline suite is **6**
-(pipeline-math only, no DB). The suites,
-grouped by concern:
-
-| Suite | Covers |
-|---|---|
-| `test_search_unit.py` | stemmer, tokenizer, BM25 scoring, dedupe, facet filtering |
-| `test_search_api.py` | modes, semantic/SKU queries, plural equivalence, filters, reindex |
-| `test_copilot_metrics_unit.py` | per-million cost formula, null-usage handling, automatic `record_turn` cost |
-| `test_guardrail_unit.py` | `always`/`ambiguous` guardrail modes, regex short-circuit, LLM fallback |
-| `test_copilot_tools_unit.py` | tool schemas, SQL/pool hardening, policy-cache hits/expiry/clear/bound |
-| `test_admin_api.py` | KPI auth (`503` unset, `403` missing/wrong), query-token auth, full dashboard schema |
-| `test_catalog_api.py` | health, facets, pagination boundaries, detail 404/422 |
-| `test_checkout_and_events_api.py` | valid/invalid events (incl. copilot types), **price-tampering rejection**, duplicate-ASIN aggregation, order lookup |
-| `test_copilot_api.py` | tool registry (7 names), guardrails, thread memory, the v2 shopping/ops use cases (fake LLM) |
-| `test_recs_api.py` | popular, department filter, item CF + fallback, session cold vs warm |
-| `test_reviews_api.py` | review aggregates, limits, 404s |
-| `test_search_image_api.py` | valid image, department filter, bad MIME, tiny file |
-| `test_agent_tools_real.py` | real-tool grounding against the live DB |
-
-CI (`.github/workflows/ci.yml`) now runs **Ruff** plus the **full API suite** against a Postgres
-service restored from the seed with `COPILOT_FAKE_LLM=1`, alongside the frontend lint/test/build.
-
----
-
-## Design decisions & known gaps
-
-**Decisions**
-
-- **Offline seeding.** The API never writes catalog rows; a pipeline does. Request handling stays
-  independent of data generation.
-- **BM25 by hand.** A baseline is only useful if it is real enough to beat, and at this catalog size an
-  in-process index is faster to operate than a service.
-- **RRF over score normalization.** Removes per-ranker calibration entirely.
-- **Rerank as an optional stage.** Best quality when available, Stage-1 order when not.
-- **Server owns the price.** The single most important security property of the demo.
-- **Anonymous session ids.** Funnel attribution without accounts or PII.
-- **Honest nulls and caveats.** Missing denominators return `null`; the funnel returns its own caveats.
-
-**Known gaps (deliberately visible)**
-
-- No owner authentication; access is by unguessable token/URL.
-- `/checkout/confirm` is not idempotent (no `Idempotency-Key` yet).
-- Client-side filtering means `results_count` is not catalog-wide.
-- Migrations `0003`–`0004` add copilot telemetry; revisions are applied on startup, still with a
-  manual `alembic upgrade head` available for operators.
-- Reindex is manual after a reseed.
-- The copilot is bound to 7 tools (search, details, size, outfit, policy, add-to-cart,
-  flag-unanswered); there is intentionally **no order-status tool** (checkout is a simulation).
-  Product discovery stays short and points to the store search bar.
-- Render free tier cold-starts (see the cold-start overlay in the storefront).
-
----
-
-### Related docs
-
-- [`../README.md`](../README.md) — project overview, research study, architecture
-- [`../pipelines/README.md`](../pipelines/README.md) — dataset provenance and offline pipelines
-- [`../shop/README.md`](../shop/README.md) — storefront internals
+Integration tests target `http://localhost:8001` and assume the Docker Compose stack is running.
+CI restores PostgreSQL from the seed dump, starts Uvicorn, runs Ruff and the full suite with
+`COPILOT_FAKE_LLM=1`, then executes the 54-scenario copilot benchmark. Tests that require a real LLM
+key are marked `llm` and skip automatically when no key is configured.

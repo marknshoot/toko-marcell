@@ -183,45 +183,6 @@ export async function getProductReviews(productId, limit = 10) {
   }
 }
 
-// ── Visual / Image Search ─────────────────────────────────────────────────────
-
-export async function searchByImage({ file, department, limit = 24 }) {
-  const formData = new FormData();
-  formData.append("file", file);
-
-  const params = new URLSearchParams();
-  params.set("limit", String(limit));
-  if (department && department !== "All") {
-    params.set("department", department);
-  }
-
-  try {
-    const response = await fetch(`${API_URL}/search/image?${params.toString()}`, {
-      method: "POST",
-      body: formData,
-    });
-
-    if (!response.ok) {
-      const err = await response.json().catch(() => ({}));
-      const error = new Error(err.detail || "Could not complete image search");
-      error.status = response.status;
-      error.detail = err.detail;
-      throw error;
-    }
-
-    return response.json();
-  } catch (err) {
-    if (err.status === 503 || err.message?.includes("512MB") || err.message?.includes("free-tier")) {
-      throw err;
-    }
-    if (err.name === "TypeError" && err.message?.includes("fetch")) {
-      const netErr = new Error("Visual search is temporarily unavailable on this deployment. Please use text search.");
-      netErr.isNetworkError = true;
-      throw netErr;
-    }
-    throw err;
-  }
-}
 // ── AI Copilot (Admin Toko Marcell) — v2 contract ────────────────────────────
 
 export async function sendCopilotMessage({ message, threadId, context = null }) {

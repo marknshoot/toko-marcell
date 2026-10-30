@@ -69,7 +69,7 @@ use the LLM for language and orchestration, and make every claim traceable to a 
 
 | Layer | Implementation | Business role |
 |---|---|---|
-| **Find** | BM25 + multilingual MiniLM + CLIP → RRF; deterministic ID→EN retry on zero results; `/search/insights` | Reduce zero-result dead ends and expose missed demand |
+| **Find** | BM25 + multilingual MiniLM → RRF; deterministic ID→EN retry on zero results; `/search/insights` | Reduce zero-result dead ends and expose missed demand |
 | **Decide** | Category-aware deterministic sizing; bilingual policy RAG; `flag_unanswered` | Remove fit/policy hesitation without guessing |
 | **Basket** | Session-aware item-to-item CF; `build_outfit` with a hard budget invariant | Raise AOV with multi-item, budget-safe baskets |
 | **Trust** | Guardrail, tool whitelist, server-validated cart, rate limits, no client prices | Bound unsafe output and spend |

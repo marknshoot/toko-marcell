@@ -25,13 +25,12 @@ outside the threshold.
 
 | Surface | Measurement point | p50 target | p95 target | Measured today? | Notes |
 |---|---|---:|---:|---|---|
-| `GET /search` (text) | API handler, warm BM25/vector index, database reachable | **< 35 ms** | **< 80 ms** | **Policy only** — no timing table | Excludes first-request model loading and cold Render/Neon wake-up. Report by mode (`bm25`, `vector`, `hybrid`, `trimodal`) because trimodal does more work. |
-| `POST /search/image` | API handler after the uploaded image is received, including CLIP vision encode and vector query | **< 120 ms** | **< 250 ms** | **Policy only** — no timing table | 10 MB upload transfer time is outside this budget. Report separately if the CLIP model is cold. |
+| `GET /search` (text) | API handler, warm BM25/vector index, database reachable | **< 35 ms** | **< 80 ms** | **Policy only** — no timing table | Excludes first-request model loading and cold Render/Neon wake-up. Report by mode (`bm25`, `dense`, `hybrid`) because each does a different amount of work. |
 | `POST /sizing/recommend` | API handler, deterministic chart lookup | **< 5 ms** | **< 15 ms** | **Policy only** — no timing table | No LLM and no external service; PostgreSQL product lookup is the only dependency. |
 | `POST /copilot/chat` TTFT | First streamed token on `/copilot/chat/stream` (or first token-equivalent response for non-streaming) | **< 1.2 s** | **< 3.0 s** | **Policy only** — total-turn p50/p95 is live, TTFT is not | Includes guardrail classification, tool calls and the first model token. Total turn completion is a separate, larger budget. |
 
 **Current instrumentation:** `/events/summary` and `/admin/kpi` expose copilot **total turn**
-`p50/p95` latency (`copilot_turns.latency_ms`). TTFT, `/search`, `/search/image` and
+`p50/p95` latency (`copilot_turns.latency_ms`). TTFT, `/search` and
 `/sizing/recommend` are not yet stored in a timing table, so **no latency-SLO attainment percentage
 is claimed** until those timings are emitted. Do not quote a target as a measured result.
 
@@ -181,7 +180,7 @@ clear operation when consistency matters.
 
 ## 8. What is deliberately not claimed
 
-- No latency-SLO attainment percentage until search/image/sizing/TTFT timings are persisted.
+- No latency-SLO attainment percentage until search/sizing/TTFT timings are persisted.
 - No real revenue, ROI or provider invoice. Orders and checkout are simulations.
 - No human-agent deflection or support-cost saving; there is no human queue.
 - No claim that fallback-provider pricing equals primary-provider pricing.

@@ -6,7 +6,7 @@
 [![Vitest](https://img.shields.io/badge/Vitest-Unit%20Tests-FCC72B?style=for-the-badge&logo=vitest&logoColor=black)](https://vitest.dev)
 [![Vercel](https://img.shields.io/badge/Deployed-Vercel%20Edge-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://toko-marcell.vercel.app)
 
-The client-facing storefront. It renders the catalog, runs client-side search/filter/visual-search
+The client-facing storefront. It renders the catalog, runs client-side search/filter
 UX, keeps the cart in `localStorage`, and talks to the FastAPI backend over HTTP. It never touches a
 database and never decides a price.
 
@@ -38,7 +38,6 @@ A recruiter opening this link decides in seconds whether it works. That drove fo
 - **Department filter chips** from the live `/categories` facets.
 - **Debounced text search** (250 ms) that calls the backend `/search` endpoint, so ranking is
   server-side (BM25 + dense vectors + RRF) rather than a client filter.
-- **Visual search**: upload a photo and the catalog calls `POST /search/image` (CLIP embeddings).
 - URL-driven state (`?department=`, `?page=`, `?q=`), so filtered/search views are shareable and the
   back button behaves.
 - A visible "taking longer than usual" state after 1 s so a cold backend never looks frozen.
@@ -189,7 +188,7 @@ src/
 │       ├── qris/page.js          # QRIS simulation → server-confirmed order
 │       └── confirm/[token]/page.js   # server-fetched receipt; 404 on bad token
 ├── components/
-│   ├── Catalog.js                # grid, search (debounced), department filter, visual search, paging
+│   ├── Catalog.js                # grid, search (debounced), department filter, paging
 │   ├── CatalogSkeleton.js        # home Suspense fallback
 │   ├── ProductCard.js            # card used in grid + rec rails
 │   ├── ProductCardSkeleton.js    # per-card placeholder

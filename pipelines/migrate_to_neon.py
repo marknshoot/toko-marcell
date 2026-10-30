@@ -74,8 +74,7 @@ def main():
                     rating_count INTEGER NOT NULL DEFAULT 0,
                     also_buy JSONB NOT NULL DEFAULT '[]'::jsonb,
                     also_view JSONB NOT NULL DEFAULT '[]'::jsonb,
-                    embedding vector(384),
-                    image_embedding vector(512)
+                    embedding vector(384)
                 );
 
                 CREATE TABLE IF NOT EXISTS events (
@@ -126,8 +125,7 @@ def main():
                     id, asin, title, brand, price_usd, price_idr, department, category,
                     category_path, description, features, image_url, avg_rating, rating_count,
                     also_buy, also_view,
-                    embedding::text as embedding_str,
-                    image_embedding::text as image_embedding_str
+                    embedding::text as embedding_str
                 FROM products
                 ORDER BY id ASC;
             """)
@@ -141,11 +139,11 @@ def main():
                 INSERT INTO products (
                     id, asin, title, brand, price_usd, price_idr, department, category,
                     category_path, description, features, image_url, avg_rating, rating_count,
-                    also_buy, also_view, embedding, image_embedding
+                    also_buy, also_view, embedding
                 ) VALUES (
                     %s, %s, %s, %s, %s, %s, %s, %s,
                     %s, %s, %s, %s, %s, %s,
-                    %s, %s, %s::vector, %s::vector
+                    %s, %s, %s::vector
                 )
                 ON CONFLICT (id) DO UPDATE SET
                     asin = EXCLUDED.asin,
@@ -163,8 +161,7 @@ def main():
                     rating_count = EXCLUDED.rating_count,
                     also_buy = EXCLUDED.also_buy,
                     also_view = EXCLUDED.also_view,
-                    embedding = EXCLUDED.embedding,
-                    image_embedding = EXCLUDED.image_embedding;
+                    embedding = EXCLUDED.embedding;
             """
 
             from psycopg.types.json import Json
@@ -181,7 +178,7 @@ def main():
                         r["image_url"], r["avg_rating"], r["rating_count"],
                         Json(r["also_buy"]) if r["also_buy"] is not None else None,
                         Json(r["also_view"]) if r["also_view"] is not None else None,
-                        r["embedding_str"], r["image_embedding_str"]
+                        r["embedding_str"]
                     )
                     for r in chunk
                 ]
@@ -203,13 +200,12 @@ def main():
                 tgt_conn.commit()
 
             # 8. Create Indexes
-            log("Building HNSW cosine indexes on Neon (image_embedding & embedding)...")
+            log("Building HNSW cosine indexes on Neon (embedding)...")
             tgt_cur.execute("""
                 CREATE INDEX IF NOT EXISTS products_department_idx ON products (department);
                 CREATE INDEX IF NOT EXISTS products_category_idx ON products (category);
                 CREATE INDEX IF NOT EXISTS events_session_idx ON events (session_id);
                 CREATE INDEX IF NOT EXISTS events_type_created_idx ON events (event_type, created_at DESC);
-                CREATE INDEX IF NOT EXISTS products_image_embedding_idx ON products USING hnsw (image_embedding vector_cosine_ops);
                 CREATE INDEX IF NOT EXISTS products_embedding_idx ON products USING hnsw (embedding vector_cosine_ops);
             """)
             tgt_conn.commit()
@@ -218,12 +214,11 @@ def main():
             tgt_cur.execute("""
                 SELECT 
                     count(*) as total, 
-                    count(image_embedding) as with_image_vec,
                     count(embedding) as with_text_vec
                 FROM products;
             """)
             verified = tgt_cur.fetchone()
-            log(f"Neon verification: Total products: {verified[0]:,}, with VLM vector: {verified[1]:,}, with text vector: {verified[2]:,}")
+            log(f"Neon verification: Total products: {verified[0]:,}, with text vector: {verified[1]:,}")
 
     elapsed = time.perf_counter() - t_start
     log(f"✨ MIGRATION TO NEON COMPLETED SUCCESSFULLY in {elapsed:.1f}s!")
