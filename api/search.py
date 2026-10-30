@@ -430,11 +430,15 @@ def get_embed_model():
                     default_cache = "/tmp/fastembed_cache"
                 model_name = os.environ.get("TEXT_EMBED_MODEL", default_model)
                 cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", default_cache)
+                # Render's free tier caps the container at 512 MB; onnxruntime sizes
+                # its intra-op pool from the core count unless we pin it down.
+                threads = int(os.environ.get("FASTEMBED_THREADS", "1"))
                 _EMBED_MODEL = TextEmbedding(
                     model_name=model_name,
                     cache_dir=cache_dir,
+                    threads=threads,
                 )
-                logger.info("Loaded text embedding model: %s", model_name)
+                logger.info("Loaded text embedding model: %s (threads=%d)", model_name, threads)
     return _EMBED_MODEL
 
 

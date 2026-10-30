@@ -563,9 +563,13 @@ hypothetical-question vectors, direct-chunk vectors, and IDF-weighted lexical ke
 achieving **1.0000 Context Recall** and **0.8750 Context Precision** in RAGAS evaluation
 (`../pipelines/eval_rag.py`).
 
-`seed_knowledge()` returns early when `sizing_example` rows already exist. After editing
-`knowledge/size_charts.md`, run `python -m knowledge_seed` from `api/` (the module's `__main__`
-forces a reload) instead of relying on startup seeding.
+`seed_knowledge()` returns early when `sizing_example` rows already exist. On memory-constrained hosts
+(Render's free tier caps the process at 512 MB) it seeds from the precomputed
+`knowledge/knowledge_seed_cache.json` (mirrored in `../data/knowledge/`) and never loads fastembed at
+web startup; `FASTEMBED_THREADS=1` keeps the model's ONNX thread pool small when it is loaded at query
+time. Set `SKIP_KNOWLEDGE_SEED=1` to skip seeding entirely. After editing `knowledge/*.md`, run
+`python -m knowledge_seed --write-cache` from `api/` to regenerate both cache copies, then re-seed
+(the module's `__main__` forces a reload) instead of relying on startup seeding.
 
 ---
 
