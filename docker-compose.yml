@@ -38,6 +38,9 @@ services:
       LLM_MODEL: ${LLM_MODEL:-openrouter/free}
       LLM_BASE_URL: ${LLM_BASE_URL:-https://openrouter.ai/api/v1}
       ADMIN_TOKEN: ${ADMIN_TOKEN:-dev-admin-token}
+      JWT_SECRET_KEY: ${JWT_SECRET_KEY:-dev-admin-jwt-secret-change-in-prod}
+      ACCESS_TOKEN_EXPIRE_MINUTES: ${ACCESS_TOKEN_EXPIRE_MINUTES:-15}
+      REFRESH_TOKEN_EXPIRE_DAYS: ${REFRESH_TOKEN_EXPIRE_DAYS:-7}
       TRUST_PROXY: "false"
     env_file:
       - path: .env

@@ -1,11 +1,26 @@
 import { fireEvent, render, waitFor } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import AdminKpiPage from "../page";
-import { getAdminKpi } from "@/lib/api";
+import {
+  adminLogin,
+  adminLogout,
+  getAdminKpi,
+  getAdminSession,
+} from "@/lib/api";
 
 vi.mock("@/lib/api", () => ({
+  adminLogin: vi.fn(),
+  adminLogout: vi.fn(),
+  adminRefresh: vi.fn(),
   getAdminKpi: vi.fn(),
+  getAdminSession: vi.fn(() => null),
 }));
+
+const SESSION = {
+  access_token: "jwt-token",
+  token_type: "bearer",
+  user: { username: "admin", role: "admin" },
+};
 
 const fixture = {
   metadata: {
@@ -50,13 +65,23 @@ const fixture = {
     caveat:
       "Observational comparison; copilot usage is self-selected, not a randomized trial.",
   },
+  unit_economics: {
+    total_cost_usd: 1.2345,
+    avg_cost_per_turn_usd: 0.0125,
+    cost_per_conversation_usd: 0.0588,
+    cost_per_resolved_conversation_usd: 0.0686,
+    cost_per_assisted_order_usd: 0.19,
+  },
   search_health: {
     total_searches: 18,
     zero_result_searches: 2,
     zero_result_rate: 0.1111,
     search_to_pdp_rate: 0.5,
     top_zero_result_queries: [{ query: "sepatu lari pria", count: 2 }],
-    top_queries: [{ query: "jeans", count: 9 }],
+    top_queries: [
+      { query: "jeans", count: 9 },
+      { query: "sepatu lari pria", count: 2 },
+    ],
   },
   copilot_quality: {
     total_turns: 99,
@@ -75,86 +100,158 @@ const fixture = {
   },
 };
 
+async function signInWithDemoButton(findByRole) {
+  fireEvent.click(
+    await findByRole("button", { name: /Demo Admin \(1-Click\)/i })
+  );
+  await waitFor(() =>
+    expect(adminLogin).toHaveBeenCalledWith({
+      username: "admin",
+      password: "marcell-admin-2026",
+    })
+  );
+}
+
 describe("AdminKpiPage", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     window.sessionStorage.clear();
     window.history.replaceState({}, "", "/");
+    getAdminSession.mockReturnValue(null);
+    adminLogin.mockResolvedValue(SESSION);
+    adminLogout.mockResolvedValue({ ok: true });
     getAdminKpi.mockResolvedValue(fixture);
   });
 
-  it("submits a token and renders the KPI cards", async () => {
-    const { findByText, getByLabelText, getByRole, getByText } = render(
+  it("signs in with the demo admin and renders the KPI dashboard", async () => {
+    const { findByRole, findByText, getAllByText, getByRole, getByText } = render(
       <AdminKpiPage />
     );
 
-    fireEvent.change(getByLabelText("Admin token"), {
-      target: { value: "secret-token" },
-    });
-    fireEvent.click(getByRole("button", { name: "Open dashboard" }));
+    expect(
+      await findByRole("heading", { name: "Admin Dashboard Login" })
+    ).toBeTruthy();
+    expect(
+      getByText("Executive KPI, operations telemetry, and unit economics.")
+    ).toBeTruthy();
+
+    await signInWithDemoButton(findByRole);
 
     await waitFor(() =>
-      expect(getAdminKpi).toHaveBeenCalledWith("secret-token", 30)
+      expect(getAdminKpi).toHaveBeenCalledWith("jwt-token", 30)
     );
 
     expect(await findByText("SYNTHETIC / DEMO DATA")).toBeTruthy();
-    expect(
-      getByText("Toko Marcell — Operations & KPI Dashboard")
-    ).toBeTruthy();
-    expect(getByText("Executive Revenue & Funnel")).toBeTruthy();
-    expect(getByText("Cohort Analysis")).toBeTruthy();
-    expect(getByText("Copilot Performance & Safety")).toBeTruthy();
-    expect(getByText("Search Health & Demand Signals")).toBeTruthy();
+    expect(getByText("Operations & KPI")).toBeTruthy();
+    expect(getByText("Conversion funnel")).toBeTruthy();
+    expect(getByText("Cohort lift & unit economics")).toBeTruthy();
+    expect(getByText("Assistant & demand")).toBeTruthy();
+    expect(getByText("Other / unlisted")).toBeTruthy();
     expect(getByText("sepatu lari pria")).toBeTruthy();
+    expect(getAllByText("Within SLA")).toHaveLength(2);
+    expect(getByText("admin")).toBeTruthy();
+    expect(getByText("Sign Out")).toBeTruthy();
   });
 
-  it("refetches when the time window changes", async () => {
-    const { getByLabelText, getByRole } = render(<AdminKpiPage />);
-
-    fireEvent.change(getByLabelText("Admin token"), {
-      target: { value: "secret-token" },
-    });
-    fireEvent.click(getByRole("button", { name: "Open dashboard" }));
-    await waitFor(() =>
-      expect(getAdminKpi).toHaveBeenCalledWith("secret-token", 30)
+  it("supports manual username/password login", async () => {
+    const { findByText, getByLabelText, getByRole } = render(
+      <AdminKpiPage />
     );
 
-    fireEvent.change(getByLabelText("Time window"), {
-      target: { value: "7" },
+    await findByText("Admin Dashboard Login");
+    fireEvent.change(getByLabelText("Username"), {
+      target: { value: "admin" },
     });
+    fireEvent.change(getByLabelText("Password"), {
+      target: { value: "marcell-admin-2026" },
+    });
+    fireEvent.click(getByRole("button", { name: "Sign In" }));
 
     await waitFor(() =>
-      expect(getAdminKpi).toHaveBeenCalledWith("secret-token", 7)
+      expect(adminLogin).toHaveBeenCalledWith({
+        username: "admin",
+        password: "marcell-admin-2026",
+      })
+    );
+    await waitFor(() =>
+      expect(getAdminKpi).toHaveBeenCalledWith("jwt-token", 30)
     );
   });
 
-  it("shows the token form again after a 403", async () => {
+  it("refetches when the time window changes and on Refresh", async () => {
+    const { findByRole, getByRole } = render(<AdminKpiPage />);
+
+    await signInWithDemoButton(findByRole);
+    await waitFor(() =>
+      expect(getAdminKpi).toHaveBeenCalledWith("jwt-token", 30)
+    );
+
+    fireEvent.click(getByRole("button", { name: "7d" }));
+    await waitFor(() =>
+      expect(getAdminKpi).toHaveBeenCalledWith("jwt-token", 7)
+    );
+
+    fireEvent.click(getByRole("button", { name: "Refresh" }));
+    await waitFor(() => expect(getAdminKpi).toHaveBeenCalledTimes(3));
+    expect(getAdminKpi).toHaveBeenLastCalledWith("jwt-token", 7);
+
+    // The segmented control reflects the active window.
+    expect(getByRole("button", { name: "7d" }).getAttribute("aria-pressed")).toBe(
+      "true"
+    );
+    expect(
+      getByRole("button", { name: "30d" }).getAttribute("aria-pressed")
+    ).toBe("false");
+  });
+
+  it("signs out and returns to the login gate", async () => {
+    const { findByRole, getByRole } = render(<AdminKpiPage />);
+
+    await signInWithDemoButton(findByRole);
+    await waitFor(() =>
+      expect(getAdminKpi).toHaveBeenCalledWith("jwt-token", 30)
+    );
+
+    fireEvent.click(getByRole("button", { name: "Sign Out" }));
+
+    await waitFor(() => expect(adminLogout).toHaveBeenCalledTimes(1));
+    expect(
+      await findByRole("heading", { name: "Admin Dashboard Login" })
+    ).toBeTruthy();
+  });
+
+  it("returns to the login gate when the admin API reports 401", async () => {
     getAdminKpi.mockRejectedValue(
-      Object.assign(new Error("Invalid admin token."), { status: 403 })
+      Object.assign(new Error("Token expired"), { status: 401 })
     );
-    const { findByRole, getByLabelText, getByRole } = render(<AdminKpiPage />);
+    const { findByRole, getByRole } = render(<AdminKpiPage />);
 
-    fireEvent.change(getByLabelText("Admin token"), {
-      target: { value: "wrong-token" },
-    });
-    fireEvent.click(getByRole("button", { name: "Open dashboard" }));
+    await signInWithDemoButton(findByRole);
 
     const alert = await findByRole("alert");
-    expect(alert.textContent).toContain("rejected");
-    expect(getByLabelText("Admin token")).toBeTruthy();
+    expect(alert.textContent).toContain("session");
+    expect(
+      await findByRole("heading", { name: "Admin Dashboard Login" })
+    ).toBeTruthy();
   });
 
-  it("loads a token saved in sessionStorage", async () => {
-    window.sessionStorage.setItem("toko_admin_token", "saved-token");
-    const { findByText } = render(<AdminKpiPage />);
+  it("loads an access token saved for the tab", async () => {
+    getAdminSession.mockReturnValue({
+      access_token: "stored-jwt",
+      user: { username: "admin", role: "admin" },
+    });
+    const { findByText, queryByRole } = render(<AdminKpiPage />);
 
     await waitFor(() =>
-      expect(getAdminKpi).toHaveBeenCalledWith("saved-token", 30)
+      expect(getAdminKpi).toHaveBeenCalledWith("stored-jwt", 30)
     );
     expect(await findByText("SYNTHETIC / DEMO DATA")).toBeTruthy();
+    expect(
+      queryByRole("heading", { name: "Admin Dashboard Login" })
+    ).toBeNull();
   });
 
-  it("accepts a token from the query string and removes it from the URL", async () => {
+  it("accepts a legacy query token and removes it from the URL", async () => {
     window.history.replaceState({}, "", "/admin/kpi?token=query-token");
     const { findByText } = render(<AdminKpiPage />);
 

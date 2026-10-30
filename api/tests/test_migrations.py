@@ -31,6 +31,8 @@ APP_TABLES = {
     "store_knowledge_questions",
     "copilot_turns",
     "copilot_feedback",
+    "admin_users",
+    "admin_refresh_tokens",
 }
 
 
@@ -129,9 +131,20 @@ def test_upgrade_empty_database_to_head(temp_db_url):
         "copilot_turns_created_idx",
         "copilot_turns_thread_idx",
         "copilot_feedback_created_idx",
+        "admin_refresh_tokens_token_hash_idx",
     } <= _indexes(temp_db_url)
     assert "products_image_embedding_idx" not in _indexes(temp_db_url)
     assert _version(temp_db_url) == _head()
+
+    # The migration seeds a working Argon2id demo admin.
+    with psycopg.connect(temp_db_url) as conn:
+        row = conn.execute(
+            "SELECT username, password_hash, role FROM admin_users WHERE username = 'admin'"
+        ).fetchone()
+    assert row is not None
+    assert row[0] == "admin"
+    assert row[1].startswith("$argon2id$")
+    assert row[2] == "admin"
 
     # Re-running at head is a no-op.
     run_migrations(temp_db_url)
@@ -163,6 +176,8 @@ def test_downgrade_roundtrip(temp_db_url):
 
     command.downgrade(cfg, "0003")
     assert "unanswered_question" not in _columns(temp_db_url, "copilot_turns")
+    assert "admin_users" not in _tables(temp_db_url)
+    assert "admin_refresh_tokens" not in _tables(temp_db_url)
     # Revision 0005's downgrade restores the legacy visual-search column.
     assert "image_embedding" in _columns(temp_db_url, "products")
     assert "products_image_embedding_idx" in _indexes(temp_db_url)

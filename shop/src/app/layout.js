@@ -1,9 +1,8 @@
 import { Geist } from "next/font/google";
-import Link from "next/link";
 import "./globals.css";
 import { CartProvider } from "@/components/CartProvider";
-import CartLink from "@/components/CartLink";
 import FloatingCopilot from "@/components/FloatingCopilot";
+import Navbar from "@/components/Navbar";
 import ServerWakeup from "@/components/ServerWakeup";
 
 const geist = Geist({
@@ -25,20 +24,7 @@ export default function RootLayout({ children }) {
         className={`${geist.className} flex min-h-screen flex-col bg-background text-foreground antialiased`}
       >
         <CartProvider>
-          <header className="sticky top-0 z-50 flex flex-wrap items-center justify-between gap-4 border-b border-border bg-surface px-5 py-3.5 sm:px-8">
-            <div className="flex items-center gap-6">
-              <Link
-                href="/"
-                className="text-lg font-bold tracking-tight text-foreground no-underline"
-              >
-                Toko Marcell
-              </Link>
-            </div>
-
-            <div className="flex items-center gap-4">
-              <CartLink />
-            </div>
-          </header>
+          <Navbar />
 
           <div className="flex-1">{children}</div>
 
