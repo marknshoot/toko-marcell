@@ -141,17 +141,20 @@ misses. Indonesian queries are the hardest and most valuable segment.
 - **Lexical baseline:** a hand-written, in-process BM25 index (`k1=1.5`, `b=0.75`) with field
   weighting (title 3.0, brand 2.0, category 1.5, features 1.0, description 0.5), plural folding, and
   deterministic Indonesian → English query rewriting after a zero-result search.
-- **Dense retrieval:** 384-dimensional multilingual embeddings from
-  `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`, stored in PostgreSQL and queried
-  through a **pgvector HNSW** cosine index.
+- **Dense retrieval:** 384-dimensional multilingual embeddings from a **vocabulary-pruned,
+  100% numerically equivalent** copy of `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+  (`Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx`), stored in PostgreSQL and
+  queried through a **pgvector HNSW** cosine index. Pruning non-Latin vocabulary cuts the ONNX file
+  from 225 MB to 124 MB and runtime RSS from ~630 MB to ~380 MB without changing any embedding.
 - **Fusion:** Reciprocal Rank Fusion (**RRF, `k=60`**) merges the lexical and dense rankings without
   calibrating incompatible score distributions.
 - **Serving modes:** `hybrid` (default), `dense`, and `bm25`. Search results are deduplicated by
   product title before pagination, so the page count reflects what the shopper can actually see.
-- **Memory-constrained deployments:** the multilingual ONNX model needs ~630 MB RSS, more than
-  Render's 512 MB free tier. `ENABLE_DENSE_SEARCH=false` (set in `render.yaml`) skips fastembed
-  entirely and serves BM25 + Indonesian query rewriting in ~80 MB; `mode=dense` requests fall back
-  to BM25 instead of returning zero results.
+- **Memory-constrained deployments:** the pruned model runs at **~380 MB RSS** with one ONNX thread
+  and `enable_cpu_mem_arena=False`, so `render.yaml` enables `ENABLE_DENSE_SEARCH=true` and Render's
+  512 MB free tier serves the full hybrid dense + lexical stack. `ENABLE_DENSE_SEARCH=false` remains
+  available for tighter hosts and degrades to BM25 + Indonesian query rewriting in ~80 MB;
+  `mode=dense` requests fall back to BM25 instead of returning zero results.
 - **Search health telemetry:** `GET /search/insights` exposes top queries, zero-result queries, the
   zero-result rate, and session-level search-to-product-detail-page conversion.
 
@@ -389,10 +392,10 @@ Copy [`.env.example`](./.env.example) and set only what you need. The most impor
 | `ADMIN_TOKEN` | Legacy static token for `/search/reindex` and `/admin/kpi` scripts | empty |
 | `JWT_SECRET_KEY` | Signs 15-minute admin access JWTs | dev placeholder |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` / `REFRESH_TOKEN_EXPIRE_DAYS` | Dual-JWT session lifetimes | `15` / `7` |
-| `TEXT_EMBED_MODEL` | 384-d multilingual embedding model | `paraphrase-multilingual-MiniLM-L12-v2` |
+| `TEXT_EMBED_MODEL` | 384-d pruned multilingual embedding model (124 MB ONNX, ~380 MB RSS) | `Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx` |
 | `COPILOT_RATE_LIMIT_PER_MIN` / `_PER_DAY` | Per-IP copilot rate limits | `10` / `100` |
 | `ENABLE_RERANKER` | Optional cross-encoder stage-2 reranking | `false` |
-| `ENABLE_DENSE_SEARCH` | Dense/embedding retrieval; set `false` where the ~630 MB model does not fit | `true` |
+| `ENABLE_DENSE_SEARCH` | Dense/embedding retrieval; enabled on Render with the pruned model | `true` |
 
 The full reference is in [`api/README.md`](./api/README.md#environment-variables).
 

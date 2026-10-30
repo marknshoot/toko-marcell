@@ -408,6 +408,44 @@ def reciprocal_rank_fusion(
 _EMBED_MODEL = None
 _EMBED_LOCK = threading.Lock()
 
+# The pruned repository reuses the architecture, tokenizer format and pooling
+# of this upstream model; fastembed only needs it to resolve the model config.
+_BASE_MULTILINGUAL_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+_DEFAULT_EMBED_MODEL = "Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx"
+
+# Publishers whose repos are part of fastembed's built-in catalog (pinned
+# fastembed==0.8.1). Everything else with an ``org/model`` id is treated as a
+# custom Hugging Face snapshot and loaded with ``PooledEmbedding``.
+_STANDARD_EMBED_PREFIXES = (
+    "sentence-transformers/",
+    "BAAI/",
+    "Qdrant/",
+    "Qwen/",
+    "google/",
+    "intfloat/",
+    "jinaai/",
+    "minishlab/",
+    "mixedbread-ai/",
+    "nomic-ai/",
+    "snowflake/",
+    "thenlper/",
+)
+
+
+def _is_custom_hf_repo(model_name: str) -> bool:
+    """Whether *model_name* is a custom Hugging Face repo rather than a local path.
+
+    fastembed ships metadata for a fixed catalog of upstream models. A repo id
+    outside that catalog is downloaded as a full snapshot and loaded through
+    ``PooledEmbedding`` with ``specific_model_path``; local directories are
+    handled before this check.
+    """
+    if model_name.startswith("Marcell-Kristianto/"):
+        return True
+    if "/" not in model_name:
+        return False
+    return not model_name.startswith(_STANDARD_EMBED_PREFIXES)
+
 
 def dense_search_enabled() -> bool:
     """Whether dense (embedding) retrieval is switched on via ``ENABLE_DENSE_SEARCH``.
@@ -426,42 +464,106 @@ def dense_search_enabled() -> bool:
         return raw.strip().lower() in ("1", "true", "yes", "on")
 
 
-def get_embed_model():
-    """Load the fastembed sentence transformer lazily.
+def _load_embed_model():
+    """Build the configured embedding model (caller holds ``_EMBED_LOCK``)."""
+    try:
+        from config import get_settings
+        settings = get_settings()
+        default_model = settings.TEXT_EMBED_MODEL
+        default_cache = settings.FASTEMBED_CACHE_DIR
+    except Exception:
+        default_model = _DEFAULT_EMBED_MODEL
+        default_cache = "/tmp/fastembed_cache"
 
-    The model is selected by the ``TEXT_EMBED_MODEL`` env var / config setting.
-    Defaults to ``sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2``.
+    model_name = os.environ.get("TEXT_EMBED_MODEL", default_model)
+    cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", default_cache)
+    try:
+        threads = int(os.environ.get("FASTEMBED_THREADS", "1"))
+    except ValueError:
+        threads = 1
+
+    # Render's free tier caps the container at 512 MB; onnxruntime sizes its
+    # intra-op pool from the core count unless we pin it down. The default
+    # memory arena also reserves a large per-thread slab, which costs far more
+    # than it saves for a handful of short query embeddings.
+    session_kwargs = {"threads": threads, "enable_cpu_mem_arena": False}
+
+    # 1. Local directory: useful for offline/CI runs and custom checkpoints.
+    if os.path.isdir(model_name):
+        from fastembed.text.pooled_embedding import PooledEmbedding
+        logger.info("Loading local embedding model: %s (threads=%d)", model_name, threads)
+        return PooledEmbedding(
+            model_name=_BASE_MULTILINGUAL_MODEL,
+            specific_model_path=model_name,
+            **session_kwargs,
+        )
+
+    # 2. Custom Hugging Face repo: download the snapshot once, then point
+    #    fastembed at it. This is how the pruned multilingual model (124 MB
+    #    ONNX, ~380 MB RSS) loads without a fastembed catalog entry.
+    if _is_custom_hf_repo(model_name):
+        from fastembed.text.pooled_embedding import PooledEmbedding
+        from huggingface_hub import snapshot_download
+        model_dir = snapshot_download(repo_id=model_name, cache_dir=cache_dir)
+        logger.info(
+            "Loading Hugging Face embedding model: %s -> %s (threads=%d)",
+            model_name,
+            model_dir,
+            threads,
+        )
+        return PooledEmbedding(
+            model_name=_BASE_MULTILINGUAL_MODEL,
+            specific_model_path=model_dir,
+            **session_kwargs,
+        )
+
+    # 3. Standard fastembed catalog model (BAAI, sentence-transformers, ...).
+    from fastembed import TextEmbedding
+    logger.info("Loading FastEmbed catalog model: %s (threads=%d)", model_name, threads)
+    return TextEmbedding(
+        model_name=model_name,
+        cache_dir=cache_dir,
+        **session_kwargs,
+    )
+
+
+def get_embed_model():
+    """Load and cache the configured text embedding model lazily.
+
+    ``TEXT_EMBED_MODEL`` selects one of three paths:
+
+    * a **local directory** — ``PooledEmbedding`` with ``specific_model_path``;
+    * a **custom Hugging Face repo** — ``snapshot_download`` into
+      ``FASTEMBED_CACHE_DIR`` followed by ``PooledEmbedding``;
+    * a **standard fastembed catalog model** — ``TextEmbedding`` with its
+      built-in downloader.
+
+    The default is the vocabulary-pruned multilingual MiniLM, which is 100%
+    numerically equivalent to the upstream model but uses 113,070 tokens
+    instead of 250,002 (124 MB ONNX instead of 225 MB, ~380 MB RSS instead of
+    ~630 MB). That keeps hybrid dense + lexical search inside Render's 512 MB
+    free tier.
+
+    The singleton is guarded by ``_EMBED_LOCK``; use :func:`reset_embed_model`
+    to clear it in tests or after changing the model at runtime.
     """
     global _EMBED_MODEL
     if _EMBED_MODEL is None:
         with _EMBED_LOCK:
             if _EMBED_MODEL is None:
-                from fastembed import TextEmbedding
-                try:
-                    from config import get_settings
-                    s = get_settings()
-                    default_model = s.TEXT_EMBED_MODEL
-                    default_cache = s.FASTEMBED_CACHE_DIR
-                except Exception:
-                    default_model = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
-                    default_cache = "/tmp/fastembed_cache"
-                model_name = os.environ.get("TEXT_EMBED_MODEL", default_model)
-                cache_dir = os.environ.get("FASTEMBED_CACHE_DIR", default_cache)
-                # Render's free tier caps the container at 512 MB; onnxruntime sizes
-                # its intra-op pool from the core count unless we pin it down.
-                threads = int(os.environ.get("FASTEMBED_THREADS", "1"))
-                _EMBED_MODEL = TextEmbedding(
-                    model_name=model_name,
-                    cache_dir=cache_dir,
-                    threads=threads,
-                    # ONNX Runtime's default memory arena reserves a large
-                    # per-thread slab (hundreds of MB on small containers).
-                    # Disable it: query embedding is a few short inputs, so the
-                    # allocator overhead costs far more than it saves.
-                    enable_cpu_mem_arena=False,
-                )
-                logger.info("Loaded text embedding model: %s (threads=%d)", model_name, threads)
+                _EMBED_MODEL = _load_embed_model()
     return _EMBED_MODEL
+
+
+def reset_embed_model() -> None:
+    """Clear the cached embedding model so the next call reloads it.
+
+    Acquires ``_EMBED_LOCK`` so a reset cannot race an in-flight lazy load.
+    Intended for tests and for reloads after changing ``TEXT_EMBED_MODEL``.
+    """
+    global _EMBED_MODEL
+    with _EMBED_LOCK:
+        _EMBED_MODEL = None
 
 
 def embed_query(query: str) -> list[float] | None:

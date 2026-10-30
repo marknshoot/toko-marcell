@@ -7,7 +7,7 @@ sales copilot, and the operations KPI dashboard.
 |---|---|
 | **Runtime** | Python 3.12, FastAPI, Uvicorn |
 | **Database** | PostgreSQL 16 + pgvector (HNSW cosine indexes) |
-| **Embeddings** | `fastembed` ONNX — 384-d multilingual MiniLM |
+| **Embeddings** | `fastembed` ONNX — 384-d pruned multilingual MiniLM (113k tokens, 124 MB) |
 | **Agent** | LangChain v1 `create_agent` on LangGraph, checkpointed in PostgreSQL |
 | **Migrations** | Alembic, hand-written SQL, head revision `0005` |
 | **Tests** | pytest (unit + integration), Ruff |
@@ -397,10 +397,13 @@ The index lives in process and rebuilds in under a second; there is no external 
 ### Dense retrieval
 
 Queries are embedded with
-`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` through `fastembed` (quantized ONNX,
-384 dimensions, `FASTEMBED_THREADS` pinned for small containers). The configured column
-(`TEXT_EMBED_COLUMN`, default `embedding_ml`) is queried with cosine distance through a pgvector HNSW
-index, returning the top 100 candidates.
+`Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx` through `fastembed`'s
+`PooledEmbedding` (quantized ONNX, 384 dimensions, `FASTEMBED_THREADS` pinned for small containers).
+The repository is a **100% numerically equivalent, vocabulary-pruned** copy of
+`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`: 113,070 Latin, Indonesian, English,
+digit and punctuation tokens instead of 250,002, so the ONNX file shrinks from 225 MB to 124 MB.
+The configured column (`TEXT_EMBED_COLUMN`, default `embedding_ml`) is queried with cosine distance
+through a pgvector HNSW index, returning the top 100 candidates.
 
 ### Reciprocal Rank Fusion
 
@@ -421,17 +424,24 @@ the lexical + dense + RRF stack is the production path.
 
 ### Dense search on memory-constrained hosts
 
-The multilingual embedding model (`paraphrase-multilingual-MiniLM-L12-v2`) is a 225 MB ONNX file
-plus a 17 MB tokenizer, and loading it costs roughly 630 MB of RSS. That does not fit Render's
-512 MB free tier, so `render.yaml` sets `ENABLE_DENSE_SEARCH=false`. With the flag off,
-`embed_query()` returns `None` without importing or downloading fastembed:
+The upstream multilingual model is a 225 MB ONNX file plus a 17 MB tokenizer and costs roughly
+630 MB of RSS. The default pruned repository keeps every Indonesian, English and Latin token
+(113,070 vs 250,002) and is **100% numerically equivalent**, but the ONNX file is 124 MB and the
+model runs at **~380 MB RSS** with `FASTEMBED_THREADS=1` and `enable_cpu_mem_arena=False`. That fits
+Render's 512 MB free tier, so `render.yaml` enables `ENABLE_DENSE_SEARCH=true` and production runs
+the full hybrid dense + lexical stack.
+
+`get_embed_model()` loads the pruned repo in two steps: `huggingface_hub.snapshot_download` caches
+the snapshot under `FASTEMBED_CACHE_DIR`, then `PooledEmbedding` is constructed with
+`specific_model_path` pointing at that snapshot. Local directories take the same path without a
+download, and standard fastembed catalog models still use `TextEmbedding`.
+
+If dense search is disabled (`ENABLE_DENSE_SEARCH=false`), `embed_query()` returns `None` without
+importing or downloading fastembed:
 
 - `mode=hybrid` (default) transparently degrades to BM25.
 - `mode=dense` / `mode=vector` falls back to BM25 instead of returning an empty result set.
 - Indonesian stemming and query rewriting keep lexical search under 10 ms within ~80 MB of RAM.
-
-When dense search is enabled on a larger host, `TextEmbedding` is constructed with
-`enable_cpu_mem_arena=False` so ONNX Runtime does not reserve its default arena.
 
 ---
 
@@ -534,13 +544,13 @@ variables taking precedence. Unknown variables are ignored.
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TEXT_EMBED_MODEL` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` | 384-d multilingual model |
+| `TEXT_EMBED_MODEL` | `Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx` | 384-d pruned multilingual model (113k tokens, 124 MB ONNX, ~380 MB RSS) |
 | `TEXT_EMBED_COLUMN` | `embedding_ml` | Vector column queried by `/search` and the copilot |
-| `FASTEMBED_CACHE_DIR` | `/tmp/fastembed_cache` | ONNX model cache |
+| `FASTEMBED_CACHE_DIR` | `/tmp/fastembed_cache` | ONNX cache and Hugging Face snapshot cache for `TEXT_EMBED_MODEL` |
 | `FASTEMBED_THREADS` | `1` | ONNX intra-op threads (memory control) |
 | `HF_HUB_CACHE` | `/tmp/hf_cache` | Hugging Face cache for the optional reranker |
 | `ENABLE_RERANKER` | `false` | Enable the cross-encoder stage-2 reranker |
-| `ENABLE_DENSE_SEARCH` | `true` | Dense retrieval. Set `false` on hosts where the ~630 MB fastembed model does not fit; `/search` then uses BM25 only (and `mode=dense` falls back to BM25) |
+| `ENABLE_DENSE_SEARCH` | `true` | Dense retrieval; enabled on Render with the pruned model. Set `false` only where even ~380 MB RSS does not fit; `/search` then uses BM25 only (and `mode=dense` falls back to BM25) |
 | `SKIP_KNOWLEDGE_SEED` | `false` | Skip startup knowledge verification/seeding |
 
 ### Copilot
