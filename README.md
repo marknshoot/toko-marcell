@@ -148,6 +148,10 @@ misses. Indonesian queries are the hardest and most valuable segment.
   calibrating incompatible score distributions.
 - **Serving modes:** `hybrid` (default), `dense`, and `bm25`. Search results are deduplicated by
   product title before pagination, so the page count reflects what the shopper can actually see.
+- **Memory-constrained deployments:** the multilingual ONNX model needs ~630 MB RSS, more than
+  Render's 512 MB free tier. `ENABLE_DENSE_SEARCH=false` (set in `render.yaml`) skips fastembed
+  entirely and serves BM25 + Indonesian query rewriting in ~80 MB; `mode=dense` requests fall back
+  to BM25 instead of returning zero results.
 - **Search health telemetry:** `GET /search/insights` exposes top queries, zero-result queries, the
   zero-result rate, and session-level search-to-product-detail-page conversion.
 
@@ -388,6 +392,7 @@ Copy [`.env.example`](./.env.example) and set only what you need. The most impor
 | `TEXT_EMBED_MODEL` | 384-d multilingual embedding model | `paraphrase-multilingual-MiniLM-L12-v2` |
 | `COPILOT_RATE_LIMIT_PER_MIN` / `_PER_DAY` | Per-IP copilot rate limits | `10` / `100` |
 | `ENABLE_RERANKER` | Optional cross-encoder stage-2 reranking | `false` |
+| `ENABLE_DENSE_SEARCH` | Dense/embedding retrieval; set `false` where the ~630 MB model does not fit | `true` |
 
 The full reference is in [`api/README.md`](./api/README.md#environment-variables).
 

@@ -1,6 +1,8 @@
 import sys
 from pathlib import Path
 
+import pytest
+
 # Add manual/api to path so search can be imported directly
 API_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API_DIR))
@@ -227,3 +229,111 @@ def test_search_catalog_does_not_retry_when_first_query_has_results(monkeypatch)
     monkeypatch.setattr(agent_tools, "rewrite_id_to_en", lambda query: "running shoes")
     assert agent_tools.search_catalog("sepatu", limit=3) == [{"asin": "B000TEST"}]
     assert calls == ["sepatu"]
+
+
+# ── ENABLE_DENSE_SEARCH feature flag ────────────────────────────────────────
+
+def _settings_with_dense(enabled: bool):
+    import config
+
+    return config.Settings(ENABLE_DENSE_SEARCH=enabled)
+
+
+def test_embed_query_returns_none_without_loading_model_when_dense_disabled(monkeypatch):
+    import config
+    import search
+
+    monkeypatch.setattr(config, "get_settings", lambda: _settings_with_dense(False))
+
+    def _must_not_load():
+        raise AssertionError("get_embed_model() must not run when ENABLE_DENSE_SEARCH=false")
+
+    monkeypatch.setattr(search, "get_embed_model", _must_not_load)
+
+    assert search.embed_query("sepatu lari") is None
+
+
+def test_embed_query_uses_model_when_dense_enabled(monkeypatch):
+    import config
+    import search
+
+    monkeypatch.setattr(config, "get_settings", lambda: _settings_with_dense(True))
+
+    class FakeModel:
+        def embed(self, texts):
+            assert list(texts) == ["sepatu lari"]
+            return [[0.1, 0.2, 0.3]]
+
+    monkeypatch.setattr(search, "get_embed_model", lambda: FakeModel())
+
+    assert search.embed_query("sepatu lari") == [0.1, 0.2, 0.3]
+
+
+class _FakeCursor:
+    def __init__(self):
+        self._rows: list[tuple] = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def execute(self, *args, **kwargs):
+        self._rows = [(1,), (2,)]
+
+    def fetchall(self):
+        return self._rows
+
+
+class _FakeConn:
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *exc_info):
+        return False
+
+    def cursor(self):
+        return _FakeCursor()
+
+
+class _FakeIndex:
+    def __init__(self):
+        self.rank_calls = 0
+
+    def rank(self, query, allowed=None, dedupe=False):
+        self.rank_calls += 1
+        return [(1, 1.5), (2, 1.0)]
+
+    def dedupe(self, ranked):
+        return ranked
+
+
+@pytest.mark.parametrize("mode", ["dense", "hybrid"])
+def test_search_endpoint_falls_back_to_bm25_when_dense_disabled(monkeypatch, mode):
+    """With ENABLE_DENSE_SEARCH=false, /search still answers from the BM25 index."""
+    import routers.search as search_router
+    from fastapi import FastAPI
+    from fastapi.testclient import TestClient
+
+    monkeypatch.setattr(search_router, "get_settings", lambda: _settings_with_dense(False))
+    fake_index = _FakeIndex()
+    monkeypatch.setattr(search_router, "get_index", lambda builder=None: fake_index)
+    monkeypatch.setattr(search_router, "get_conn", lambda: _FakeConn())
+    monkeypatch.setattr(search_router, "row_to_product", lambda row: {"id": row[0]})
+
+    def _must_not_embed(*args, **kwargs):
+        raise AssertionError("embed_query() must not run when ENABLE_DENSE_SEARCH=false")
+
+    monkeypatch.setattr(search_router, "embed_query", _must_not_embed)
+
+    app = FastAPI()
+    app.include_router(search_router.router)
+    response = TestClient(app).get("/search", params={"q": "jeans", "mode": mode})
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == mode
+    assert body["total"] == 2
+    assert [item["id"] for item in body["items"]] == [1, 2]
+    assert fake_index.rank_calls >= 1

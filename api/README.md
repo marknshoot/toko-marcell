@@ -419,6 +419,20 @@ When `ENABLE_RERANKER=true` and `rerank=true`, a cross-encoder rescores the top 
 fused candidates. It is disabled by default because the ONNX model is expensive on small instances;
 the lexical + dense + RRF stack is the production path.
 
+### Dense search on memory-constrained hosts
+
+The multilingual embedding model (`paraphrase-multilingual-MiniLM-L12-v2`) is a 225 MB ONNX file
+plus a 17 MB tokenizer, and loading it costs roughly 630 MB of RSS. That does not fit Render's
+512 MB free tier, so `render.yaml` sets `ENABLE_DENSE_SEARCH=false`. With the flag off,
+`embed_query()` returns `None` without importing or downloading fastembed:
+
+- `mode=hybrid` (default) transparently degrades to BM25.
+- `mode=dense` / `mode=vector` falls back to BM25 instead of returning an empty result set.
+- Indonesian stemming and query rewriting keep lexical search under 10 ms within ~80 MB of RAM.
+
+When dense search is enabled on a larger host, `TextEmbedding` is constructed with
+`enable_cpu_mem_arena=False` so ONNX Runtime does not reserve its default arena.
+
 ---
 
 ## Store knowledge RAG
@@ -526,6 +540,7 @@ variables taking precedence. Unknown variables are ignored.
 | `FASTEMBED_THREADS` | `1` | ONNX intra-op threads (memory control) |
 | `HF_HUB_CACHE` | `/tmp/hf_cache` | Hugging Face cache for the optional reranker |
 | `ENABLE_RERANKER` | `false` | Enable the cross-encoder stage-2 reranker |
+| `ENABLE_DENSE_SEARCH` | `true` | Dense retrieval. Set `false` on hosts where the ~630 MB fastembed model does not fit; `/search` then uses BM25 only (and `mode=dense` falls back to BM25) |
 | `SKIP_KNOWLEDGE_SEED` | `false` | Skip startup knowledge verification/seeding |
 
 ### Copilot

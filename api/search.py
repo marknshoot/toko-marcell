@@ -409,6 +409,23 @@ _EMBED_MODEL = None
 _EMBED_LOCK = threading.Lock()
 
 
+def dense_search_enabled() -> bool:
+    """Whether dense (embedding) retrieval is switched on via ``ENABLE_DENSE_SEARCH``.
+
+    Read through :func:`config.get_settings` on every call so a cached settings
+    object or a test monkeypatch is honoured; falls back to the raw env var when
+    the settings module is unavailable (standalone pipeline use).
+    """
+    try:
+        from config import get_settings
+        return bool(get_settings().ENABLE_DENSE_SEARCH)
+    except Exception:
+        raw = os.environ.get("ENABLE_DENSE_SEARCH")
+        if raw is None:
+            return True
+        return raw.strip().lower() in ("1", "true", "yes", "on")
+
+
 def get_embed_model():
     """Load the fastembed sentence transformer lazily.
 
@@ -437,13 +454,25 @@ def get_embed_model():
                     model_name=model_name,
                     cache_dir=cache_dir,
                     threads=threads,
+                    # ONNX Runtime's default memory arena reserves a large
+                    # per-thread slab (hundreds of MB on small containers).
+                    # Disable it: query embedding is a few short inputs, so the
+                    # allocator overhead costs far more than it saves.
+                    enable_cpu_mem_arena=False,
                 )
                 logger.info("Loaded text embedding model: %s (threads=%d)", model_name, threads)
     return _EMBED_MODEL
 
 
 def embed_query(query: str) -> list[float] | None:
-    """Generate 384-dim vector for search query. Returns None if embedding fails."""
+    """Generate 384-dim vector for search query. Returns None if embedding fails.
+
+    Returns ``None`` immediately when ``ENABLE_DENSE_SEARCH`` is false, so a
+    memory-constrained deployment never imports, downloads or loads fastembed.
+    """
+    if not dense_search_enabled():
+        logger.debug("Dense search disabled (ENABLE_DENSE_SEARCH=false); skipping embed_query")
+        return None
     try:
         model = get_embed_model()
         vectors = list(model.embed([query]))
