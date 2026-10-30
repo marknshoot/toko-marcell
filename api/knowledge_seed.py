@@ -4,17 +4,75 @@ Parses `api/knowledge/*.md` (size charts, brand deviations, store policies, FAQ)
 and seeds the `store_knowledge` table in PostgreSQL with 384-dim fastembed vectors.
 """
 
+import json
 import logging
 import os
 import re
 
 import psycopg
-from search import embed_query
 
 logger = logging.getLogger(__name__)
 
 # Table DDL (store_knowledge, store_knowledge_questions) lives in the Alembic
 # migrations under api/migrations/versions/; this module only writes rows.
+
+
+def _is_skip_seed() -> bool:
+    """True when the operator asked to skip knowledge seeding entirely."""
+    return os.environ.get("SKIP_KNOWLEDGE_SEED", "").lower() in ("1", "true", "yes")
+
+
+def _vector_literal(vector) -> str | None:
+    """Format a vector for pgvector's text input (``[0.1,0.2,...]``)."""
+    if not vector:
+        return None
+    return "[" + ",".join(f"{float(x):.6f}" for x in vector) + "]"
+
+
+def _load_seed_cache(knowledge_dir: str) -> list[dict] | None:
+    """Load precomputed chunk/question embeddings, or None when no usable cache exists.
+
+    Deployments with a tight memory budget (Render free tier: 512 MB) cannot afford
+    to load fastembed inside the web process just to embed 34 chunks at boot, so the
+    vectors are precomputed into ``knowledge_seed_cache.json``. The file is looked up
+    next to the markdown sources and in the shared ``data/knowledge`` directory.
+    """
+    candidates = [os.path.join(knowledge_dir, "knowledge_seed_cache.json")]
+    data_dir = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "knowledge"))
+    candidate = os.path.join(data_dir, "knowledge_seed_cache.json")
+    if os.path.normpath(candidate) not in {os.path.normpath(p) for p in candidates}:
+        candidates.append(candidate)
+
+    for path in candidates:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, encoding="utf-8") as f:
+                entries = json.load(f)
+        except (OSError, json.JSONDecodeError) as exc:
+            logger.warning("Could not read knowledge seed cache %s: %s", path, exc)
+            continue
+
+        if not isinstance(entries, list) or not entries:
+            logger.warning("Knowledge seed cache %s is not a non-empty list; ignoring.", path)
+            continue
+
+        usable = [
+            entry for entry in entries
+            if isinstance(entry, dict)
+            and entry.get("category")
+            and entry.get("title")
+            and entry.get("content")
+            and entry.get("embedding")
+        ]
+        if not usable:
+            logger.warning("Knowledge seed cache %s has no chunks with embeddings; ignoring.", path)
+            continue
+
+        logger.info("Loaded %d precomputed knowledge chunks from %s", len(usable), path)
+        return usable
+
+    return None
 
 
 def _hypothetical_questions(chunk: dict) -> list[tuple[str, str]]:
@@ -146,8 +204,71 @@ def _chunk_markdown(filepath: str, default_category: str) -> list[dict]:
     return chunks
 
 
+def build_seed_cache(knowledge_dir: str | None = None) -> list[dict]:
+    """Embed the markdown sources from scratch into cache-shaped chunk entries.
+
+    Only this explicit rebuild path loads fastembed for seeding; the web process
+    reads the resulting JSON instead (see ``_load_seed_cache``). Use it via
+    ``python -m knowledge_seed --write-cache`` after editing ``knowledge/*.md``.
+    """
+    from search import embed_query
+
+    knowledge_dir = knowledge_dir or os.path.join(os.path.dirname(__file__), "knowledge")
+    chunks = _chunk_markdown(os.path.join(knowledge_dir, "size_charts.md"), default_category="sizing")
+    chunks.extend(_chunk_markdown(os.path.join(knowledge_dir, "store_policies.md"), default_category="policy"))
+
+    entries = []
+    for chunk in chunks:
+        entries.append({
+            "category": chunk["category"],
+            "title": chunk["title"],
+            "content": chunk["content"],
+            "embedding": embed_query(f"{chunk['title']}\n{chunk['content'][:500]}"),
+            "questions": [
+                {"question": question, "lang": lang, "embedding": embed_query(question)}
+                for question, lang in _hypothetical_questions(chunk)
+            ],
+        })
+    return entries
+
+
+def write_seed_cache(knowledge_dir: str | None = None) -> list[str]:
+    """Rebuild the cache and write it next to the markdown sources and in ``data/knowledge``."""
+    entries = build_seed_cache(knowledge_dir)
+    if not entries:
+        logger.warning("No knowledge chunks to cache; leaving any existing cache untouched.")
+        return []
+    missing = sum(1 for entry in entries if not entry["embedding"])
+    missing += sum(1 for entry in entries for q in entry["questions"] if not q["embedding"])
+    if missing:
+        logger.warning("Embedding model returned %d empty vector(s); not writing a partial cache.", missing)
+        return []
+
+    base_dir = os.path.dirname(__file__)
+    if knowledge_dir:
+        targets = [os.path.join(knowledge_dir, "knowledge_seed_cache.json")]
+    else:
+        targets = [
+            os.path.join(base_dir, "knowledge", "knowledge_seed_cache.json"),
+            os.path.normpath(os.path.join(base_dir, "..", "data", "knowledge", "knowledge_seed_cache.json")),
+        ]
+    written = []
+    for path in dict.fromkeys(targets):
+        if not os.path.isdir(os.path.dirname(path)) or path in written:
+            continue
+        with open(path, "w", encoding="utf-8") as f:
+            json.dump(entries, f)
+        written.append(path)
+        logger.info("Wrote %d cached knowledge chunks to %s", len(entries), path)
+    return written
+
+
 def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
     """Seed `store_knowledge` chunks if empty or forced (schema comes from Alembic)."""
+    if _is_skip_seed():
+        logger.info("SKIP_KNOWLEDGE_SEED is set; skipping knowledge seeding.")
+        return 0
+
     knowledge_dir = os.path.join(os.path.dirname(__file__), "knowledge")
     if not os.path.isdir(knowledge_dir):
         alt_dir = os.path.join(os.path.dirname(__file__), "..", "data", "knowledge")
@@ -161,7 +282,16 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
     chunks.extend(_chunk_markdown(size_file, default_category="sizing"))
     chunks.extend(_chunk_markdown(policy_file, default_category="policy"))
 
-    if not chunks:
+    # Precomputed embeddings win: they avoid loading ONNX/fastembed at web startup.
+    cached_chunks = _load_seed_cache(knowledge_dir)
+    if cached_chunks is not None:
+        if chunks and [c["title"] for c in chunks] != [c["title"] for c in cached_chunks]:
+            logger.warning(
+                "knowledge_seed_cache.json does not match the current markdown sources; "
+                "regenerate it after editing knowledge/*.md."
+            )
+        chunks = cached_chunks
+    elif not chunks:
         logger.info("No knowledge chunks found to seed.")
         return 0
 
@@ -185,12 +315,34 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
             # because store_knowledge_questions has an FK onto store_knowledge.
             cur.execute("TRUNCATE TABLE store_knowledge CASCADE")
 
-            logger.info("Embedding and inserting %d knowledge chunks...", len(chunks))
+            mode = "precomputed" if cached_chunks is not None else "on-the-fly"
+            logger.info("Inserting %d knowledge chunks (%s embeddings)...", len(chunks), mode)
             inserted = 0
             total_questions = 0
             for chunk in chunks:
-                vec = embed_query(f"{chunk['title']}\n{chunk['content'][:500]}")
-                vec_str = "[" + ",".join(f"{x:.6f}" for x in vec) + "]" if vec else None
+                if cached_chunks is not None:
+                    vec_str = _vector_literal(chunk.get("embedding"))
+                    cached_questions = [
+                        (q.get("question"), q.get("lang") or "id", q.get("embedding"))
+                        for q in chunk.get("questions") or []
+                        if isinstance(q, dict) and q.get("question") and q.get("embedding")
+                    ]
+                    skipped = len(chunk.get("questions") or []) - len(cached_questions)
+                    if skipped:
+                        logger.warning(
+                            "Skipping %d cached question(s) without embeddings for chunk %r.",
+                            skipped, chunk["title"],
+                        )
+                    questions = cached_questions
+                else:
+                    # Imported lazily so the cached path never even loads `search`.
+                    from search import embed_query
+
+                    vec_str = _vector_literal(embed_query(f"{chunk['title']}\n{chunk['content'][:500]}"))
+                    questions = [
+                        (question, lang, embed_query(question))
+                        for question, lang in _hypothetical_questions(chunk)
+                    ]
 
                 cur.execute(
                     """
@@ -204,9 +356,8 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
                 inserted += 1
 
                 # Hypothetical questions (design §6): embed each, point at parent.
-                for question, lang in _hypothetical_questions(chunk):
-                    qvec = embed_query(question)
-                    qvec_str = "[" + ",".join(f"{x:.6f}" for x in qvec) + "]" if qvec else None
+                for question, lang, qvec in questions:
+                    qvec_str = _vector_literal(qvec)
                     cur.execute(
                         """
                         INSERT INTO store_knowledge_questions (chunk_id, question, lang, embedding)
@@ -232,5 +383,10 @@ def seed_knowledge(database_url: str, force_reload: bool = False) -> int:
 
 
 if __name__ == "__main__":
+    import sys
+
+    if "--write-cache" in sys.argv:
+        write_seed_cache()
+
     db_url = os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
     seed_knowledge(db_url, force_reload=True)

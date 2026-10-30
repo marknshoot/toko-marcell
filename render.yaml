@@ -30,6 +30,10 @@ services:
       # Cross-encoder off on 512 MB: keeps the copilot image turn under the memory limit.
       - key: ENABLE_RERANKER
         value: "false"
+      # Pin ONNX Runtime to a single thread so fastembed does not spawn a
+      # per-core thread pool that pushes the 512 MB container into OOM.
+      - key: FASTEMBED_THREADS
+        value: "1"
       # Admin token for /search/reindex — set a strong secret in the dashboard.
       - key: ADMIN_TOKEN
         sync: false
