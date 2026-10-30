@@ -1,7 +1,7 @@
-"""API tests for the token-gated KPI dashboard.
+"""API tests for the gated KPI dashboard.
 
-These use an in-process TestClient so the ADMIN_TOKEN setting can be varied per
-test without restarting the live API. The endpoint reads from the same local
+These use an in-process TestClient so the settings can be varied per test
+without restarting the live API.  The endpoint reads from the same local
 Postgres database as the rest of the API suite.
 """
 
@@ -13,53 +13,71 @@ from types import SimpleNamespace
 API_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API_DIR))
 
+import auth
 from fastapi.testclient import TestClient
 from main import app
-from routers import admin
 
 client = TestClient(app)
 TOKEN = "phase12-admin-test-token"  # noqa: S105
+JWT_SECRET = "phase12-admin-jwt-secret-with-32-bytes"  # noqa: S105
 
 
 def _fake_settings(token: str) -> SimpleNamespace:
-    return SimpleNamespace(ADMIN_TOKEN=token)
+    return SimpleNamespace(
+        ADMIN_TOKEN=token,
+        JWT_SECRET_KEY=JWT_SECRET,
+        JWT_ALGORITHM="HS256",
+        ACCESS_TOKEN_EXPIRE_MINUTES=15,
+        REFRESH_TOKEN_EXPIRE_DAYS=7,
+    )
 
 
-def test_admin_kpi_503_when_token_not_configured(monkeypatch):
-    monkeypatch.setattr(admin, "get_settings", lambda: _fake_settings(""))
-    response = client.get("/admin/kpi", headers={"X-Admin-Token": TOKEN})
-    assert response.status_code == 503
-    assert "not configured" in response.json()["detail"].lower()
-
-
-def test_admin_kpi_403_when_token_missing(monkeypatch):
-    monkeypatch.setattr(admin, "get_settings", lambda: _fake_settings(TOKEN))
+def test_admin_kpi_401_when_token_missing(monkeypatch):
+    monkeypatch.setattr(auth, "get_settings", lambda: _fake_settings(TOKEN))
     response = client.get("/admin/kpi")
-    assert response.status_code == 403
+    assert response.status_code == 401
+    assert response.json()["detail"] == "Could not validate credentials"
 
 
-def test_admin_kpi_403_when_token_wrong(monkeypatch):
-    monkeypatch.setattr(admin, "get_settings", lambda: _fake_settings(TOKEN))
+def test_admin_kpi_401_when_token_wrong(monkeypatch):
+    monkeypatch.setattr(auth, "get_settings", lambda: _fake_settings(TOKEN))
     response = client.get("/admin/kpi", headers={"X-Admin-Token": "wrong-token"})
-    assert response.status_code == 403
+    assert response.status_code == 401
+
+
+def test_admin_kpi_401_when_static_token_not_configured(monkeypatch):
+    monkeypatch.setattr(auth, "get_settings", lambda: _fake_settings(""))
+    response = client.get("/admin/kpi", headers={"X-Admin-Token": TOKEN})
+    assert response.status_code == 401
 
 
 def test_admin_kpi_accepts_query_token(monkeypatch):
-    monkeypatch.setattr(admin, "get_settings", lambda: _fake_settings(TOKEN))
+    monkeypatch.setattr(auth, "get_settings", lambda: _fake_settings(TOKEN))
     response = client.get(f"/admin/kpi?since_days=7&token={TOKEN}")
     assert response.status_code == 200
     assert response.json()["metadata"]["since_days"] == 7
 
 
+def test_admin_kpi_accepts_bearer_jwt(monkeypatch):
+    monkeypatch.setattr(auth, "get_settings", lambda: _fake_settings(TOKEN))
+    access_token = auth.create_access_token({"sub": "admin", "role": "admin"})
+    response = client.get(
+        "/admin/kpi?since_days=7",
+        headers={"Authorization": f"Bearer {access_token}"},
+    )
+    assert response.status_code == 200
+    assert response.json()["metadata"]["since_days"] == 7
+
+
 def test_admin_kpi_window_validation(monkeypatch):
-    monkeypatch.setattr(admin, "get_settings", lambda: _fake_settings(TOKEN))
+    monkeypatch.setattr(auth, "get_settings", lambda: _fake_settings(TOKEN))
     headers = {"X-Admin-Token": TOKEN}
     assert client.get("/admin/kpi?since_days=0", headers=headers).status_code == 422
     assert client.get("/admin/kpi?since_days=366", headers=headers).status_code == 422
 
 
 def test_admin_kpi_full_schema(monkeypatch):
-    monkeypatch.setattr(admin, "get_settings", lambda: _fake_settings(TOKEN))
+    monkeypatch.setattr(auth, "get_settings", lambda: _fake_settings(TOKEN))
     response = client.get(
         "/admin/kpi?since_days=30", headers={"X-Admin-Token": TOKEN}
     )

@@ -2,19 +2,22 @@
 
 Every number here is derived from the seeded/simulated demo database. The
 endpoint deliberately labels that in ``metadata`` and never calls the result
-real revenue. Authentication accepts the token as an ``X-Admin-Token`` header
-or a ``token`` query parameter, compared in constant time against
-``settings.ADMIN_TOKEN``.
+real revenue. Authentication accepts a Bearer JWT issued by ``/auth/login``
+(Argon2id + rotating refresh cookie) and still accepts the legacy
+``X-Admin-Token`` header or ``token`` query parameter compared in constant time
+against ``settings.ADMIN_TOKEN``.
 """
 
-import hmac
 from datetime import UTC, datetime
 
-from config import get_settings
+from auth import AdminPrincipal, get_current_admin
 from db import get_conn
-from fastapi import APIRouter, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Depends, Query, Request, Response
 
 router = APIRouter(prefix="/admin", tags=["admin"])
+
+# Backwards-compatible dependency name used by older integrations/tests.
+get_admin_token = get_current_admin
 
 DEMO_CAVEAT = (
     "All metrics are derived from seeded/simulated demo data; not real customer revenue."
@@ -29,20 +32,6 @@ def _rate(numerator: int | float, denominator: int | float) -> float | None:
     if not denominator:
         return None
     return round(numerator / denominator, 4)
-
-
-def _require_admin(request: Request, token: str | None) -> None:
-    settings = get_settings()
-    configured = settings.ADMIN_TOKEN or ""
-    if not configured:
-        raise HTTPException(
-            status_code=503,
-            detail="Admin dashboard is disabled (ADMIN_TOKEN not configured).",
-        )
-
-    provided = request.headers.get("X-Admin-Token") or token or ""
-    if not hmac.compare_digest(provided.encode("utf-8"), configured.encode("utf-8")):
-        raise HTTPException(status_code=403, detail="Invalid admin token.")
 
 
 def _cost_rate(total_cost_usd: float | None, denominator: int) -> float | None:
@@ -72,14 +61,13 @@ def admin_kpi(
     request: Request,
     response: Response,
     since_days: int = Query(30, ge=1, le=365),
-    token: str | None = Query(None, description="Admin token (or use X-Admin-Token)"),
+    admin: AdminPrincipal = Depends(get_admin_token),  # noqa: B008
 ):
     """Return synthetic demo KPIs for the requested window.
 
-    Auth failures are ``503`` when the deployment has no token configured and
-    ``403`` when the supplied token is missing or wrong.
+    Missing/invalid credentials return ``401``.  The legacy static token is
+    still accepted for scripts, while the dashboard uses a Bearer JWT.
     """
-    _require_admin(request, token)
     response.headers["Cache-Control"] = "no-store"
 
     window = "created_at > now() - make_interval(days => %s)"

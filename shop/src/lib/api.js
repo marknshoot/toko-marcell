@@ -371,22 +371,197 @@ export async function postSizingRecommend({ asin, heightCm, weightKg, footLength
   return response.json();
 }
 
-// ── Admin KPI dashboard ──────────────────────────────────────────────────────
+// ── Admin authentication & KPI dashboard ─────────────────────────────────────
 
-export async function getAdminKpi(token, sinceDays = 30) {
-  const params = new URLSearchParams();
-  params.set("since_days", String(sinceDays));
+const ADMIN_ACCESS_TOKEN_KEY = "toko_admin_access_token";
+const ADMIN_USER_KEY = "toko_admin_user";
 
-  const response = await fetch(`${API_URL}/admin/kpi?${params.toString()}`, {
-    headers: { "X-Admin-Token": token },
-    cache: "no-store",
+// Access tokens are kept in memory for the lifetime of the tab and mirrored to
+// sessionStorage so a client-side navigation does not force a new login.  The
+// long-lived refresh token is never readable by JavaScript (HttpOnly cookie).
+let adminAccessToken = null;
+let adminUser = null;
+
+function adminStorage() {
+  try {
+    return typeof window !== "undefined" ? window.sessionStorage : null;
+  } catch {
+    return null;
+  }
+}
+
+function persistAdminSession(accessToken, user) {
+  adminAccessToken = accessToken || null;
+  adminUser = user || null;
+
+  const storage = adminStorage();
+  if (!storage) {
+    return;
+  }
+  try {
+    if (accessToken) {
+      storage.setItem(ADMIN_ACCESS_TOKEN_KEY, accessToken);
+    } else {
+      storage.removeItem(ADMIN_ACCESS_TOKEN_KEY);
+    }
+    if (user) {
+      storage.setItem(ADMIN_USER_KEY, JSON.stringify(user));
+    } else {
+      storage.removeItem(ADMIN_USER_KEY);
+    }
+  } catch {
+    // Private mode / quota: the in-memory copy keeps the tab signed in.
+  }
+}
+
+export function clearAdminSession() {
+  persistAdminSession(null, null);
+}
+
+export function getAdminSession() {
+  if (adminAccessToken) {
+    return { access_token: adminAccessToken, user: adminUser };
+  }
+
+  const storage = adminStorage();
+  if (!storage) {
+    return null;
+  }
+
+  try {
+    const accessToken = storage.getItem(ADMIN_ACCESS_TOKEN_KEY);
+    if (!accessToken) {
+      return null;
+    }
+    let user = null;
+    const rawUser = storage.getItem(ADMIN_USER_KEY);
+    if (rawUser) {
+      user = JSON.parse(rawUser);
+    }
+    adminAccessToken = accessToken;
+    adminUser = user;
+    return { access_token: accessToken, user };
+  } catch {
+    return null;
+  }
+}
+
+async function parseAdminError(response, fallback) {
+  const err = await response.json().catch(() => ({}));
+  const error = new Error(err.detail || fallback);
+  error.status = response.status;
+  return error;
+}
+
+export async function adminLogin({ username, password }) {
+  const response = await fetch(`${API_URL}/auth/login`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    credentials: "include",
+    body: JSON.stringify({ username, password }),
   });
 
   if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    const error = new Error(err.detail || "Could not load the admin dashboard");
-    error.status = response.status;
+    throw await parseAdminError(response, "Invalid username or password");
+  }
+
+  const data = await response.json();
+  persistAdminSession(data.access_token, data.user ?? null);
+  return data;
+}
+
+export async function adminRefresh() {
+  let response;
+  try {
+    response = await fetch(`${API_URL}/auth/refresh`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({}),
+    });
+  } catch (error) {
+    clearAdminSession();
     throw error;
+  }
+
+  if (!response.ok) {
+    clearAdminSession();
+    throw await parseAdminError(response, "Could not refresh the admin session");
+  }
+
+  const data = await response.json();
+  persistAdminSession(data.access_token, data.user ?? adminUser);
+  return data;
+}
+
+export async function adminLogout() {
+  try {
+    await fetch(`${API_URL}/auth/logout`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      credentials: "include",
+      body: JSON.stringify({}),
+    });
+  } catch {
+    // Best effort: local state is cleared even when the API is unreachable.
+  } finally {
+    clearAdminSession();
+  }
+}
+
+async function fetchAdminKpi(bearerToken, sinceDays, legacyToken = null) {
+  const params = new URLSearchParams();
+  params.set("since_days", String(sinceDays));
+
+  const headers = {};
+  if (bearerToken) {
+    headers.Authorization = `Bearer ${bearerToken}`;
+  }
+  // Keeps static ADMIN_TOKEN links/scripts working; a JWT simply fails this
+  // fallback and succeeds through the Bearer check above.
+  if (legacyToken) {
+    headers["X-Admin-Token"] = legacyToken;
+  }
+
+  return fetch(`${API_URL}/admin/kpi?${params.toString()}`, {
+    headers,
+    credentials: "include",
+    cache: "no-store",
+  });
+}
+
+export async function getAdminKpi(token, sinceDays = 30) {
+  // Backwards compatible call style: getAdminKpi(30)
+  if (typeof token === "number") {
+    sinceDays = token;
+    token = null;
+  }
+
+  const session = getAdminSession();
+  // A caller may hold a JWT from before a silent refresh; prefer the session's
+  // current token so a rotated access token is not replayed.
+  const explicitIsJwt = typeof token === "string" && token.split(".").length === 3;
+  const bearerToken =
+    explicitIsJwt && session?.access_token
+      ? session.access_token
+      : token || session?.access_token || null;
+
+  let response = await fetchAdminKpi(bearerToken, sinceDays, token);
+
+  if (response.status === 401) {
+    let refreshed = null;
+    try {
+      refreshed = await adminRefresh();
+    } catch {
+      // No valid refresh cookie: keep the original 401 for the login gate.
+    }
+    if (refreshed) {
+      response = await fetchAdminKpi(refreshed.access_token, sinceDays, null);
+    }
+  }
+
+  if (!response.ok) {
+    throw await parseAdminError(response, "Could not load the admin dashboard");
   }
 
   return response.json();

@@ -58,8 +58,8 @@ Design rules:
   `psycopg.sql.Identifier` / `sql.SQL`, never interpolated from user input.
 - **Business invariants live in code.** Prices are read server-side, outfit totals are summed and
   validated in Python, and sizing refuses to guess.
-- **Every degraded path is explicit.** Missing LLM key → `503`; missing admin token → `503`; empty
-  denominator → `null` in metrics rather than a fabricated `0.0`.
+- **Every degraded path is explicit.** Missing LLM key → `503`; an unset legacy `ADMIN_TOKEN` disables
+  `/search/reindex` with `503`; empty denominator → `null` in metrics rather than a fabricated `0.0`.
 - **Startup is self-healing.** `init_db()` runs `alembic upgrade head` and seeds the knowledge base
   when it is empty or stale. Idempotent revisions adopt pre-Alembic databases without a manual stamp.
 
@@ -133,7 +133,7 @@ Base URL locally: `http://localhost:8001`. Interactive OpenAPI docs: `/docs`.
 | `GET` | `/events/summary` | Funnel, revenue, cohort, and unit-economics summary |
 | `POST` | `/checkout/confirm` | Create a paid order from server-priced items |
 | `GET` | `/orders/{token}` | Read an order by its secret token |
-| `GET` | `/admin/kpi` | Token-gated executive KPI dashboard payload |
+| `GET` | `/admin/kpi` | Bearer-JWT-gated executive KPI dashboard payload (legacy token fallback) |
 
 Common status codes:
 
@@ -142,11 +142,12 @@ Common status codes:
 | `200` / `201` / `202` | Success / created / accepted |
 | `204` | Deleted |
 | `400` | Invalid request semantics |
-| `403` | Invalid admin token |
+| `401` | Missing/invalid admin credentials |
+| `403` | Invalid legacy admin token (`/search/reindex`) |
 | `404` | Unknown product, ASIN, order, or thread |
 | `422` | Schema validation failure (FastAPI/Pydantic) |
 | `429` | Rate limited; `Retry-After` is set |
-| `503` | Feature disabled: no admin token, no LLM key, or model unavailable |
+| `503` | Feature disabled: legacy admin token unset for reindex, no LLM key, or model unavailable |
 
 ---
 
@@ -329,13 +330,35 @@ curl -s -X POST http://localhost:8001/copilot/chat \
 - `503` when no LLM provider is configured. `429` with `Retry-After` when rate-limited.
 - `POST /copilot/chat/stream` emits `token` events followed by one `done` event with the same payload.
 
+### Admin authentication
+
+The dashboard uses Argon2id passwords plus a dual-token session:
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /auth/login` | Verify `{username, password}`; returns a 15-minute access JWT and sets an HttpOnly `refresh_token` cookie (`Path=/auth`, `SameSite=Lax`, `Secure` over HTTPS). |
+| `POST /auth/refresh` | Rotate the refresh token (old row marked `revoked`) and return a new access JWT. Replaying an already-revoked token revokes every active token for that user. |
+| `POST /auth/logout` | Revoke the presented refresh token and clear the cookie with `Max-Age=0`. |
+| `GET /auth/me` | Return the authenticated admin's database identity (`id`, `username`, `role`). |
+
+The demo seed creates `admin` / `marcell-admin-2026`. Refresh tokens are opaque random values; only
+their SHA-256 digest is stored in `admin_refresh_tokens`. Set `JWT_SECRET_KEY` to a 32+ byte secret
+in production (`openssl rand -hex 32`).
+
+```bash
+curl -s -c cookies.txt -X POST http://localhost:8001/auth/login \
+  -H "Content-Type: application/json" \
+  -d '{"username":"admin","password":"marcell-admin-2026"}'
+```
+
 ### `GET /admin/kpi`
 
-Executive dashboard payload. Requires `X-Admin-Token: <ADMIN_TOKEN>` (or `?token=`).
+Executive dashboard payload. Requires `Authorization: Bearer <access_token>`. The legacy
+`X-Admin-Token: <ADMIN_TOKEN>` header and `?token=` query parameter remain accepted for scripts.
 
 ```bash
 curl -s "http://localhost:8001/admin/kpi?since_days=30" \
-  -H "X-Admin-Token: dev-admin-token"
+  -H "Authorization: Bearer $ACCESS_TOKEN"
 ```
 
 Top-level sections:
@@ -350,8 +373,9 @@ Top-level sections:
 | `search_health` | Search volume, zero-result rate, search-to-PDP, top queries |
 | `copilot_quality` | Outcomes, unanswered rate, deflection rate, p50/p95 latency, thumbs ratio |
 
-`503` when `ADMIN_TOKEN` is unset; `403` for a missing or wrong token. Metrics are explicitly marked
-as synthetic demo data — the endpoint never presents simulated revenue as audited revenue.
+`401` when neither a valid Bearer JWT nor a matching legacy token is supplied. Metrics are
+explicitly marked as synthetic demo data — the endpoint never presents simulated revenue as audited
+revenue.
 
 ---
 
@@ -485,7 +509,10 @@ variables taking precedence. Unknown variables are ignored.
 | `DATABASE_URL` | `postgresql://toko:toko@localhost:5432/toko` | PostgreSQL + pgvector DSN |
 | `DB_POOL_MIN` / `DB_POOL_MAX` | `1` / `5` | Connection pool bounds |
 | `CORS_ORIGINS` | local + Vercel storefront | Comma-separated allowlist; `*` opens it |
-| `ADMIN_TOKEN` | empty | Protects `/search/reindex` and `/admin/kpi`; empty disables both |
+| `ADMIN_TOKEN` | empty | Legacy static token for `/search/reindex` and `/admin/kpi` scripts |
+| `JWT_SECRET_KEY` | dev placeholder | Signs 15-minute admin access JWTs; set a strong secret in production |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` | `15` | Access JWT lifetime |
+| `REFRESH_TOKEN_EXPIRE_DAYS` | `7` | Rotating refresh-token lifetime |
 | `TRUST_PROXY` | `false` | Trust `X-Forwarded-For` (set `true` behind Render) |
 | `LOG_LEVEL` | `INFO` | Python logging level |
 
@@ -668,6 +695,42 @@ Created at runtime by `PostgresSaver.setup()`, not by Alembic: `checkpoints`, `c
 | Policy retrieval | 10 minutes / 256 entries | `lookup_store_policy` |
 | Storefront catalog | Next.js ISR / edge cache | Product listing |
 
+### Structured JSON logging & W3C distributed tracing
+
+Every log line is a single JSON object with the same nine correlation fields, so a request can be
+followed from the edge through the API and into the database without grep archaeology.
+
+| Field | Meaning |
+|---|---|
+| `timestamp` | RFC 3339 / ISO 8601 UTC with milliseconds and a `Z` suffix, e.g. `2026-10-30T15:00:00.123Z` |
+| `level` | Lower-cased Python level: `debug`, `info`, `warning`, `error`, `critical` |
+| `service` | Fixed service identity: `toko-marcell-api` |
+| `version` | Deployed API version: `1.0.0` |
+| `environment` | `production` / `development` from `ENVIRONMENT` / `DEBUG` |
+| `message` | The rendered log message |
+| `trace_id` | 32-hex W3C trace ID, shared by every span in the trace |
+| `span_id` | 16-hex W3C span ID for the current request |
+| `request_id` | Incoming `X-Request-ID` or a generated `req_<hex8>` |
+
+```json
+{"timestamp":"2026-10-30T15:00:00.123Z","level":"info","service":"toko-marcell-api","version":"1.0.0","environment":"production","message":"request.completed","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"00f067aa0ba902b7","request_id":"req_8ac34d30","method":"GET","path":"/admin/kpi","status_code":200,"duration_ms":42.17}
+```
+
+**W3C TraceContext propagation.** When a caller sends
+`traceparent: 00-<32hex>-<16hex>-01`, the API adopts that trace and span ID and echoes the request
+ID on the response as `X-Request-ID`. Missing or malformed headers are replaced with a fresh random
+32-hex trace ID and 16-hex span ID, so logs remain correlatable even when the caller is not
+instrumented.
+
+**Context without plumbing.** Request IDs and trace IDs live in `contextvars`
+(`api/logging_context.py`) and are read by `JSONLogFormatter` at format time. Business logic,
+services and database helpers never receive a logger or request object as an argument — they just
+log normally and the context is attached automatically.
+
+**Zero-agent shipping.** `setup_logging()` (`api/logging_config.py`) streams newline-delimited JSON
+to `stdout`, which is exactly what Render, Datadog, CloudWatch, Loki and similar collectors already
+ingest. There is no sidecar, file tailer or heavyweight daemon to deploy.
+
 ### Rate limits
 
 - Copilot: `COPILOT_RATE_LIMIT_PER_MIN` and `COPILOT_RATE_LIMIT_PER_DAY` per client IP.
@@ -676,8 +739,10 @@ Created at runtime by `PostgresSaver.setup()`, not by Alembic: `checkpoints`, `c
 
 ### Admin protection
 
-`/search/reindex` and `/admin/kpi` compare the presented token in constant time
-(`hmac.compare_digest`). With `ADMIN_TOKEN` unset, both return `503` rather than falling open.
+`/admin/kpi` accepts a Bearer JWT issued by `/auth/login`; the legacy `ADMIN_TOKEN` is compared in
+constant time (`hmac.compare_digest`) as a fallback. `/search/reindex` still uses `ADMIN_TOKEN`
+directly and returns `503` when it is unset rather than falling open. Access JWTs expire after 15
+minutes; refresh tokens rotate on every use and are stored only as SHA-256 digests.
 
 ### Cold starts
 

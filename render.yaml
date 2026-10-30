@@ -35,5 +35,13 @@ services:
       # Admin token for /search/reindex — set a strong secret in the dashboard.
       - key: ADMIN_TOKEN
         sync: false
+      # Signs 15-minute admin access JWTs. Set a 32+ byte random secret in the
+      # Render dashboard (openssl rand -hex 32); never commit the real value.
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: ACCESS_TOKEN_EXPIRE_MINUTES
+        value: "15"
+      - key: REFRESH_TOKEN_EXPIRE_DAYS
+        value: "7"
       - key: TRUST_PROXY
         value: "true"

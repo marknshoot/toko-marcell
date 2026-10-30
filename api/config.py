@@ -39,6 +39,12 @@ class Settings(BaseSettings):
     ADMIN_TOKEN: str = ""
     TRUST_PROXY: bool = False
 
+    # ── Admin authentication (Argon2id + dual JWT) ─────────────────────────
+    JWT_SECRET_KEY: str = "toko-marcell-admin-secret-change-in-prod"  # noqa: S105
+    JWT_ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 15
+    REFRESH_TOKEN_EXPIRE_DAYS: int = 7
+
     # ── Guardrail ───────────────────────────────────────────────────────────
     GUARDRAIL_LLM_MODE: str = "always"
 

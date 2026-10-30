@@ -22,7 +22,7 @@ PostgreSQL 16 + pgvector, and LangGraph agent runtime run in Docker locally and 
 | Destination | Link |
 |---|---|
 | **Live storefront** | [https://toko-marcell.vercel.app](https://toko-marcell.vercel.app) |
-| **Executive Key Performance Indicator (KPI) dashboard** | [https://toko-marcell.vercel.app/admin/kpi](https://toko-marcell.vercel.app/admin/kpi) — admin token: `dev-admin-token` |
+| **Executive Key Performance Indicator (KPI) dashboard** | [https://toko-marcell.vercel.app/admin/kpi](https://toko-marcell.vercel.app/admin/kpi) — demo login: `admin` / `marcell-admin-2026` |
 | **API documentation (OpenAPI)** | [https://toko-marcell-api.onrender.com/docs](https://toko-marcell-api.onrender.com/docs) |
 | **Health check** | [https://toko-marcell-api.onrender.com/health](https://toko-marcell-api.onrender.com/health) |
 
@@ -246,7 +246,9 @@ annoying customers — in one screen, without asking an engineer to run a query.
 
 **Engineering design.**
 
-- A Next.js executive dashboard at **`/admin/kpi`**, gated by `X-Admin-Token`.
+- A Next.js executive dashboard at **`/admin/kpi`**, gated by Argon2id admin login (15-minute access
+  JWT + HttpOnly rotating refresh token). The demo login is `admin` / `marcell-admin-2026`; legacy
+  `X-Admin-Token` scripts keep working.
 - Live panels for:
   - **Latency:** copilot p50/p95 against the **< 5.0 s p95 SLO**.
   - **Unit economics:** cost per turn, conversation, resolved conversation, and assisted order.
@@ -254,6 +256,10 @@ annoying customers — in one screen, without asking an engineer to run a query.
   - **Search health:** zero-result rate and top zero-result queries.
   - **Copilot quality:** unanswered rate, deflection rate, and thumbs up/down.
   - **Unanswered backlog:** the actual customer questions the system could not answer.
+- **OpenTelemetry-aligned structured JSON logging** for every request: nine standard fields
+  (timestamp, level, service, version, environment, message, trace/span/request IDs), W3C
+  `traceparent` propagation or automatic ID generation, and newline-delimited JSON streamed to
+  `stdout` for Render, Datadog, CloudWatch and similar collectors with no sidecar agent.
 - Backed by `GET /admin/kpi`, which returns explicit `synthetic` and `caveat` metadata rather than
   presenting demo data as audited revenue.
 
@@ -337,7 +343,7 @@ docker compose up -d --build
 |---|---|
 | Storefront | [http://localhost:3000](http://localhost:3000) |
 | API + interactive docs | [http://localhost:8001/docs](http://localhost:8001/docs) |
-| Executive KPI dashboard | [http://localhost:3000/admin/kpi](http://localhost:3000/admin/kpi) (`dev-admin-token`) |
+| Executive KPI dashboard | [http://localhost:3000/admin/kpi](http://localhost:3000/admin/kpi) (`admin` / `marcell-admin-2026`) |
 | Health check | [http://localhost:8001/health](http://localhost:8001/health) |
 
 ```bash
@@ -376,7 +382,9 @@ Copy [`.env.example`](./.env.example) and set only what you need. The most impor
 | `OPENROUTER_API_KEY` | Preferred copilot provider; without it the copilot is disabled | empty |
 | `GEMINI_API_KEY` | Fallback copilot provider | empty |
 | `DATABASE_URL` | PostgreSQL + pgvector connection string | local compose DSN |
-| `ADMIN_TOKEN` | Protects `/search/reindex` and `/admin/kpi` | empty (endpoints return `503`) |
+| `ADMIN_TOKEN` | Legacy static token for `/search/reindex` and `/admin/kpi` scripts | empty |
+| `JWT_SECRET_KEY` | Signs 15-minute admin access JWTs | dev placeholder |
+| `ACCESS_TOKEN_EXPIRE_MINUTES` / `REFRESH_TOKEN_EXPIRE_DAYS` | Dual-JWT session lifetimes | `15` / `7` |
 | `TEXT_EMBED_MODEL` | 384-d multilingual embedding model | `paraphrase-multilingual-MiniLM-L12-v2` |
 | `COPILOT_RATE_LIMIT_PER_MIN` / `_PER_DAY` | Per-IP copilot rate limits | `10` / `100` |
 | `ENABLE_RERANKER` | Optional cross-encoder stage-2 reranking | `false` |
@@ -392,7 +400,7 @@ toko-marcell/
 ├── api/                    FastAPI service, LangGraph agent, Alembic migrations, tests
 │   ├── routers/            HTTP surface: search, catalog, sizing, recs, copilot, admin, checkout
 │   ├── knowledge/          Authored store policies, size charts, category → size-kind map
-│   ├── migrations/         Versioned schema (0001 → 0005)
+│   ├── migrations/         Versioned schema (0001 → 0006)
 │   └── tests/              Unit + integration suites
 ├── shop/                   Next.js storefront, copilot UI, sizing widget, /admin/kpi
 ├── pipelines/              Offline catalog build, embeddings, recommendation training, evaluations
