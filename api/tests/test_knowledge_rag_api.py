@@ -46,6 +46,25 @@ def test_policy_retrieval_returns_parent_chunks_deduped():
     assert len(titles) == len(set(titles))  # deduped by parent chunk
 
 
+def test_policy_retrieval_lexical_fallback_when_dense_disabled(monkeypatch):
+    """ENABLE_DENSE_SEARCH=false must not switch store-policy RAG off."""
+    import agent_tools
+    import config
+
+    monkeypatch.setattr(
+        config,
+        "get_settings",
+        lambda: config.Settings(ENABLE_DENSE_SEARCH=False, DATABASE_URL=DB_URL),
+    )
+    agent_tools.clear_policy_cache()
+
+    hits = agent_tools.lookup_store_policy("bagaimana cara retur barang?", limit=3, db_url=DB_URL)
+
+    assert hits, "lexical fallback should still return store policy chunks"
+    assert any("retur" in hit["title"].lower() for hit in hits)
+    assert all(hit["score"] > 0 for hit in hits)
+
+
 def test_policy_retrieval_brand_question_en():
     import types
 

@@ -72,6 +72,12 @@ def search_products(
     """
     settings = get_settings()
     dense_mode = mode in ("dense", "vector")
+    dense_available = settings.ENABLE_DENSE_SEARCH
+    if dense_mode and not dense_available:
+        logger.info(
+            "mode=dense requested but ENABLE_DENSE_SEARCH is false; falling back to BM25 for q=%r",
+            q,
+        )
     started = time.perf_counter()
 
     clean_tokens = tokenize(q)
@@ -114,11 +120,13 @@ def search_products(
 
     def _run_query(search_query: str) -> tuple[list[tuple[int, float]], bool]:
         bm25_ranked = []
-        if mode in ("bm25", "hybrid"):
+        # Dense-only requests fall back to the lexical index when embeddings are
+        # disabled for this deployment (512 MB Render instance).
+        if mode in ("bm25", "hybrid") or (dense_mode and not dense_available):
             bm25_ranked = index.rank(search_query, allowed=allowed, dedupe=False)
 
         vector_ranked = []
-        if dense_mode or mode == "hybrid":
+        if dense_available and (dense_mode or mode == "hybrid"):
             query_vec = embed_query(search_query)
             if query_vec is not None:
                 embed_col = settings.TEXT_EMBED_COLUMN
@@ -149,7 +157,7 @@ def search_products(
         if mode == "bm25":
             ranked = index.dedupe(bm25_ranked)
         elif dense_mode:
-            ranked = index.dedupe(vector_ranked)
+            ranked = index.dedupe(vector_ranked if dense_available else bm25_ranked)
         else:  # hybrid
             if bm25_ranked and vector_ranked:
                 fused = reciprocal_rank_fusion([bm25_ranked[:100], vector_ranked[:100]], k=60)

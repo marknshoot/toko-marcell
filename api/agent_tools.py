@@ -309,7 +309,27 @@ def _lookup_store_policy_uncached(
     """Bilingual hybrid RAG: hypothetical + direct chunk + lexical RRF."""
     q_vec = embed_query(query)
     if q_vec is None:
-        return []
+        # Dense search disabled (ENABLE_DENSE_SEARCH=false) or embedding failed.
+        # The knowledge base is tiny (a few dozen chunks), so IDF-weighted
+        # lexical scoring over every chunk keeps policy RAG working with zero
+        # ML models in memory.
+        logger.debug("embed_query returned None; using lexical store-policy retrieval")
+        with _connect(db_url) as conn:
+            with conn.cursor() as cur:
+                cur.execute("SELECT id, category, title, content FROM store_knowledge")
+                rows = cur.fetchall()
+        chunks = [(int(r[0]), str(r[1]), str(r[2]), str(r[3])) for r in rows]
+        chunk_map = {cid: (cat, tit, cont) for cid, cat, tit, cont in chunks}
+        lexical_ranked = score_policy_chunks_lexical(query, chunks)
+        return [
+            {
+                "category": chunk_map[cid][0],
+                "title": chunk_map[cid][1],
+                "content": chunk_map[cid][2],
+                "score": round(score, 4),
+            }
+            for cid, score in lexical_ranked[:limit]
+        ]
 
     vec_str = "[" + ",".join(f"{x:.6f}" for x in q_vec) + "]"
     with _connect(db_url) as conn:

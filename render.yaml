@@ -28,6 +28,11 @@ services:
       # Cross-encoder off on 512 MB.
       - key: ENABLE_RERANKER
         value: "false"
+      # Paraphrase-multilingual MiniLM (225 MB ONNX + 17 MB tokenizer) requires ~630 MB RAM.
+      # Disable dense search on Render's 512 MB free tier; BM25 with Indonesian stemming
+      # and query rewriting provides instant (<10ms) search within 80 MB RAM.
+      - key: ENABLE_DENSE_SEARCH
+        value: "false"
       # Pin ONNX Runtime to a single thread so fastembed does not spawn a
       # per-core thread pool that pushes the 512 MB container into OOM.
       - key: FASTEMBED_THREADS
