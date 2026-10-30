@@ -311,7 +311,30 @@ export default function Catalog() {
               ))}
             </>
           ) : error ? (
-            <p className="text-muted">{error}</p>
+            imageFile ? (
+              <div className="col-span-full rounded-2xl border border-amber-500/20 bg-amber-500/5 p-6 text-center max-w-lg mx-auto my-4">
+                <div className="mx-auto flex h-10 w-10 items-center justify-center rounded-full bg-amber-500/10 text-amber-600 mb-3">
+                  <svg className="h-5 w-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 16h-1v-4h-1m1-4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                  </svg>
+                </div>
+                <h3 className="text-sm font-semibold text-foreground">Visual Search Demo Notice</h3>
+                <p className="mt-1 text-xs text-muted leading-relaxed">
+                  {error.includes("512MB")
+                    ? "Pencarian gambar dinonaktifkan di demo free-tier 512MB untuk menjaga SLA & stabilitas server. Silakan gunakan pencarian teks atau jalankan secara lokal via Docker."
+                    : error}
+                </p>
+                <button
+                  type="button"
+                  onClick={clearImageSearch}
+                  className="mt-4 inline-flex items-center gap-1.5 rounded-full bg-foreground px-4 py-1.5 text-xs font-medium text-background hover:opacity-90 transition-opacity"
+                >
+                  Kembali ke pencarian teks
+                </button>
+              </div>
+            ) : (
+              <p className="text-muted">{error}</p>
+            )
           ) : products.length === 0 ? (
             <p className="text-muted">
               {urlQuery ? `Nothing matched “${urlQuery}”.` : "No products found."}

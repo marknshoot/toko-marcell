@@ -195,17 +195,32 @@ export async function searchByImage({ file, department, limit = 24 }) {
     params.set("department", department);
   }
 
-  const response = await fetch(`${API_URL}/search/image?${params.toString()}`, {
-    method: "POST",
-    body: formData,
-  });
+  try {
+    const response = await fetch(`${API_URL}/search/image?${params.toString()}`, {
+      method: "POST",
+      body: formData,
+    });
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.detail || "Could not complete image search");
+    if (!response.ok) {
+      const err = await response.json().catch(() => ({}));
+      const error = new Error(err.detail || "Could not complete image search");
+      error.status = response.status;
+      error.detail = err.detail;
+      throw error;
+    }
+
+    return response.json();
+  } catch (err) {
+    if (err.status === 503 || err.message?.includes("512MB") || err.message?.includes("free-tier")) {
+      throw err;
+    }
+    if (err.name === "TypeError" && err.message?.includes("fetch")) {
+      const netErr = new Error("Visual search is temporarily unavailable on this deployment. Please use text search.");
+      netErr.isNetworkError = true;
+      throw netErr;
+    }
+    throw err;
   }
-
-  return response.json();
 }
 // ── AI Copilot (Admin Toko Marcell) — v2 contract ────────────────────────────
 
