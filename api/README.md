@@ -76,6 +76,9 @@ life of the process and would otherwise serve a stale catalog.
 | `COPILOT_RATE_LIMIT_PER_MIN` | | `10` | Max copilot requests per client IP per minute |
 | `COPILOT_RATE_LIMIT_PER_DAY` | | `100` | Max copilot requests per client IP per day |
 | `ENABLE_TRIMODAL` | | `false` (set `true` in local Compose) | Enable `mode=trimodal`; it loads both MiniLM and the CLIP text ONNX (`Qdrant/clip-ViT-B-32-text`), so it needs ≥1 GB RAM |
+| `ENABLE_IMAGE_SEARCH` | | `true` (set `false` on 512 MB Render) | Visual search (`POST /search/image`); returns graceful 503 when disabled to stay under memory limits |
+| `FASTEMBED_THREADS` | | `1` | Number of threads for ONNX runtime to prevent thread pool memory inflation |
+| `SKIP_KNOWLEDGE_SEED` | | `false` | When `true`, skips startup knowledge base verification/seeding |
 | `ENABLE_RERANKER` | | `false` (set `true` in local Compose) | Cross-encoder reranking for `/search?rerank=true` and the copilot's `search_catalog` |
 | `FASTEMBED_CACHE_DIR` | | `/tmp/fastembed_cache` | Cache for MiniLM and CLIP `fastembed` ONNX models |
 | `HF_HUB_CACHE` | | `/tmp/hf_cache` | Cache for the ONNX cross-encoder |
