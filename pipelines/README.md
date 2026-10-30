@@ -121,7 +121,7 @@ kept (all distinct ASINs).
 
 After the build, `cleanup_catalog.py` runs against the live database and removes:
 
-1. products with a **dead image CDN link** (`image_embedding IS NULL`), and
+1. products with a **missing or dead image URL**, and
 2. **duplicate title variants**, keeping the best-rated/most-reviewed row.
 
 Dependent reviews are deleted too, then `VACUUM ANALYZE` runs. The shipped seed and the storefront
@@ -134,14 +134,13 @@ copy therefore read **4,670 products / 46,700 reviews**.
 | Script | Model | Dim | Column | Index |
 |---|---|:---:|---|---|
 | `embed_catalog.py` | `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2` (default) or `all-MiniLM-L6-v2` via `fastembed` | 384 | `products.embedding_ml` / `products.embedding` | HNSW cosine |
-| `embed_images.py` | `Qdrant/clip-ViT-B-32-vision` (`fastembed` ONNX) | 512 | `products.image_embedding` | HNSW cosine |
 
 Text representation for MiniLM is `title + brand + category + features + description` — the same
 fields BM25 indexes, so the two rankers see the same evidence and their disagreement is genuinely
 about *method*, not data.
 
-`download_images.py` prefetches and caches catalog images to `data/processed/images/` (40 threads) so
-`embed_images.py` does not re-hit Amazon's CDN.
+`download_images.py` prefetches and caches catalog images to `data/processed/images/` (40 threads)
+for offline inspection and future image work.
 
 ```bash
 # Multilingual embeddings (default served column: embedding_ml):
@@ -151,9 +150,6 @@ python3 pipelines/embed_catalog.py \
 
 # English MiniLM embeddings (products.embedding):
 python3 pipelines/embed_catalog.py
-
-# Pre-trained CLIP vision embeddings (products.image_embedding):
-python3 pipelines/embed_images.py --overwrite
 ```
 
 ---
@@ -259,11 +255,10 @@ and production roadmap.
 | `cleanup_catalog.py` | remove dead-image and duplicate-title rows (6,000 → 4,670) |
 | `download_images.py` | prefetch product images to the local cache |
 | `embed_catalog.py` | 384-d text embeddings + HNSW (`--model`/`--column` for multilingual `embedding_ml`) |
-| `embed_images.py` | pre-trained `fastembed` CLIP (`Qdrant/clip-ViT-B-32-vision`) 512-d image embeddings + HNSW |
 | `build_recs.py` | co-occurrence + metadata boosts + Bayesian popularity + category/department backfill |
 | `extract_reviews.py` | ≤10 real reviews per ASIN → `reviews` |
 | `eda_interactions.py` | interaction EDA |
-| `eval_search.py` | 5-mode BM25 / vector / hybrid / rerank / trimodal IR harness |
+| `eval_search.py` | 4-mode BM25 / vector / hybrid / rerank IR harness |
 | `eval_rag.py` | RAGAS evaluation harness for store policy & sizing RAG |
 | `eval_copilot.py` | deterministic 54-scenario copilot business benchmark with CI gates |
 | `eval_recs.py` | recommendation HR/nDCG harness |

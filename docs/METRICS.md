@@ -56,7 +56,7 @@ the benchmark provenance ledger ([`BENCHMARKS.md`](../pipelines/BENCHMARKS.md)).
 | [Cost per conversation](#cost-per-conversation) | Live (phase 13) | `copilot_turns.cost_usd` → `unit_economics` |
 | [Cost per assisted order](#cost-per-assisted-order) | Live (phase 13) | `copilot_turns` + `orders` → `unit_economics` |
 | [Latency p50 and p95](#latency-p50-and-p95) | Live (phase 9; dashboard phase 12) | `copilot_turns.latency_ms` → `GET /events/summary`, `GET /admin/kpi` |
-| [SLOs](#service-level-objectives) | Live (policy, phase 13) | [`SLOS.md`](./SLOS.md); search/image/sizing/TTFT timing not yet persisted |
+| [SLOs](#service-level-objectives) | Live (policy, phase 13) | [`SLOS.md`](./SLOS.md); search/sizing/TTFT timing not yet persisted |
 | [Copilot business scenario benchmark](#copilot-business-scenario-benchmark) | Live (CI, phase 14) | [`pipelines/results/copilot_eval.json`](../pipelines/results/copilot_eval.json) |
 | [Synthetic traffic simulation](#synthetic-traffic-simulation) | Live (synthetic, phase 15) | [`scripts/simulate_traffic.py`](../scripts/simulate_traffic.py) → [`CASE_STUDY.md`](./CASE_STUDY.md) |
 
@@ -522,7 +522,6 @@ persisted as timing metrics. Do not quote a target as a measured result.
 | SLO | Target | Measurement status |
 |---|---|---|
 | Text `/search` latency | p50 < 35 ms · p95 < 80 ms | Target only; no timing table yet |
-| `/search/image` latency | p50 < 120 ms · p95 < 250 ms | Target only; no timing table yet |
 | `/sizing/recommend` latency | p50 < 5 ms · p95 < 15 ms | Target only; no timing table yet |
 | Copilot TTFT | p50 < 1.2 s · p95 < 3.0 s | Target only; total-turn p50/p95 is live, TTFT is not |
 | Core REST availability | 99.5% (30-day) | No hosted SLO calculation committed |
@@ -637,7 +636,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | 10b (shipped) | Category-aware sizing: every seed `(department, category)` pair mapped to an explicit size kind; tops/bottoms/dress use authored men's/women's TB/BB charts, footwear/waist/belt/headwear use cited standards, brand offsets marked `source=demo`; `GET /sizing/{asin}` + `POST /sizing/recommend` and a no-LLM product-page advisor. **No fit-accuracy metric** — coverage is structural, not a quality claim. |
 | 11 (shipped) | `GET /search/insights`: top queries, top zero-result queries, zero-result rate and session-level search-to-PDP; deterministic ID→EN rewrite retry on zero-result `/search` and `search_catalog`. |
 | 12 (shipped) | Token-gated `GET /admin/kpi` and `/admin/kpi` page: confirmed-order revenue/AOV, session funnel, copilot vs non-copilot cohorts, conversation-level deflection, turn outcomes, search health, p50/p95 and a mandatory `synthetic` badge. Cost is added in phase 13. |
-| 13 (shipped) | Per-turn cost from configurable per-million prices; `unit_economics` cost per turn / conversation / resolved conversation / assisted order; `GUARDRAIL_LLM_MODE=ambiguous`; 10-minute bounded policy-RAG cache; [`SLOS.md`](./SLOS.md) latency, availability, cost and fallback targets. Attainment is not yet instrumented for search/image/sizing/TTFT. |
+| 13 (shipped) | Per-turn cost from configurable per-million prices; `unit_economics` cost per turn / conversation / resolved conversation / assisted order; `GUARDRAIL_LLM_MODE=ambiguous`; 10-minute bounded policy-RAG cache; [`SLOS.md`](./SLOS.md) latency, availability, cost and fallback targets. Attainment is not yet instrumented for search/sizing/TTFT. |
 | 14 (shipped) | Committed 54-scenario business benchmark in CI: guardrail accuracy/per-label precision/recall, exact sizing contracts, outfit budget invariant, policy top-3 recall; hard failure gates. |
 | 15 (shipped) | Seeded `scripts/simulate_traffic.py` (seed 42 default, `sim_*` ids, `--dry-run`, `--reset-sim-only`) and [`CASE_STUDY.md`](./CASE_STUDY.md). Simulated cohort conversion, AOV, revenue/session, policy deflection, outfit budget invariants and token-cost estimates. **Synthetic only** — no revenue, lift or ROI claim. |
 

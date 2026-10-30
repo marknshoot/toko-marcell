@@ -195,49 +195,6 @@ def test_bm25_allowed_filter():
     assert index.rank("running shoes", allowed=set()) == []
 
 
-# ── Pre-trained CLIP (fastembed) Unit Tests ──────────────────────────────────
-
-def test_embed_image_bytes_normalizes_fastembed_vector(monkeypatch):
-    import io
-
-    import numpy as np
-    import search
-    from PIL import Image
-
-    class _FakeVisionModel:
-        def embed(self, images):
-            assert len(images) == 1
-            return [np.array([3.0, 4.0] + [0.0] * 510, dtype=np.float32)]
-
-    monkeypatch.setattr(search, "get_clip_vision_model", lambda: _FakeVisionModel())
-
-    buf = io.BytesIO()
-    Image.new("RGB", (16, 16), color=(255, 0, 0)).save(buf, format="PNG")
-    vec = search.embed_image_bytes(buf.getvalue())
-
-    assert vec is not None
-    assert len(vec) == 512
-    assert abs(vec[0] - 0.6) < 1e-5
-    assert abs(vec[1] - 0.8) < 1e-5
-
-
-def test_embed_query_clip_text_uses_fastembed_model(monkeypatch):
-    import numpy as np
-    import search
-
-    class _FakeTextModel:
-        def embed(self, queries):
-            assert queries == ["white leather sneakers"]
-            return [np.ones(512, dtype=np.float32)]
-
-    monkeypatch.setattr(search, "get_clip_text_model", lambda: _FakeTextModel())
-    vec = search.embed_query_clip_text("white leather sneakers")
-
-    assert vec is not None
-    assert len(vec) == 512
-    assert vec[0] == 1.0
-
-
 # ── Copilot search_catalog retry wiring ─────────────────────────────────────
 
 def test_search_catalog_retries_once_with_rewritten_query(monkeypatch):

@@ -1,6 +1,5 @@
-"""Search endpoints: text search, image search, reindex."""
+"""Search endpoints: hybrid text search, search insights, and reindex."""
 
-import asyncio
 import hmac
 import logging
 import time
@@ -8,19 +7,16 @@ from typing import Literal
 
 from config import get_settings
 from db import get_conn
-from fastapi import APIRouter, File, HTTPException, Query, Request, UploadFile
+from fastapi import APIRouter, HTTPException, Query, Request
 from psycopg import sql
 from search import (
     build_search_index,
-    embed_image_bytes,
     embed_query,
-    embed_query_clip_text,
     get_index,
     reciprocal_rank_fusion,
     reset_index,
     rewrite_id_to_en,
     tokenize,
-    vision_encoder_ready,
 )
 
 from routers.catalog import PRODUCT_COLUMNS, row_to_product
@@ -66,19 +62,16 @@ def search_products(
     offset: int = Query(0, ge=0),
     department: str | None = None,
     category: str | None = None,
-    mode: Literal["hybrid", "bm25", "vector", "trimodal"] = "hybrid",
+    mode: Literal["hybrid", "bm25", "dense", "vector"] = "hybrid",
     rerank: bool = Query(False, description="When true AND ENABLE_RERANKER is set, apply cross-encoder reranking on fused candidates before pagination."),
 ):
-    """Hybrid (BM25 + pgvector cosine similarity), BM25-only, vector-only, or trimodal search."""
+    """Hybrid (BM25 + pgvector cosine similarity), BM25-only, or dense-only search.
+
+    ``vector`` is a deprecated alias for ``dense`` kept for backward compatibility
+    with existing clients and evaluation artifacts.
+    """
     settings = get_settings()
-    if mode == "trimodal" and not settings.ENABLE_TRIMODAL:
-        raise HTTPException(
-            status_code=400,
-            detail=(
-                "mode=trimodal is disabled on this deployment to protect memory; "
-                "set ENABLE_TRIMODAL=true (and give the instance >=1 GB) to enable it."
-            ),
-        )
+    dense_mode = mode in ("dense", "vector")
     started = time.perf_counter()
 
     clean_tokens = tokenize(q)
@@ -121,11 +114,11 @@ def search_products(
 
     def _run_query(search_query: str) -> tuple[list[tuple[int, float]], bool]:
         bm25_ranked = []
-        if mode in ("bm25", "hybrid", "trimodal"):
+        if mode in ("bm25", "hybrid"):
             bm25_ranked = index.rank(search_query, allowed=allowed, dedupe=False)
 
         vector_ranked = []
-        if mode in ("vector", "hybrid", "trimodal"):
+        if dense_mode or mode == "hybrid":
             query_vec = embed_query(search_query)
             if query_vec is not None:
                 embed_col = settings.TEXT_EMBED_COLUMN
@@ -153,51 +146,10 @@ def search_products(
                         )
                         vector_ranked = [(row[0], float(row[1])) for row in cur.fetchall()]
 
-        clip_ranked = []
-        if mode == "trimodal":
-            clip_vec = embed_query_clip_text(search_query)
-            if clip_vec is not None:
-                clip_str = "[" + ",".join(f"{x:.6f}" for x in clip_vec) + "]"
-                clip_filters: list[sql.Composable] = [sql.SQL("image_embedding IS NOT NULL")]
-                clip_params: list = [clip_str]
-                if department:
-                    clip_filters.append(sql.SQL("department = %s"))
-                    clip_params.append(department)
-                if category:
-                    clip_filters.append(sql.SQL("category = %s"))
-                    clip_params.append(category)
-                clip_params.append(clip_str)
-
-                with get_conn() as conn:
-                    with conn.cursor() as cur:
-                        cur.execute(
-                            sql.SQL(
-                                "SELECT id, 1 - (image_embedding <=> %s::vector) AS similarity"
-                                " FROM products WHERE "
-                            )
-                            + sql.SQL(" AND ").join(clip_filters)
-                            + sql.SQL(" ORDER BY image_embedding <=> %s::vector LIMIT 100"),
-                            clip_params,
-                        )
-                        clip_ranked = [(row[0], float(row[1])) for row in cur.fetchall()]
-
         if mode == "bm25":
             ranked = index.dedupe(bm25_ranked)
-        elif mode == "vector":
+        elif dense_mode:
             ranked = index.dedupe(vector_ranked)
-        elif mode == "trimodal":
-            rankings_to_fuse = []
-            if bm25_ranked:
-                rankings_to_fuse.append(bm25_ranked[:100])
-            if vector_ranked:
-                rankings_to_fuse.append(vector_ranked[:100])
-            if clip_ranked:
-                rankings_to_fuse.append(clip_ranked[:100])
-            if rankings_to_fuse:
-                fused = reciprocal_rank_fusion(rankings_to_fuse, k=60)
-                ranked = index.dedupe(fused)
-            else:
-                ranked = []
         else:  # hybrid
             if bm25_ranked and vector_ranked:
                 fused = reciprocal_rank_fusion([bm25_ranked[:100], vector_ranked[:100]], k=60)
@@ -391,107 +343,4 @@ def search_insights(since_days: int = Query(30, ge=1, le=365)):
         "top_zero_result_queries": top_zero_result_queries,
         "top_queries": top_queries,
         "search_to_pdp_rate": _rate(pdp_sessions, search_sessions),
-    }
-
-
-# ── Image search ─────────────────────────────────────────────────────────────
-
-def _run_image_search_sync(
-    contents: bytes,
-    department: str | None,
-    limit: int,
-    started: float,
-) -> tuple[list[dict], float, float]:
-    vec = embed_image_bytes(contents)
-    if not vec:
-        raise HTTPException(
-            status_code=400,
-            detail="Could not read an image from the uploaded file.",
-        )
-    embed_ms = round((time.perf_counter() - started) * 1000, 2)
-
-    vec_literal = "[" + ",".join(f"{x:.6f}" for x in vec) + "]"
-
-    where_clauses: list[sql.Composable] = [sql.SQL("image_embedding IS NOT NULL")]
-    params: list = [vec_literal]
-
-    if department and department != "All":
-        where_clauses.append(sql.SQL("department = %s"))
-        params.append(department)
-
-    where_sql = sql.SQL(" AND ").join(where_clauses)
-    params.extend([vec_literal, limit])
-
-    t_db = time.perf_counter()
-    with get_conn() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                sql.SQL(
-                    "SELECT {cols},"
-                    " ROUND((1 - (image_embedding <=> %s::vector))::numeric, 4) AS visual_similarity"
-                    " FROM products WHERE "
-                ).format(cols=sql.SQL(PRODUCT_COLUMNS))
-                + where_sql
-                + sql.SQL(" ORDER BY image_embedding <=> %s::vector ASC LIMIT %s"),
-                params,
-            )
-            rows = cur.fetchall()
-    db_ms = round((time.perf_counter() - t_db) * 1000, 2)
-
-    items = []
-    for row in rows:
-        prod = row_to_product(row[:-1])
-        prod["visualSimilarity"] = float(row[-1]) if row[-1] is not None else 0.0
-        items.append(prod)
-    return items, embed_ms, db_ms
-
-
-@router.post("/search/image")
-async def search_by_image(
-    file: UploadFile = File(...),  # noqa: B008  # FastAPI dependency injection pattern
-    department: str | None = Query(None),
-    limit: int = Query(24, ge=1, le=50),
-):
-    """Visual Search (Search by Image) using multimodal CLIP ViT-B/32 embeddings."""
-    settings = get_settings()
-    if not settings.ENABLE_IMAGE_SEARCH:
-        raise HTTPException(
-            status_code=503,
-            detail="Visual search is disabled on the 512MB free-tier demo to protect server SLA.",
-        )
-
-    if not file.content_type or not file.content_type.startswith("image/"):
-        raise HTTPException(
-            status_code=400,
-            detail="Uploaded file must be an image (JPEG, PNG, WEBP, etc.)",
-        )
-
-    contents = await file.read()
-    if len(contents) < 50:
-        raise HTTPException(status_code=400, detail="Image file is too small or corrupted")
-    if len(contents) > 10 * 1024 * 1024:
-        raise HTTPException(status_code=400, detail="Image file exceeds 10MB limit")
-
-    started = time.perf_counter()
-    if not await asyncio.to_thread(vision_encoder_ready):
-        raise HTTPException(
-            status_code=503,
-            detail=(
-                "Image search is unavailable: the CLIP vision encoder is "
-                "not loaded on this deployment."
-            ),
-        )
-
-    items, embed_ms, db_ms = await asyncio.to_thread(
-        _run_image_search_sync, contents, department, limit, started
-    )
-
-    return {
-        "items": items,
-        "total": len(items),
-        "limit": limit,
-        "filename": file.filename,
-        "department": department or "All",
-        "took_ms": round((time.perf_counter() - started) * 1000, 2),
-        "timings": {"embed_ms": embed_ms, "db_ms": db_ms},
     }

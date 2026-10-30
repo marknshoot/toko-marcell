@@ -76,9 +76,21 @@ def upgrade() -> None:
     op.execute(
         "CREATE INDEX IF NOT EXISTS products_embedding_idx ON products USING hnsw (embedding vector_cosine_ops)"
     )
+    # The visual-search column is retired by revision 0005. Keep this index
+    # creation conditional so a database that is already at head can still be
+    # adopted after losing its alembic_version row.
     op.execute(
-        "CREATE INDEX IF NOT EXISTS products_image_embedding_idx "
-        "ON products USING hnsw (image_embedding vector_cosine_ops)"
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM information_schema.columns
+                       WHERE table_schema = current_schema()
+                         AND table_name = 'products' AND column_name = 'image_embedding') THEN
+                CREATE INDEX IF NOT EXISTS products_image_embedding_idx
+                ON products USING hnsw (image_embedding vector_cosine_ops);
+            END IF;
+        END $$
+        """
     )
 
     # ── Funnel events ────────────────────────────────────────────────────────

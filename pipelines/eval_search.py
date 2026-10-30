@@ -4,10 +4,9 @@ IR Evaluation Harness for Toko Marcell Search (M5 & M6).
 
 Compares search modes:
   - bm25:           In-process BM25 (lexical baseline)
-  - vector:         Dense MiniLM via pgvector
+  - dense:          Dense MiniLM via pgvector (`vector` is accepted as an alias)
   - hybrid:         BM25 + MiniLM + RRF (default treatment)
   - hybrid+rerank:  Hybrid + Stage-2 cross-encoder reranking
-  - trimodal:       BM25 + MiniLM + CLIP text→image + RRF
 
 Queries:
   32 queries across 4 categories:
@@ -38,7 +37,7 @@ import urllib.parse
 import urllib.request
 
 DEFAULT_API_URL = "http://localhost:8001"
-ALL_MODES = ["bm25", "vector", "hybrid", "hybrid+rerank", "trimodal"]
+ALL_MODES = ["bm25", "dense", "vector", "hybrid", "hybrid+rerank"]
 
 # ── Benchmark Queries & Relevance Specs ───────────────────────────────────────
 # Each query defines:

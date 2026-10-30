@@ -25,13 +25,8 @@ services:
       # Fallback provider, used only when OPENROUTER_API_KEY is empty.
       - key: GEMINI_API_KEY
         sync: false
-      - key: ENABLE_TRIMODAL
-        value: "false"
-      # Cross-encoder off on 512 MB: keeps the copilot image turn under the memory limit.
+      # Cross-encoder off on 512 MB.
       - key: ENABLE_RERANKER
-        value: "false"
-      # Disable CLIP vision model loading on 512 MB to prevent OOM
-      - key: ENABLE_IMAGE_SEARCH
         value: "false"
       # Pin ONNX Runtime to a single thread so fastembed does not spawn a
       # per-core thread pool that pushes the 512 MB container into OOM.

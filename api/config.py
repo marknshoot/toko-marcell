@@ -59,9 +59,7 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = ""  # alias supported by the old code
 
     # ── Feature flags (memory-constrained deployments) ──────────────────────
-    ENABLE_TRIMODAL: bool = False
     ENABLE_RERANKER: bool = False
-    ENABLE_IMAGE_SEARCH: bool = True
 
     # ── Text embedding model switch (multilingual ID/EN default) ────────────
     TEXT_EMBED_MODEL: str = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
