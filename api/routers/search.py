@@ -453,6 +453,13 @@ async def search_by_image(
     limit: int = Query(24, ge=1, le=50),
 ):
     """Visual Search (Search by Image) using multimodal CLIP ViT-B/32 embeddings."""
+    settings = get_settings()
+    if not settings.ENABLE_IMAGE_SEARCH:
+        raise HTTPException(
+            status_code=503,
+            detail="Visual search is disabled on the 512MB free-tier demo to protect server SLA.",
+        )
+
     if not file.content_type or not file.content_type.startswith("image/"):
         raise HTTPException(
             status_code=400,
