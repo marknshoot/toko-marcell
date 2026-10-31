@@ -98,7 +98,7 @@ jobs:
 
       - name: Run guardrails, rate limiter & copilot unit tests
         run: |
-          python -m pytest api/tests/test_rate_limiter.py api/tests/test_guardrail_unit.py api/tests/test_copilot_tools_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_sizing_unit.py api/tests/test_knowledge_seed_unit.py -v
+          python -m pytest api/tests/test_rate_limiter.py api/tests/test_guardrail_unit.py api/tests/test_copilot_tools_unit.py api/tests/test_copilot_schemas_unit.py api/tests/test_copilot_llm_unit.py api/tests/test_sizing_unit.py api/tests/test_knowledge_seed_unit.py -v
 
       - name: Run full API test suite
         env:

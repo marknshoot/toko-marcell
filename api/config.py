@@ -52,8 +52,11 @@ class Settings(BaseSettings):
     LLM_INPUT_COST_PER_MILLION: float = 0.15
     LLM_OUTPUT_COST_PER_MILLION: float = 0.60
 
-    # ── LLM — OpenRouter (preferred) ────────────────────────────────────────
+    # ── LLM — OpenRouter / Mistral (preferred, OpenAI-compatible) ───────────
     OPENROUTER_API_KEY: str = ""
+    # Direct Mistral AI access (https://api.mistral.ai/v1) — used when
+    # LLM_BASE_URL points at Mistral or as a key fallback for OpenRouter.
+    MISTRAL_API_KEY: str = ""
     LLM_MODEL: str = "openrouter/free"
     LLM_BASE_URL: str = "https://openrouter.ai/api/v1"
     LLM_FALLBACK_MODELS: str = ""

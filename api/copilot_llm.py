@@ -2,7 +2,7 @@
 
 Builds the chat model used by ``create_agent`` with a provider fallback chain:
 
-    OpenRouter (primary)
+    OpenRouter / Mistral AI (primary, OpenAI-compatible)
       → optional generic OpenAI-compatible endpoint
         (LLM_FALLBACK_BASE_URL / LLM_FALLBACK_API_KEY / LLM_FALLBACK_MODEL)
       → Google Gemini
@@ -28,19 +28,38 @@ _LLM_LOGGED = False
 
 
 def _openrouter_model(temperature: float):
+    """Primary OpenAI-compatible model (OpenRouter or Mistral AI).
+
+    OpenRouter-only knobs (``extra_body`` model routing + attribution headers)
+    are sent *only* when the base URL is actually OpenRouter. Mistral's API
+    runs a strict Pydantic body validator and rejects unknown inputs with
+    HTTP 422 ("Extra inputs are not permitted"), so they are omitted there.
+    """
     from langchain_openai import ChatOpenAI
 
     settings = get_settings()
+    base_url = settings.LLM_BASE_URL or ""
+    base_url_lower = base_url.lower()
+    is_openrouter = "openrouter" in base_url_lower
+    if "mistral" in base_url_lower and settings.MISTRAL_API_KEY:
+        api_key = settings.MISTRAL_API_KEY
+    else:
+        api_key = settings.OPENROUTER_API_KEY or settings.MISTRAL_API_KEY
+
     return ChatOpenAI(
         model=settings.LLM_MODEL,
-        api_key=settings.OPENROUTER_API_KEY,
+        api_key=api_key,
         base_url=settings.LLM_BASE_URL,
         temperature=temperature,
-        extra_body={"models": _openrouter_routing_list()},
-        default_headers={
-            "HTTP-Referer": settings.LLM_SITE_URL,
-            "X-Title": "Toko Marcell AI Copilot",
-        },
+        extra_body={"models": _openrouter_routing_list()} if is_openrouter else None,
+        default_headers=(
+            {
+                "HTTP-Referer": settings.LLM_SITE_URL,
+                "X-Title": "Toko Marcell AI Copilot",
+            }
+            if is_openrouter
+            else None
+        ),
     )
 
 
@@ -109,6 +128,7 @@ def llm_available() -> bool:
     settings = get_settings()
     return bool(
         settings.OPENROUTER_API_KEY
+        or settings.MISTRAL_API_KEY
         or os.environ.get("LLM_FALLBACK_BASE_URL")
         or settings.GEMINI_API_KEY
         or settings.GOOGLE_API_KEY
@@ -130,8 +150,9 @@ def build_chat_model(temperature: float = 0.2, fake: bool | None = None):
 
     settings = get_settings()
     providers = []
-    if settings.OPENROUTER_API_KEY:
-        providers.append(("openrouter", _openrouter_model(temperature)))
+    if settings.OPENROUTER_API_KEY or settings.MISTRAL_API_KEY:
+        provider_name = "mistral" if "mistral" in (settings.LLM_BASE_URL or "").lower() else "openrouter"
+        providers.append((provider_name, _openrouter_model(temperature)))
     generic = _generic_openai_model(temperature)
     if generic is not None:
         providers.append(("generic", generic))
