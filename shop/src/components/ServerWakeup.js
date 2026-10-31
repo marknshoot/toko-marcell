@@ -51,7 +51,7 @@ export default function ServerWakeup() {
       aria-label="Server status indicator"
       className="fixed inset-0 z-50 flex flex-col items-center justify-center bg-background/70 backdrop-blur-md transition-all duration-300"
     >
-      <div className="flex flex-col items-center justify-center gap-4 text-center px-6 py-8 rounded-2xl bg-surface/80 border border-border/60 shadow-xl backdrop-blur-sm max-w-sm mx-4">
+      <div className="flex flex-col items-center justify-center gap-4 text-center max-w-sm mx-4">
         {status === "waking" && (
           <>
             {/* Animasi lingkaran loading (spinner) */}
