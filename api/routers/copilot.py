@@ -8,6 +8,7 @@ from config import get_settings
 from db import get_conn
 from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import JSONResponse, StreamingResponse
+from memory_trim import trim_memory
 from rate_limiter import check_copilot_rate_limit, check_write_rate_limit
 from schemas import CopilotChatV2In, CopilotFeedbackIn
 
@@ -74,6 +75,9 @@ async def copilot_chat(payload: CopilotChatV2In, request: Request):
         fake=fake,
     )
     result["thread_id"] = payload.thread_id
+    # glibc keeps freed LangGraph/tool allocations in its arenas; hand them back
+    # to the kernel now so a chatty session cannot creep into the 512 MB ceiling.
+    trim_memory()
     return result
 
 
@@ -111,17 +115,23 @@ async def copilot_chat_stream(payload: CopilotChatV2In, request: Request):
     checkpointer = None if fake else get_checkpointer()
 
     async def event_generator():
-        async for evt in stream_turn(
-            payload.message,
-            db_url=settings.DATABASE_URL,
-            session_id=payload.session_id,
-            page_asin=ctx.page_asin if ctx else None,
-            referenced_asins=ctx.referenced_asins if ctx else [],
-            thread_id=payload.thread_id,
-            checkpointer=checkpointer,
-            fake=fake,
-        ):
-            yield f"data: {json.dumps(evt)}\n\n"
+        # ``finally`` covers both endings of a streamed turn: the generator
+        # running out of events and the client disconnecting mid-stream (which
+        # raises ``GeneratorExit``/``CancelledError`` into the ``yield``).
+        try:
+            async for evt in stream_turn(
+                payload.message,
+                db_url=settings.DATABASE_URL,
+                session_id=payload.session_id,
+                page_asin=ctx.page_asin if ctx else None,
+                referenced_asins=ctx.referenced_asins if ctx else [],
+                thread_id=payload.thread_id,
+                checkpointer=checkpointer,
+                fake=fake,
+            ):
+                yield f"data: {json.dumps(evt)}\n\n"
+        finally:
+            trim_memory()
 
     return StreamingResponse(
         event_generator(),

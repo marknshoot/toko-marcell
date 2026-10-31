@@ -173,14 +173,13 @@ async def request_context_middleware(request: Request, call_next):
 
 # ── Include routers ──────────────────────────────────────────────────────────
 
-from routers import admin, auth, catalog, checkout, copilot, events, health, recs, reviews, search, sizing  # noqa: E402
+from routers import admin, auth, catalog, checkout, copilot, events, health, recs, reviews, search  # noqa: E402
 
 app.include_router(health.router)
 app.include_router(auth.router)
 app.include_router(admin.router)
 app.include_router(catalog.router)
 app.include_router(search.router)
-app.include_router(sizing.router)
 app.include_router(recs.router)
 app.include_router(reviews.router)
 app.include_router(events.router)

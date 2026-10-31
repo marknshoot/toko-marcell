@@ -86,9 +86,10 @@ Design rules:
 | `main.py` | App factory, lifespan, CORS, router registration |
 | `config.py` | Cached `Settings` (pydantic-settings), all environment variables |
 | `db.py` | Connection pool and dependency helpers |
+| `memory_trim.py` | `gc.collect()` + `malloc_trim(0)` anti-creep helper, called at the end of heavy request paths |
 | `migrate.py` | Alembic programmatic runner |
 | `search.py` | BM25 index, multilingual embeddings, RRF, ID→EN query rewrite |
-| `sizing.py` | Category → size-kind resolution and deterministic size advice |
+| `sizing.py` | Category → size-kind resolution and deterministic size advice, served through the `recommend_size` tool |
 | `reranker.py` | Optional cross-encoder stage-2 reranker |
 | `schemas.py` | Pydantic request/response contracts |
 | `agent_tools.py` | Copilot-facing catalog search and sizing adapters |
@@ -118,8 +119,6 @@ Base URL locally: `http://localhost:8001`. Interactive OpenAPI docs: `/docs`.
 | `GET` | `/search` | Hybrid, dense, or BM25 retrieval with filters and pagination |
 | `GET` | `/search/insights` | Search quality: top queries, zero-result queries, search-to-PDP rate |
 | `POST` | `/search/reindex` | Rebuild the in-memory BM25 index and clear facet cache (admin) |
-| `GET` | `/sizing/{asin}` | Size kind and required measurements for a product |
-| `POST` | `/sizing/recommend` | Deterministic size recommendation from body measurements |
 | `GET` | `/recs/popular` | Department popularity baseline |
 | `GET` | `/recs/item/{asin}` | Item-to-item recommendations with popularity fallback |
 | `GET` | `/recs/session` | Recommendations from the current anonymous session |
@@ -138,6 +137,11 @@ Base URL locally: `http://localhost:8001`. Interactive OpenAPI docs: `/docs`.
 | `POST` | `/auth/refresh` | Rotate the refresh token and return a fresh access JWT (reuse revokes the family) |
 | `POST` | `/auth/logout` | Revoke the presented refresh token and clear its cookie |
 | `GET` | `/auth/me` | Identity of the authenticated admin, re-read from `admin_users` |
+
+Sizing has **no REST endpoint**. `GET /sizing/{asin}` and `POST /sizing/recommend` were retired: both
+re-exposed the deterministic engine behind a second contract that had to be kept in sync with the
+agent's tool schema. Sizing is now handled natively by the copilot agent's `recommend_size` tool — see
+[Sizing](#sizing--the-recommend_size-copilot-tool).
 
 Common status codes:
 
@@ -239,15 +243,13 @@ Aggregates the `events` table over a window (`since_days`, default 30).
 `search_to_pdp_rate` is session-level: distinct sessions with a search event divided into sessions
 with both a search and a `view_product` event.
 
-### `POST /sizing/recommend`
+### Sizing — the `recommend_size` copilot tool
 
-Deterministic, zero-LLM sizing. Only the measurement required by the product's size kind is needed.
-
-```bash
-curl -s -X POST http://localhost:8001/sizing/recommend \
-  -H 'Content-Type: application/json' \
-  -d '{"asin":"B000YPIEXQ","foot_length_cm":27.0}'
-```
+Deterministic, zero-LLM sizing with no REST surface. `POST /sizing/recommend` and `GET /sizing/{asin}`
+were removed: both duplicated the core in `sizing.py` behind a contract that had to be kept in sync
+with the tool schema, and the storefront no longer renders a separate sizing widget. The copilot's
+`recommend_size` tool is the single entry point, so a shopper asks in chat and gets the same answer
+the engine would have returned over HTTP.
 
 ```json
 {
@@ -264,19 +266,20 @@ curl -s -X POST http://localhost:8001/sizing/recommend \
 }
 ```
 
-Request bounds (body-plausible, `extra="forbid"`):
+Only the measurement the product's size kind actually needs is requested, and the agent asks for it in
+conversation instead of a request body:
 
-| Field | Range |
+| `size_kind` | Measurement asked for |
 |---|---|
-| `height_cm` | 50–250 |
-| `weight_kg` | 10–400 |
-| `foot_length_cm` | 10–40 |
-| `waist_cm` | 30–200 |
-| `head_circumference_cm` | 30–100 |
+| `footwear` | `foot_length_cm` |
+| `tops` / `bottoms` / `dress` | `height_cm` (TB) + `weight_kg` (BB) |
+| `belt` | `waist_cm` |
+| `headwear` | `head_circumference_cm` |
+| `one_size` / `dimensions` / `unsupported` | none — reported as not applicable |
 
-Missing inputs or unsupported categories return `applicable=false` plus `required_inputs` — the
-engine never invents a size. `GET /sizing/{asin}` returns the same `size_kind` contract before any
-measurements are supplied.
+Missing inputs or unsupported categories return `applicable=false` plus `required_inputs` — the engine
+never invents a size. `sizing_info_for()` returns the same `size_kind` contract before any measurement
+is supplied, which is what the agent reads to decide which question to ask.
 
 ### `GET /recs/item/{asin}`
 
@@ -1041,8 +1044,8 @@ ingest. There is no sidecar, file tailer or heavyweight daemon to deploy.
 ### Rate limits
 
 - Copilot: `COPILOT_RATE_LIMIT_PER_MIN` and `COPILOT_RATE_LIMIT_PER_DAY` per client IP.
-- Writes (`/events`, `/checkout/confirm`, `/sizing/recommend`, `/copilot/feedback`): bounded per-IP
-  write limiter with `429` + `Retry-After`.
+- Writes (`/events`, `/checkout/confirm`, `/copilot/feedback`): bounded per-IP write limiter with
+  `429` + `Retry-After`.
 
 ### Admin protection
 
@@ -1056,6 +1059,23 @@ minutes; refresh tokens rotate on every use and are stored only as SHA-256 diges
 Render's free tier sleeps after inactivity. The storefront probes `/health` and renders a wake-up
 state for 30–50 seconds. The BM25 index and embedding model are loaded lazily, so `/health` and
 catalog browsing never wait for model initialization.
+
+### Memory anti-creep on a 512 MB instance
+
+Three controls keep RSS flat across a long-lived process instead of letting it drift into the OOM
+killer:
+
+- **`malloc_trim` on every heavy path** — `trim_memory()` in `memory_trim.py` runs `gc.collect()` and
+  then `malloc_trim(0)`, so glibc hands fully-free arena pages back to the kernel rather than holding
+  them for reuse. It is called at the end of `POST /copilot/chat`, in the `finally` of the
+  `/copilot/chat/stream` event generator (a client disconnecting mid-stream still trims), and after
+  `/search` has hydrated its result rows. Where the symbol does not exist (macOS, musl) the helper
+  degrades to a plain `gc.collect()` and returns `False`; it never raises into a response path.
+- **Bounded concurrency** — `render.yaml` starts Uvicorn with `--limit-concurrency 8 --backlog 64`, so
+  a burst queues at the accept layer with a fast `503` instead of admitting simultaneous turns whose
+  transcripts, JSON payloads and ONNX tensors all peak in the same cgroup.
+- **A small connection pool** — `DB_POOL_MAX=3` matches that ceiling and Neon's slot budget; extra
+  connections would only move the pressure from the network layer into memory.
 
 ---
 

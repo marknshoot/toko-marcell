@@ -6,7 +6,7 @@ services:
     plan: free
     region: singapore
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --limit-concurrency 8 --backlog 64
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
@@ -14,6 +14,11 @@ services:
         value: "*"
       - key: DATABASE_URL
         sync: false
+      # Three pooled connections: Neon's free tier caps slots, and 8 concurrent
+      # requests (--limit-concurrency) is the most the 512 MB ceiling can serve
+      # without a pool queue so deep it looks like a hang.
+      - key: DB_POOL_MAX
+        value: "3"
       # Preferred LLM provider. Set the actual key in the Render dashboard
       # (sync: false) so the secret is never committed to the repo.
       - key: OPENROUTER_API_KEY

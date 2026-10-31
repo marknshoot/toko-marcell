@@ -162,24 +162,3 @@ class CopilotThreadMessageV2(BaseModel):
 class CopilotThreadV2Out(BaseModel):
     thread_id: str
     messages: list[CopilotThreadMessageV2] = Field(default_factory=list)
-
-
-# ── Sizing ───────────────────────────────────────────────────────────────────
-
-class SizingRecommendIn(BaseModel):
-    """Size advice for one catalog product.
-
-    Only the measurement the category actually needs is required; the core
-    returns ``applicable=false`` with ``required_inputs`` when inputs are
-    missing. Bounds are deliberately body-plausible so a typo is rejected
-    loudly rather than mapped to a nonsense size.
-    """
-
-    model_config = ConfigDict(extra="forbid")
-
-    asin: str = Field(min_length=1, max_length=32)
-    height_cm: float | None = Field(default=None, ge=50, le=250)
-    weight_kg: float | None = Field(default=None, ge=10, le=400)
-    foot_length_cm: float | None = Field(default=None, ge=10, le=40)
-    waist_cm: float | None = Field(default=None, ge=30, le=200)
-    head_circumference_cm: float | None = Field(default=None, ge=30, le=100)

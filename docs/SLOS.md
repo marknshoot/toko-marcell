@@ -2,7 +2,7 @@
 
 This document defines the **targets** for Toko Marcell's latency, availability and copilot spend.
 It is a policy document, not a claim that every target is currently met: the committed telemetry
-covers copilot turn latency and cost, while text/image search, sizing latency and copilot
+covers copilot turn latency and cost, while text/image search, the in-process sizing tool and copilot
 time-to-first-token still need production instrumentation before an attainment percentage can be
 quoted.
 
@@ -26,13 +26,14 @@ outside the threshold.
 | Surface | Measurement point | p50 target | p95 target | Measured today? | Notes |
 |---|---|---:|---:|---|---|
 | `GET /search` (text) | API handler, warm BM25/vector index, database reachable | **< 35 ms** | **< 80 ms** | **Policy only** — no timing table | Excludes first-request model loading and cold Render/Neon wake-up. Report by mode (`bm25`, `dense`, `hybrid`) because each does a different amount of work. |
-| `POST /sizing/recommend` | API handler, deterministic chart lookup | **< 5 ms** | **< 15 ms** | **Policy only** — no timing table | No LLM and no external service; PostgreSQL product lookup is the only dependency. |
+| `POST /sizing/recommend` **(retired)** | API handler, deterministic chart lookup | **< 5 ms** | **< 15 ms** | **Retired** | Retired as an endpoint: sizing is now the in-process `recommend_size` copilot tool, so it is one step inside a copilot turn (no LLM call, no external service, PostgreSQL product lookup the only dependency) and its time is counted in copilot total-turn latency rather than a separate endpoint series. |
 | `POST /copilot/chat` TTFT | First streamed token on `/copilot/chat/stream` (or first token-equivalent response for non-streaming) | **< 1.2 s** | **< 3.0 s** | **Policy only** — total-turn p50/p95 is live, TTFT is not | Includes guardrail classification, tool calls and the first model token. Total turn completion is a separate, larger budget. |
 
 **Current instrumentation:** `/events/summary` and `/admin/kpi` expose copilot **total turn**
-`p50/p95` latency (`copilot_turns.latency_ms`). TTFT, `/search` and
-`/sizing/recommend` are not yet stored in a timing table, so **no latency-SLO attainment percentage
-is claimed** until those timings are emitted. Do not quote a target as a measured result.
+`p50/p95` latency (`copilot_turns.latency_ms`). TTFT and `/search` are not yet stored in a timing
+table, and sizing has no separate series because `recommend_size` runs in-process inside a turn, so
+**no latency-SLO attainment percentage is claimed** until those timings are emitted. Do not quote a
+target as a measured result.
 
 ### Latency alert thresholds
 
@@ -40,7 +41,7 @@ is claimed** until those timings are emitted. Do not quote a target as a measure
 |---|---|---|
 | Text search p95 | > 80 ms for 15 min | > 150 ms for 15 min |
 | Image search p95 | > 250 ms for 15 min | > 500 ms for 15 min |
-| Sizing p95 | > 15 ms for 15 min | > 40 ms for 15 min |
+| Sizing p95 (`recommend_size` tool) | > 15 ms for 15 min | > 40 ms for 15 min |
 | Copilot TTFT p95 | > 3.0 s for 15 min | > 6.0 s for 15 min |
 | Copilot total-turn p95 | > 8 s for 15 min | > 15 s for 15 min |
 
@@ -51,7 +52,7 @@ alert backend.
 
 | Service | Monthly availability SLO | Allowed failure budget (30 days) | Measured today? | What counts |
 |---|---:|---:|---|---|
-| Core REST (`/health`, `/products`, `/search`, `/sizing`, `/events`, `/checkout`, `/orders`) | **99.5%** | **0.5% ≈ 3 h 36 min** | **Policy only** — no hosted SLO calculation | 5xx, timeouts, database unavailability. Planned deploys should stay inside the budget, not reset it. |
+| Core REST (`/health`, `/products`, `/search`, `/events`, `/checkout`, `/orders`) | **99.5%** | **0.5% ≈ 3 h 36 min** | **Policy only** — no hosted SLO calculation | 5xx, timeouts, database unavailability. Planned deploys should stay inside the budget, not reset it. |
 | AI copilot (`/copilot/chat`, `/copilot/chat/stream`) | **99.0%** | **1.0% ≈ 7 h 12 min** | **Policy only** — outcomes logged, no hosted calculation | 5xx/502/503 after all provider fallbacks, provider timeout, or an unavailable LLM key. A guardrail-only canned reply is a **success**, because it is an intentional deterministic response. |
 
 **Error-budget policy:**
@@ -180,7 +181,7 @@ clear operation when consistency matters.
 
 ## 8. What is deliberately not claimed
 
-- No latency-SLO attainment percentage until search/sizing/TTFT timings are persisted.
+- No latency-SLO attainment percentage until search/sizing-tool/TTFT timings are persisted.
 - No real revenue, ROI or provider invoice. Orders and checkout are simulations.
 - No human-agent deflection or support-cost saving; there is no human queue.
 - No claim that fallback-provider pricing equals primary-provider pricing.

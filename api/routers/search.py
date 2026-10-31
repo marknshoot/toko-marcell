@@ -8,6 +8,7 @@ from typing import Literal
 from config import get_settings
 from db import get_conn
 from fastapi import APIRouter, HTTPException, Query, Request
+from memory_trim import trim_memory
 from psycopg import sql
 from search import (
     build_search_index,
@@ -234,6 +235,10 @@ def search_products(
             product = by_id.get(product_id)
             if product:
                 items.append({**product, "score": scores[product_id]})
+
+    # A hybrid query materializes a 100-candidate vector list plus hydrated
+    # product rows; trim before returning so those pages do not stay resident.
+    trim_memory()
 
     return {
         "items": items,

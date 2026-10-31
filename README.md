@@ -131,7 +131,7 @@ the architecture instead of being hidden behind a disclaimer.
 |---|---|---|---|
 | 1 | No public store-policy corpus | Indonesian fashion SOPs are not published anywhere | 34 authored policy chunks + 120 bilingual evaluation questions, gated in CI |
 | 2 | Free-tier LLM APIs | RPM/TPM caps, 0-token burst rejections, no vision, provider outages | Fallback model chain, 3-call loop cap, offline fake model, `Literal`-typed tool schemas |
-| 3 | Render free compute | 512 MB RAM, spin-down after 15 minutes | 124 MB pruned ONNX embedder, under 240 MB API footprint, explicit wake-up overlay |
+| 3 | Render free compute | 512 MB RAM, spin-down after 15 minutes | 124 MB pruned ONNX embedder, `malloc_trim` + bounded concurrency anti-creep, under 240 MB API footprint, explicit wake-up overlay |
 | 4 | Neon free Postgres | Auto-suspend after 5 minutes, 1–3 s wake handshake, capped connections | `psycopg_pool` bounded to 1–5 connections, dual `/health` `SELECT 1;` probe |
 | 5 | Amazon Fashion dataset | No inventory counts, USD-only prices, no live traffic | Synthesized IDR pricing, CF + popularity fallback, hybrid BM25 + pgvector |
 
@@ -187,6 +187,11 @@ start.
 - **A measured memory budget**: the API baseline stays under **240 MB** (~80 MB with dense search
   disabled, ~380 MB for the full hybrid dense + lexical stack), so hybrid retrieval runs inside the
   ceiling instead of being cut for safety.
+- **Anti-creep trimming rather than a bigger box**: `malloc_trim(0)` runs after every copilot turn and
+  every `/search` response (`api/memory_trim.py`), handing free glibc arena pages back to the kernel,
+  while Uvicorn's `--limit-concurrency 8` and `DB_POOL_MAX=3` stop a burst of concurrent turns from
+  stacking their buffers in the same 512 MB cgroup. Together they keep RSS flat across a long-lived
+  process instead of drifting into the OOM killer.
 - **Explicit `ServerWakeup` overlay**: a cold start is surfaced, never silent — the storefront shows
   the waking state, polls `/health`, and reveals the catalog once the API and database answer.
 
@@ -315,13 +320,16 @@ size recommendation in seconds, without waiting for a human or trusting a halluc
   `belt`, `headwear`, plus `dress`, `one_size`, `dimensions`, and an explicit `unsupported` class.
 - **Footwear** uses the **ISO 9407 Mondopoint** foot-length standard with gendered US/UK/EU
   conversion tables. **Tops, bottoms, belts, and headwear** use authored, gendered size charts.
-- The engine is **zero-LLM** and deterministic: `POST /sizing/recommend` takes body measurements and
-  returns `applicable`, `size_kind`, `recommendation`, `source`, `confidence`, `required_inputs`, and a
-  disclaimer. Missing measurements return `applicable=false` with the exact inputs required — never a
-  guessed size.
-- The same core powers the copilot's `recommend_size` tool and the product-page sizing widget, so
-  there is one source of truth for fit advice.
-- `GET /sizing/{asin}` tells the frontend which measurements a product actually needs.
+- The engine is **zero-LLM** and deterministic: `recommend_size` in `sizing.py` takes body
+  measurements and returns `applicable`, `size_kind`, `recommendation`, `source`, `confidence`,
+  `required_inputs`, and a disclaimer. Missing measurements return `applicable=false` with the exact
+  inputs required — never a guessed size.
+- Sizing is **served natively by the copilot agent's `recommend_size` tool** rather than by dedicated
+  REST endpoints. The former `POST /sizing/recommend` and `GET /sizing/{asin}` routes were retired:
+  both re-exposed the same deterministic core behind a second contract that had to be kept in sync
+  with the tool schema, so there is now exactly one entry point for fit advice.
+- `sizing_info_for()` still describes which measurements a category needs, and the agent reads that
+  contract to ask for precisely those inputs in conversation.
 
 **Why deterministic:** size advice is a liability surface. A rule engine that says "I need your foot
 length" is more trustworthy than a language model that invents a size.
@@ -746,8 +754,8 @@ docker compose down       # stop the stack
 
 ### What works without an LLM key
 
-Catalog browsing, department filters, **hybrid text search**, recommendations, reviews, the sizing
-widget, and the demo checkout all run against the seeded database. Without a key, `/copilot/chat`
+Catalog browsing, department filters, **hybrid text search**, recommendations, reviews, and the demo
+checkout all run against the seeded database. Without a key, `/copilot/chat`
 returns a clean `503` instead of crashing, and the copilot panel explains that the assistant is
 temporarily unavailable.
 
@@ -792,11 +800,11 @@ The full reference is in [`api/README.md`](./api/README.md#environment-variables
 ```
 toko-marcell/
 ├── api/                    FastAPI service, LangGraph agent, Alembic migrations, tests
-│   ├── routers/            HTTP surface: search, catalog, sizing, recs, copilot, admin, checkout
+│   ├── routers/            HTTP surface: search, catalog, recs, copilot, admin, checkout
 │   ├── knowledge/          Authored store policies, size charts, category → size-kind map
 │   ├── migrations/         Versioned schema (0001 → 0006)
 │   └── tests/              Unit + integration suites
-├── shop/                   Next.js storefront, copilot UI, sizing widget, /admin/kpi
+├── shop/                   Next.js storefront, copilot UI, /admin/kpi
 ├── pipelines/              Offline catalog build, embeddings, recommendation training, evaluations
 │   └── results/            Committed benchmark artifacts
 ├── data/seed/              PostgreSQL seed dump (catalog, reviews, interactions, knowledge)

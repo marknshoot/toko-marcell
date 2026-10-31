@@ -522,7 +522,7 @@ persisted as timing metrics. Do not quote a target as a measured result.
 | SLO | Target | Measurement status |
 |---|---|---|
 | Text `/search` latency | p50 < 35 ms · p95 < 80 ms | Target only; no timing table yet |
-| `/sizing/recommend` latency | p50 < 5 ms · p95 < 15 ms | Target only; no timing table yet |
+| `/sizing/recommend` latency | p50 < 5 ms · p95 < 15 ms | **Retired** — sizing now runs in-process through the copilot's `recommend_size` tool, so its cost sits inside a copilot turn instead of a dedicated endpoint |
 | Copilot TTFT | p50 < 1.2 s · p95 < 3.0 s | Target only; total-turn p50/p95 is live, TTFT is not |
 | Core REST availability | 99.5% (30-day) | No hosted SLO calculation committed |
 | AI copilot availability | 99.0% (30-day) | No hosted SLO calculation committed |
@@ -633,7 +633,7 @@ These are useful for trust and diagnosis, but they are not north-star or revenue
 | 8 | Dictionary and business framing only; no new metric is computed. |
 | 9 (shipped) | AOV/revenue from `orders`; `copilot_turns` logging (latency, tools, guardrail, outcome, tokens); `copilot_feedback` + thumbs UI; copilot-user vs non-user cohorts (descriptive); `copilot_quality` aggregate (unanswered/guardrail/latency/thumbs). |
 | 10 (shipped) | `outcome='unanswered'` logging through `flag_unanswered` (question stored, 300-char cap); copilot refocused on sizing, policy and outfit jobs. |
-| 10b (shipped) | Category-aware sizing: every seed `(department, category)` pair mapped to an explicit size kind; tops/bottoms/dress use authored men's/women's TB/BB charts, footwear/waist/belt/headwear use cited standards, brand offsets marked `source=demo`; `GET /sizing/{asin}` + `POST /sizing/recommend` and a no-LLM product-page advisor. **No fit-accuracy metric** — coverage is structural, not a quality claim. |
+| 10b (shipped) | Category-aware sizing: every seed `(department, category)` pair mapped to an explicit size kind; tops/bottoms/dress use authored men's/women's TB/BB charts, footwear/waist/belt/headwear use cited standards, brand offsets marked `source=demo`. The engine was later **unified into the copilot's `recommend_size` tool**, and the redundant `GET /sizing/{asin}` + `POST /sizing/recommend` REST endpoints plus the no-LLM product-page advisor were retired around it. **No fit-accuracy metric** — coverage is structural, not a quality claim. |
 | 11 (shipped) | `GET /search/insights`: top queries, top zero-result queries, zero-result rate and session-level search-to-PDP; deterministic ID→EN rewrite retry on zero-result `/search` and `search_catalog`. |
 | 12 (shipped) | Token-gated `GET /admin/kpi` and `/admin/kpi` page: confirmed-order revenue/AOV, session funnel, copilot vs non-copilot cohorts, conversation-level deflection, turn outcomes, search health, p50/p95 and a mandatory `synthetic` badge. Cost is added in phase 13. |
 | 13 (shipped) | Per-turn cost from configurable per-million prices; `unit_economics` cost per turn / conversation / resolved conversation / assisted order; `GUARDRAIL_LLM_MODE=ambiguous`; 10-minute bounded policy-RAG cache; [`SLOS.md`](./SLOS.md) latency, availability, cost and fallback targets. Attainment is not yet instrumented for search/sizing/TTFT. |

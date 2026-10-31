@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import sys
+from contextlib import contextmanager
 from pathlib import Path
 
 API_DIR = Path(__file__).resolve().parent.parent
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 from logging_config import JSONLogFormatter, setup_logging
 from logging_context import ctx_request_id, ctx_span_id, ctx_trace_id
 from main import app
+from routers import health as health_module
 
 REQUIRED_FIELDS = {
     "timestamp",
@@ -28,6 +30,21 @@ REQUIRED_FIELDS = {
 }
 
 TIMESTAMP_RE = re.compile(r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$")
+
+
+@contextmanager
+def _fake_db_conn():
+    """Stand-in for ``routers.health.get_conn``.
+
+    The middleware assertions are about request/trace context, not the database,
+    and the suite must pass on a machine where local Postgres is not running.
+    """
+
+    class _Conn:
+        def execute(self, query, *args, **kwargs):
+            return None
+
+    yield _Conn()
 
 
 def _formatted(record: logging.LogRecord) -> dict:
@@ -102,7 +119,10 @@ def test_setup_logging_configures_root_and_uvicorn():
         assert logger.propagate is False
 
 
-def test_middleware_sets_request_and_trace_context(caplog):
+def test_middleware_sets_request_and_trace_context(caplog, monkeypatch):
+    # ``/health`` must answer 200 without a live database, so the probe is faked.
+    monkeypatch.setattr(health_module, "get_conn", _fake_db_conn)
+
     client = TestClient(app)
     trace_id = "c" * 32
     span_id = "d" * 16

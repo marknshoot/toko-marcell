@@ -340,15 +340,14 @@ sequenceDiagram
 npm test
 ```
 
-**38 tests across 7 suites**:
+**36 tests across 6 suites**:
 
 | Suite | Tests | Covers |
 |---|:---:|---|
 | `components/__tests__/CartProvider.test.jsx` | 7 | empty cart, add, duplicate merge, quantity, remove-at-zero, clear, multi-item subtotal |
 | `components/__tests__/AddToCartButton.test.jsx` | 3 | add with quantity, navigate home, existing-quantity display |
-| `components/__tests__/ServerWakeup.test.jsx` | 2 | ready indicator on healthy check, spinner while waiting |
-| `components/__tests__/CopilotChat.test.jsx` | 10 | no image-upload or TB/BB form, starter chips only when empty, product-page chips, `copilot:open` event attaches product, paperclip search & attach, pulsing `"Sedang berpikir..."` + streaming markdown, `add_to_cart` ui_action, numbered product cards, reset deletes thread |
-| `components/__tests__/SizeAdvisor.test.jsx` | 7 | height/weight for tops, foot length for footwear, waist for belts, head circumference for hats, dimensions note, unsupported category without a guess, one-size note |
+| `components/__tests__/ServerWakeup.test.jsx` | 6 | waking indicator with spinner, ready indicator on healthy check, dual Render/Neon payload from `checkHealth`, 2.5 s polling until the database wakes, error fallback when neither answers, retry from the error state |
+| `components/__tests__/CopilotChat.test.jsx` | 11 | no image-upload or TB/BB form, starter chips only when empty, product-page chips, `copilot:open` event attaches product, paperclip search & attach, pulsing `"Sedang berpikir..."` + streaming markdown, `add_to_cart` ui_action, numbered product cards, dedicated outfit card with add-all-to-cart, thumbs feedback, reset deletes thread |
 | `app/admin/kpi/__tests__/page.test.jsx` | 7 | demo login renders KPIs, manual login, window switch and refresh refetch, sign out, 401 returns to the login gate, tab-restored session, legacy `?token=` consumption |
 | `lib/__tests__/session.test.js` | 2 | id persists in `sessionStorage`, stable across calls |
 
