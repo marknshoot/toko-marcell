@@ -27,7 +27,8 @@ def api_request(method, path, data=None):
 def test_health_check():
     status, body = api_request("GET", "/health")
     assert status == 200
-    assert body == {"status": "ok"}
+    assert body["status"] == "ok"
+    assert body.get("services", {}).get("database") == "ok"
 
 
 def test_categories_facets():

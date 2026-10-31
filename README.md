@@ -16,8 +16,9 @@ application suites and the 54-scenario copilot benchmark are gated in continuous
 notebook.
 
 The catalog contains **4,670 curated products**, **46,700 reviews**, and **3.36 million interaction
-records**. The shopper-facing experience is served by Next.js on Vercel; the FastAPI backend,
-PostgreSQL 16 + pgvector, and LangGraph agent runtime run in Docker locally and on Render.
+records**. The shopper-facing experience is served by Next.js on Vercel; the FastAPI and LangGraph
+agent runtime are Dockerised locally and deployed to Render, against PostgreSQL 16 + pgvector on Neon
+Serverless.
 
 | Destination | Link |
 |---|---|
@@ -27,14 +28,22 @@ PostgreSQL 16 + pgvector, and LangGraph agent runtime run in Docker locally and 
 | **Health check** | [https://toko-marcell-api.onrender.com/health](https://toko-marcell-api.onrender.com/health) |
 | **Hugging Face embedding model** | [`Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx`](https://huggingface.co/Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx) — 124 MB pruned multilingual ONNX |
 
-> The backend runs on Render's free tier and sleeps after inactivity. The first request can take
-> 30–50 seconds; the storefront shows an explicit wake-up state instead of failing silently.
+> **Both halves of the backend sleep.** The FastAPI service runs on Render's free tier, which spins
+> down after 15 minutes of inactivity, and PostgreSQL 16 + pgvector runs on Neon Serverless, whose
+> compute auto-suspends after 5 minutes. A first request can therefore take 30–50 seconds, so the
+> storefront shows an explicit **dual wake-up state** — Render API *and* Neon database — that only
+> clears once `/health` reports both awake, instead of failing silently.
 
 ---
 
 ## Contents
 
 1. [The Business Problem & Commercial Value](#1-the-business-problem--commercial-value)
+   - 1.1 [Why Toko Marcell exists](#11-why-toko-marcell-exists)
+   - 1.2 [Why the AI Sales Copilot is needed](#12-why-the-ai-sales-copilot-is-needed)
+   - 1.3 [Why the Recommendation System is needed](#13-why-the-recommendation-system-is-needed)
+   - 1.4 [Unit Economics Discipline](#14-unit-economics-discipline)
+   - 1.5 [Design Constraints & Free-Tier Architectural Realities](#15-design-constraints--free-tier-architectural-realities)
 2. [The Six Core Technical Systems](#2-the-six-core-technical-systems)
 3. [Empirical Benchmarks & Verification](#3-empirical-benchmarks--verification)
 4. [Data Architecture & Schema](#4-data-architecture--schema)
@@ -111,6 +120,117 @@ An **assisted order** is an order whose session had at least one copilot turn. C
 from configured per-million-token prices and recorded per turn in `copilot_turns.cost_usd`. The
 dashboard reports cost per turn, per conversation, per resolved conversation, and per assisted order
 side by side with conversion — so a cheap-but-useless copilot cannot hide.
+
+### 1.5 Design Constraints & Free-Tier Architectural Realities
+
+Toko Marcell runs a full retrieval stack, an agent runtime, and a managed database on free tiers, with
+no paid inference in the request path. That is a design input, not a footnote: five realities shaped
+the architecture instead of being hidden behind a disclaimer.
+
+| # | Constraint | Hard limit | Architectural response |
+|---|---|---|---|
+| 1 | No public store-policy corpus | Indonesian fashion SOPs are not published anywhere | 34 authored policy chunks + 120 bilingual evaluation questions, gated in CI |
+| 2 | Free-tier LLM APIs | RPM/TPM caps, 0-token burst rejections, no vision, provider outages | Fallback model chain, 3-call loop cap, offline fake model, `Literal`-typed tool schemas |
+| 3 | Render free compute | 512 MB RAM, spin-down after 15 minutes | 124 MB pruned ONNX embedder, under 240 MB API footprint, explicit wake-up overlay |
+| 4 | Neon free Postgres | Auto-suspend after 5 minutes, 1–3 s wake handshake, capped connections | `psycopg_pool` bounded to 1–5 connections, dual `/health` `SELECT 1;` probe |
+| 5 | Amazon Fashion dataset | No inventory counts, USD-only prices, no live traffic | Synthesized IDR pricing, CF + popularity fallback, hybrid BM25 + pgvector |
+
+#### 1. No public e-commerce store knowledge base — synthetic domain authoring
+
+**Why it was needed.** Indonesian fashion retailers do not publish their raw internal operational
+policies. Shipping tiers, return windows, hygiene exclusions, and payment rules live in internal SOPs
+and WhatsApp templates, so the public web holds nothing to retrieve — and evaluating RAG on someone
+else's FAQ would measure world knowledge instead of retrieval quality.
+
+**Solution.** Authored **34 realistic Markdown policy chunks** covering shipping tiers (Rp 15.000
+Jabodetabek, Rp 25.000 outside Java, free above Rp 300.000), the 7-day sizing and return guarantee,
+hygiene exclusions on worn or washed goods, payment channels including VA/QRIS and the COD
+availability rule, producer warranties, and category sizing rules — then paired them with **120
+bilingual hypothetical shopper questions** (Indonesian, English, and code-switched) so RAG recall is
+measurable in CI without live shoppers. The suite holds **1.0000 context recall** and
+**0.9167 context precision** at `k=3`.
+
+#### 2. LLM free-tier API limits & cost guardrails
+
+**Constraints.** Free provider tiers enforce strict rate limits (requests per minute and tokens per
+minute, plus occasional 0-token burst caps that reject a request before it produces anything), offer
+no multimodal vision support for outfit-photo inputs, and are subject to provider outages.
+
+**Solutions.**
+
+- **Multi-tier fallback chain** (`LLM_FALLBACK_MODELS`): the configured model is tried first and the
+  chain is deduplicated, so a `429`, a quota cap, or a dead endpoint degrades to the next tier instead
+  of failing the shopper's turn.
+- **Bounded tool loops**: `ModelCallLimitMiddleware(run_limit=3, exit_behavior="end")` caps model
+  calls per turn, which keeps a small model's tool loop finite and the p95 latency budget provable.
+- **Deterministic `COPILOT_FAKE_LLM=1`**: a fake tool-calling model lets the 54-scenario copilot suite
+  and the application tests run offline in CI — no key, no quota, no flaky provider.
+- **MCP-style hardened Pydantic schemas**: tool arguments are validated against typed fields and
+  `Literal` enums rather than free-form strings, so a small model such as `ministral-8b-latest` cannot
+  hallucinate an invalid department or filter and burn a retry; malformed arguments fail validation
+  before they reach SQL.
+
+#### 3. Render free-tier compute — 512 MB RAM and cold starts
+
+**Constraints.** The free instance has a **512 MB** memory ceiling and spins down after
+**15 minutes** of inactivity. A PyTorch/Transformers embedding stack easily exceeds 1.5 GB and is
+killed by the OOM killer mid-request; the next request after a spin-down pays a 30–50 second cold
+start.
+
+**Solutions.**
+
+- **Quantized, pruned ONNX embedder**: `paraphrase-multilingual-MiniLM-L12-v2` is pruned to **124 MB**
+  and served through **ONNX Runtime + FastEmbed**
+  ([`Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx`](https://huggingface.co/Marcell-Kristianto/paraphrase-multilingual-MiniLM-L12-v2-id-en-onnx))
+  instead of PyTorch, with a single ONNX thread, `enable_cpu_mem_arena=False`, and the cross-encoder
+  reranker disabled on this host.
+- **A measured memory budget**: the API baseline stays under **240 MB** (~80 MB with dense search
+  disabled, ~380 MB for the full hybrid dense + lexical stack), so hybrid retrieval runs inside the
+  ceiling instead of being cut for safety.
+- **Explicit `ServerWakeup` overlay**: a cold start is surfaced, never silent — the storefront shows
+  the waking state, polls `/health`, and reveals the catalog once the API and database answer.
+
+#### 4. Neon Serverless PostgreSQL — auto-suspend and connection pooling
+
+**Constraints.** Neon's free tier auto-suspends compute after **5 minutes** of inactivity and then
+charges a **1–3 second** wake handshake on the next query. It also limits available connection slots,
+so a per-request `connect()` or an oversized pool is simply denied.
+
+**Solutions.**
+
+- **A bounded connection pool**: `psycopg_pool.ConnectionPool` with `DB_POOL_MIN=1` and
+  `DB_POOL_MAX=5`, opened once in the FastAPI lifespan and closed on shutdown. Outside the server
+  (pipelines, standalone tests) `get_conn()` falls back to a one-shot `psycopg.connect()`, so no
+  component depends on the pool existing.
+- **A dual-backend health probe**: `GET /health` executes `SELECT 1;` through that same pool and
+  reports the two platforms separately:
+  `{"status": "ok", "services": {"api": "ok", "database": "ok"}}` when both answer, and a `503`
+  `{"status": "waking", "services": {"api": "ok", "database": "waking"}}` payload while Neon is
+  suspended. The storefront polls that contract and only dismisses the waking state once **both**
+  Render and Neon are awake, so a live API can never mask a suspended database.
+
+#### 5. Amazon Fashion dataset — cold start and synthetic pricing
+
+**Constraints.** The public Amazon Reviews 2018 (Clothing, Shoes & Jewelry) corpus has no real-time
+inventory counts and quotes prices in USD, while an Indonesian storefront must show stock and IDR
+totals. Because the dataset is historical, a first-time visitor also has no interaction history to
+recommend from.
+
+**Solutions.**
+
+- **Synthesized IDR pricing**: prices are converted at a pinned USD→IDR rate and rounded to
+  shelf-ready hundreds (retail-psychological rounding), with `price_idr` as the server-authoritative
+  column and `price_usd` kept only as provenance. Checkout re-reads the server price, so a tampered
+  client cannot change the total.
+- **Cold-start recommendations**: item-to-item collaborative filtering over the interaction matrix,
+  with **departmental popularity** as the documented fallback for items and sessions without enough
+  co-occurrence signal — a new visitor still sees a useful shelf instead of an empty rail.
+- **Code-switched retrieval**: hybrid BM25 + dense pgvector fused with RRF, so `celana jeans levis
+  501` and `running shoes pria` both resolve against the catalog the storefront is actually showing.
+
+**Net trade-off.** The stack is slower on a cold start and capped at one embedding thread; in
+exchange it is free, reproducible, and cheap enough to benchmark on every commit — the same limits that
+constrain it are what make the CI gates affordable.
 
 ---
 

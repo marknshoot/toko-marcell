@@ -1,47 +1,131 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { checkHealth } from "../lib/api";
+
+// Cold start overlay timings.  Render's free tier and Neon's scale-to-zero
+// both take tens of seconds, so the overlay only appears when a probe is slow
+// and then keeps polling until both services answer.
+const WAKE_INDICATOR_DELAY_MS = 600;
+const POLL_INTERVAL_MS = 2500;
+const MAX_WAIT_MS = 65000;
+const READY_HIDE_DELAY_MS = 2500;
+
+function clearTimer(timerRef, key) {
+  const id = timerRef.current[key];
+  if (id) {
+    clearTimeout(id);
+    timerRef.current[key] = null;
+  }
+}
+
+/** Drop every pending timer and release a poll loop parked in sleep(). */
+function cancelPending(timerRef) {
+  clearTimer(timerRef, "wake");
+  clearTimer(timerRef, "hide");
+  clearTimer(timerRef, "poll");
+  const release = timerRef.current.release;
+  timerRef.current.release = null;
+  if (release) release();
+}
 
 export default function ServerWakeup() {
   const [status, setStatus] = useState("idle");
 
-  useEffect(() => {
-    let cancelled = false;
-    let wakeTimer = null;
+  const statusRef = useRef("idle");
+  const runIdRef = useRef(0);
+  // wake: cold-start indicator delay, hide: ready → idle fade out,
+  // poll: sleep between probes, release: resolver of that sleep.
+  const timerRef = useRef({ wake: null, hide: null, poll: null, release: null });
 
-    async function wake() {
-      wakeTimer = setTimeout(() => {
-        if (!cancelled) {
-          setStatus("waking");
+  const updateStatus = useCallback((next) => {
+    statusRef.current = next;
+    setStatus(next);
+  }, []);
+
+  /** Cancel the in-flight poll loop and leave the overlay idle. */
+  const stop = useCallback(() => {
+    runIdRef.current += 1;
+    cancelPending(timerRef);
+  }, []);
+
+  const wake = useCallback(async () => {
+    // Bumping the run id cancels any loop still running from a previous call
+    // (mount, or the "Coba lagi" retry button).
+    const runId = ++runIdRef.current;
+    const isActive = () => runId === runIdRef.current;
+
+    const sleep = (ms) =>
+      new Promise((resolve) => {
+        timerRef.current.release = resolve;
+        timerRef.current.poll = setTimeout(() => {
+          timerRef.current.poll = null;
+          timerRef.current.release = null;
+          resolve();
+        }, ms);
+      });
+
+    cancelPending(timerRef);
+
+    if (statusRef.current === "error") {
+      // Retry: give instant feedback instead of waiting out the cold-start delay.
+      updateStatus("waking");
+    } else {
+      timerRef.current.wake = setTimeout(() => {
+        timerRef.current.wake = null;
+        if (isActive()) {
+          updateStatus("waking");
         }
-      }, 600);
-
-      const ok = await checkHealth();
-
-      if (cancelled) return;
-      if (wakeTimer) clearTimeout(wakeTimer);
-
-      if (ok) {
-        setStatus("ready");
-        const hideTimer = setTimeout(() => {
-          if (!cancelled) {
-            setStatus("idle");
-          }
-        }, 2500);
-        return () => clearTimeout(hideTimer);
-      } else {
-        setStatus("error");
-      }
+      }, WAKE_INDICATOR_DELAY_MS);
     }
 
-    wake();
+    const deadline = Date.now() + MAX_WAIT_MS;
 
-    return () => {
-      cancelled = true;
-      if (wakeTimer) clearTimeout(wakeTimer);
-    };
-  }, []);
+    while (isActive() && Date.now() < deadline) {
+      let res;
+      try {
+        res = await checkHealth();
+      } catch {
+        res = false;
+      }
+
+      if (!isActive()) return;
+
+      // checkHealth() returns { ok, api, database, data }; older booleans
+      // (and test doubles) are still understood.
+      const isReady = typeof res === "boolean" ? res : Boolean(res?.ok);
+
+      if (isReady) {
+        // A fast answer means there was no cold start, so status is still
+        // "idle" and the overlay never flashes.
+        if (timerRef.current.wake) {
+          clearTimer(timerRef, "wake");
+        }
+        if (statusRef.current === "waking") {
+          updateStatus("ready");
+          timerRef.current.hide = setTimeout(() => {
+            timerRef.current.hide = null;
+            if (isActive()) {
+              updateStatus("idle");
+            }
+          }, READY_HIDE_DELAY_MS);
+        }
+        return;
+      }
+
+      if (Date.now() >= deadline) break;
+      await sleep(POLL_INTERVAL_MS);
+    }
+
+    if (!isActive()) return;
+    clearTimer(timerRef, "wake");
+    updateStatus("error");
+  }, [updateStatus]);
+
+  useEffect(() => {
+    wake();
+    return stop;
+  }, [wake, stop]);
 
   if (status === "idle") return null;
 
@@ -61,10 +145,10 @@ export default function ServerWakeup() {
             />
             <div className="flex flex-col items-center gap-1.5">
               <span className="text-base font-semibold text-foreground">
-                Membangunkan server...
+                Membangunkan server &amp; database...
               </span>
               <span className="text-xs text-muted">
-                Render free tier cold start (~30-50 dtk)
+                Render API &amp; Neon Postgres cold start (~30–50 dtk pada free tier)
               </span>
             </div>
           </>
@@ -86,10 +170,10 @@ export default function ServerWakeup() {
             </div>
             <div className="flex flex-col items-center gap-1">
               <span className="text-base font-semibold text-foreground">
-                Server siap &amp; aktif!
+                Server &amp; Database siap &amp; aktif!
               </span>
               <span className="text-xs text-muted">
-                Katalog siap digunakan.
+                Katalog &amp; AI Copilot siap digunakan.
               </span>
             </div>
           </>
@@ -115,17 +199,17 @@ export default function ServerWakeup() {
             </div>
             <div className="flex flex-col items-center gap-2">
               <span className="text-sm font-semibold text-foreground">
-                Server sedang bangun...
+                Server atau database sedang bangun...
               </span>
               <p className="text-xs text-muted">
-                Server membutuhkan waktu lebih lama untuk menyala.
+                Render atau Neon Serverless Postgres membutuhkan waktu lebih lama
+                untuk menyala.
               </p>
               <div className="mt-2 flex items-center gap-3">
                 <button
                   type="button"
                   onClick={() => {
-                    setStatus("waking");
-                    checkHealth().then((ok) => setStatus(ok ? "ready" : "error"));
+                    wake();
                   }}
                   className="rounded-md bg-foreground px-4 py-1.5 text-xs font-medium text-background hover:opacity-90 cursor-pointer transition-opacity"
                 >
@@ -133,7 +217,10 @@ export default function ServerWakeup() {
                 </button>
                 <button
                   type="button"
-                  onClick={() => setStatus("idle")}
+                  onClick={() => {
+                    stop();
+                    updateStatus("idle");
+                  }}
                   className="rounded-md border border-border px-3 py-1.5 text-xs font-medium text-muted hover:text-foreground cursor-pointer transition-colors"
                 >
                   Tutup

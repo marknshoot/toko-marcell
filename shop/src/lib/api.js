@@ -4,16 +4,53 @@ const API_URL =
     ? process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
     : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
+/**
+ * Probe API + database availability.
+ *
+ * Render hosts the API and Neon hosts Postgres, so the two come up (and wake
+ * from scale-to-zero) independently.  The backend reports them separately:
+ *
+ *   { status: "ok", services: { api: "ok", database: "ok" } }
+ *   { status: "waking", services: { api: "ok", database: "waking" }, error: ... }
+ *
+ * Returns ``{ ok, api, database, data }``: ``ok`` gates the whole app, ``api``
+ * says whether the API answered at all and ``database`` whether Postgres was
+ * ready (a waking Neon compute answers 503 with ``status: "waking"``).
+ */
 export async function checkHealth() {
   try {
     const response = await fetch(`${API_URL}/health`, { cache: "no-store" });
-    return response.ok;
+
+    // The API answered, so Render is up; anything else means the database
+    // (or the API itself) is not ready yet.
+    if (!response.ok) {
+      return { ok: false, api: true, database: false, data: null };
+    }
+
+    let data = null;
+    try {
+      data = await response.json();
+    } catch {
+      data = null;
+    }
+
+    const statusOk = data?.status === "ok";
+    // Backwards compatible with APIs that predate the dual probe and only
+    // report ``status``: trust it when ``services`` is absent.
+    const databaseOk = data?.services ? data.services.database === "ok" : statusOk;
+
+    return { ok: statusOk && databaseOk, api: true, database: databaseOk, data };
   } catch {
+    // Network error (DNS, CORS, timeout): /health never answered.  A cheap
+    // read tells us whether the API is reachable but just unhappy.
     try {
       const fallback = await fetch(`${API_URL}/categories`, { cache: "no-store" });
-      return fallback.ok;
+      if (fallback.ok) {
+        return { ok: true, api: true, database: true };
+      }
+      return { ok: false, api: false, database: false };
     } catch {
-      return false;
+      return { ok: false, api: false, database: false };
     }
   }
 }
