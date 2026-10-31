@@ -1,4 +1,4 @@
-import { render, fireEvent, waitFor, act } from "@testing-library/react";
+import { render, fireEvent, waitFor, act, within } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import CopilotChat from "../CopilotChat";
 import { CartProvider } from "../CartProvider";
@@ -261,6 +261,92 @@ describe("CopilotChat v2", () => {
     expect(getByText("📎 Lampirkan")).toBeTruthy();
     expect(queryByText("Bandingkan")).toBeNull();
     expect(queryByText("Ukuran?")).toBeNull();
+  });
+
+  it("renders dedicated outfit card when outfit payload is present and allows adding all items to cart", async () => {
+    vi.spyOn(api, "streamCopilotMessage").mockResolvedValue({
+      reply: "Ini set outfit pilihan kak",
+      thread_id: "t1",
+      products: [
+        {
+          ref: 1,
+          asin: "B01",
+          id: 11,
+          title: "Flannel Shirt",
+          priceIdr: 250000,
+          brand: "Volcom",
+        },
+      ],
+      outfit: {
+        total_idr: 850000,
+        budget_idr: 1000000,
+        slots: {
+          top: {
+            ref: 1,
+            asin: "B01",
+            id: 11,
+            title: "Flannel Shirt",
+            priceIdr: 250000,
+            imageUrl: "https://example.com/flannel.jpg",
+          },
+          bottom: {
+            ref: 2,
+            asin: "B02",
+            id: 12,
+            title: "Chino Pant",
+            priceIdr: 300000,
+            imageUrl: "https://example.com/chino.jpg",
+          },
+          shoes: {
+            ref: 3,
+            asin: "B03",
+            id: 13,
+            title: "Canvas Sneaker",
+            priceIdr: 300000,
+            imageUrl: "https://example.com/sneaker.jpg",
+          },
+        },
+      },
+      ui_actions: [],
+      guardrail: null,
+      took_ms: 30,
+    });
+
+    const { container, getByLabelText, findByTestId, findByText, getByText } = render(
+      <CartProvider>
+        <CopilotChat />
+      </CartProvider>
+    );
+    openPanel(container);
+    const input = getByLabelText("Ketik pesan untuk Admin Toko Marcell");
+    fireEvent.change(input, { target: { value: "Buatkan outfit casual weekend budget 1 juta" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    const outfitCard = await findByTestId("outfit-card");
+    expect(within(outfitCard).getByText("Set Outfit Pilihan")).toBeTruthy();
+    expect(within(outfitCard).getByText("Atasan")).toBeTruthy();
+    expect(within(outfitCard).getByText("Bawahan")).toBeTruthy();
+    expect(within(outfitCard).getByText("Sepatu")).toBeTruthy();
+    expect(within(outfitCard).getByText("Flannel Shirt")).toBeTruthy();
+    expect(within(outfitCard).getByText("Chino Pant")).toBeTruthy();
+    expect(within(outfitCard).getByText("Canvas Sneaker")).toBeTruthy();
+    expect(within(outfitCard).getByText(/Total:\s*Rp\s*850\.000/)).toBeTruthy();
+    expect(within(outfitCard).getByText(/Budget:\s*Rp\s*1\.000\.000/)).toBeTruthy();
+
+    // The dedicated outfit card replaces the standard individual product cards.
+    expect(getByText("Set Outfit Pilihan")).toBeTruthy();
+    expect(container.querySelectorAll('[data-testid="outfit-card"]')).toHaveLength(1);
+
+    fireEvent.click(within(outfitCard).getByText("🛍️ Masukkan 1 Set ke Keranjang"));
+
+    await waitFor(() => {
+      const stored = JSON.parse(localStorage.getItem("toko-cart-v2") || "[]");
+      expect(stored).toHaveLength(3);
+      expect(stored.map((item) => item.asin)).toEqual(["B01", "B02", "B03"]);
+      expect(stored.every((item) => item.qty === 1)).toBe(true);
+    });
+
+    expect(await findByText(/1 set outfit \(3 item\) masuk keranjang/i)).toBeTruthy();
   });
 
   it("posts thumbs up and down feedback under an assistant message", async () => {

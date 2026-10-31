@@ -19,11 +19,17 @@ right ``ToolContext``.
 
 import logging
 from dataclasses import dataclass, field
+from typing import Annotated, Literal
 
 import agent_tools
 from langchain_core.tools import tool
+from pydantic import Field
 
 logger = logging.getLogger(__name__)
+
+# Exact English department values the catalog uses. Indonesian input (pria,
+# wanita, anak laki-laki, ...) must be converted by the model before calling.
+Department = Literal["Men", "Women", "Boys", "Girls", "Baby"]
 
 MAX_REGISTRY = 10
 
@@ -60,6 +66,9 @@ class ToolContext:
     _turn_refs: set[int] = field(default_factory=set)
     # ui_actions accumulated by tools (e.g. add_to_cart)
     ui_actions: list[dict] = field(default_factory=list)
+    # Structured outfit recorded by build_outfit when the total fits the budget:
+    # {"total_idr": int, "budget_idr": int, "slots": {"top"|"bottom"|"shoes": product}}
+    outfit: dict | None = None
     _next_ref: int = 1
 
     def register(self, product: dict, *, from_current_turn: bool = True) -> int:
@@ -157,11 +166,53 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
 
     @tool(description=_search_desc)
     def search_catalog(
-        query: str,
-        category: str | None = None,
-        department: str | None = None,
-        price_max: int | None = None,
-        limit: int = 4,
+        query: Annotated[
+            str,
+            Field(
+                description=(
+                    "Search keywords. Use English or bilingual ID+EN terms "
+                    "(e.g. 'flannel shirt kemeja', 'running shoes sepatu lari') "
+                    "for best recall across BM25 and vector search."
+                )
+            ),
+        ],
+        category: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Specific clothing category filter if requested by the shopper "
+                    "(e.g. 'Dresses', 'Sneakers', 'Jeans', 'Socks', 'Hats & Caps')."
+                )
+            ),
+        ] = None,
+        department: Annotated[
+            Department | None,
+            Field(
+                description=(
+                    "Target department. MUST be one of the exact English options: "
+                    "'Men' (for pria/cowok), 'Women' (for wanita/cewek), "
+                    "'Boys' (for anak laki-laki), 'Girls' (for anak perempuan), "
+                    "'Baby' (for bayi/balita). Do NOT pass Indonesian terms."
+                )
+            ),
+        ] = None,
+        price_max: Annotated[
+            int | None,
+            Field(
+                description=(
+                    "Maximum price filter in Indonesian Rupiah (IDR), "
+                    "e.g. 500000 for Rp 500.000."
+                )
+            ),
+        ] = None,
+        limit: Annotated[
+            int,
+            Field(
+                description="Maximum number of items to return (1-8). Default is 4.",
+                ge=1,
+                le=8,
+            ),
+        ] = 4,
     ) -> list[dict]:
         results = agent_tools.search_catalog(
             query=query, category=category, department=department,
@@ -174,7 +225,18 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         return out
 
     @tool
-    def get_product_details(ref_or_asin_or_title: str) -> dict:
+    def get_product_details(
+        ref_or_asin_or_title: Annotated[
+            str,
+            Field(
+                description=(
+                    "The numeric reference number badge shown in chat (e.g. '1', '2'), "
+                    "the word 'ini'/'produk ini' for the viewed page product, an ASIN "
+                    "string (e.g. 'B001...'), or a product title fragment."
+                )
+            ),
+        ],
+    ) -> dict:
         """Get full specs + exact IDR price for a product. Accepts a registry
         'ref' number ("2", "nomor 2"), "ini"/"produk ini" (the page product), an
         ASIN/id, or a title/brand fragment. Returns the matched title for
@@ -194,14 +256,58 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
 
     @tool
     def recommend_size(
-        height_cm: float | None = None,
-        weight_kg: float | None = None,
-        foot_length_cm: float | None = None,
-        waist_cm: float | None = None,
-        head_circumference_cm: float | None = None,
-        ref_or_asin: str | None = None,
-        category: str | None = None,
-        brand: str | None = None,
+        height_cm: Annotated[
+            float | None,
+            Field(
+                description=(
+                    "Shopper's height (Tinggi Badan / TB) in cm. "
+                    "Used for tops, bottoms, and dresses."
+                )
+            ),
+        ] = None,
+        weight_kg: Annotated[
+            float | None,
+            Field(
+                description=(
+                    "Shopper's weight (Berat Badan / BB) in kg. "
+                    "Used for tops, bottoms, and dresses."
+                )
+            ),
+        ] = None,
+        foot_length_cm: Annotated[
+            float | None,
+            Field(description="Foot length in cm. Required for shoes/footwear sizing."),
+        ] = None,
+        waist_cm: Annotated[
+            float | None,
+            Field(description="Waist circumference in cm. Required for belts."),
+        ] = None,
+        head_circumference_cm: Annotated[
+            float | None,
+            Field(description="Head circumference in cm. Required for hats/caps."),
+        ] = None,
+        ref_or_asin: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Reference number badge ('1', '2') or ASIN to tie the advice "
+                    "to a specific product."
+                )
+            ),
+        ] = None,
+        category: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Product category (e.g. 'Shoes', 'Jeans', 'Dresses') "
+                    "if ref_or_asin is not provided."
+                )
+            ),
+        ] = None,
+        brand: Annotated[
+            str | None,
+            Field(description="Brand name if checking brand-specific cut rules."),
+        ] = None,
     ) -> dict:
         """Suggest a size using the measurement the category actually needs:
         height (TB, cm) + weight (BB, kg) for tops/bottoms/dress, foot length
@@ -223,20 +329,87 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         )
 
     @tool
-    def build_outfit(query: str, budget_idr: int, department: str | None = None) -> dict:
+    def build_outfit(
+        query: Annotated[
+            str,
+            Field(
+                description=(
+                    "Occasion, style, or vibe keywords in English catalog vocabulary "
+                    "(e.g. 'casual weekend', 'smart casual office', 'party dress', "
+                    "'sports running'). Do NOT include budget or gender/department "
+                    "in this query string."
+                )
+            ),
+        ],
+        budget_idr: Annotated[
+            int,
+            Field(
+                description=(
+                    "Total maximum budget ceiling in Indonesian Rupiah (IDR), "
+                    "e.g. 1000000 for Rp 1.000.000."
+                )
+            ),
+        ],
+        department: Annotated[
+            Department | None,
+            Field(
+                description=(
+                    "Target department. MUST be one of the exact English options: "
+                    "'Men' (for pria/cowok), 'Women' (for wanita/cewek), "
+                    "'Boys' (for anak laki-laki), 'Girls' (for anak perempuan), "
+                    "'Baby' (for bayi/balita). Convert any Indonesian user input "
+                    "to these exact English options."
+                )
+            ),
+        ] = None,
+    ) -> dict:
         """Assemble a top + bottom + shoes outfit whose TOTAL is <= budget_idr.
         The total is computed and verified in code. Write the query in English
         catalog vocabulary (e.g. 'smart casual wedding guest')."""
         return _build_outfit_impl(ctx, query, budget_idr, department)
 
     @tool
-    def lookup_store_policy(query: str) -> list[dict]:
+    def lookup_store_policy(
+        query: Annotated[
+            str,
+            Field(
+                description=(
+                    "Policy question about shipping, 7-day returns, QRIS demo payment, "
+                    "store warranty, or size charts. Pass the shopper's question in "
+                    "Indonesian or English."
+                )
+            ),
+        ],
+    ) -> list[dict]:
         """Answer store policy questions: shipping, 7-day returns, QRIS demo, and
         the master size chart. Returns authored policy chunks."""
         return agent_tools.lookup_store_policy(query=query, limit=3, db_url=ctx.db_url)
 
     @tool
-    def add_to_cart(ref_or_asin: str, qty: int = 1, size: str | None = None) -> dict:
+    def add_to_cart(
+        ref_or_asin: Annotated[
+            str,
+            Field(
+                description=(
+                    "The numeric reference number badge shown in chat (e.g. '1', '2') "
+                    "or the product ASIN string."
+                )
+            ),
+        ],
+        qty: Annotated[
+            int,
+            Field(description="Quantity to add (1 to 99). Default is 1.", ge=1, le=99),
+        ] = 1,
+        size: Annotated[
+            str | None,
+            Field(
+                description=(
+                    "Selected size (e.g. 'S', 'M', 'L', 'XL', '42'). "
+                    "Confirm with the shopper before calling."
+                )
+            ),
+        ] = None,
+    ) -> dict:
         """Add a product to the shopper's cart. The server re-reads the price from
         the DB (never trusts a client price) and returns a ui_action the browser
         executes. Confirm the product with the shopper first."""
@@ -259,7 +432,26 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         return {"ok": True, "ui_action": action}
 
     @tool
-    def flag_unanswered(question: str, reason: str) -> dict:
+    def flag_unanswered(
+        question: Annotated[
+            str,
+            Field(
+                description=(
+                    "The shopper's question that could not be answered from "
+                    "available tool evidence."
+                )
+            ),
+        ],
+        reason: Annotated[
+            str,
+            Field(
+                description=(
+                    "Brief internal explanation of why the question cannot be "
+                    "answered (e.g. 'stock not in catalog', 'policy not covered')."
+                )
+            ),
+        ],
+    ) -> dict:
         """Call this when the available tool evidence cannot answer the shopper's
         question. `question` is the shopper's question as asked; `reason` is a
         short internal note. The turn is logged as unanswered, and the reply must
@@ -309,6 +501,8 @@ def _build_outfit_impl(ctx: ToolContext, query: str, budget_idr: int, department
             total += pick.get("priceIdr") or 0
 
     within = total <= budget_idr and len(chosen) >= 2
+    if within:
+        ctx.outfit = {"total_idr": total, "budget_idr": budget_idr, "slots": chosen}
     return {
         "within_budget": within,
         "total_idr": total,

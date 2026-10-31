@@ -46,6 +46,16 @@ const PRODUCT_CHIPS = [
   },
 ];
 
+const OUTFIT_SLOT_ORDER = ["top", "bottom", "shoes"];
+const OUTFIT_SLOT_LABELS = {
+  top: "Atasan",
+  bottom: "Bawahan",
+  shoes: "Sepatu",
+  atasan: "Atasan",
+  bawahan: "Bawahan",
+  sepatu: "Sepatu",
+};
+
 const markdownComponents = {
   p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
   ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-4 last:mb-0">{children}</ul>,
@@ -80,6 +90,25 @@ function normalizeMarkdown(text) {
     .join("\n");
 }
 
+function outfitSlots(outfit) {
+  if (!outfit || typeof outfit !== "object") return [];
+  const slots = outfit.slots;
+  if (!slots || typeof slots !== "object") return [];
+
+  const orderedKeys = [
+    ...OUTFIT_SLOT_ORDER.filter((key) => slots[key]),
+    ...Object.keys(slots).filter((key) => !OUTFIT_SLOT_ORDER.includes(key)),
+  ];
+
+  return orderedKeys
+    .filter((key) => slots[key]?.asin)
+    .map((key) => ({
+      key,
+      label: OUTFIT_SLOT_LABELS[key] || key,
+      product: slots[key],
+    }));
+}
+
 export default function CopilotChat({ embedded = false, pageAsin = null, pageTitle = null, autoOpen = false }) {
   const [isOpen, setIsOpen] = useState(embedded || autoOpen);
   const [messages, setMessages] = useState(() => loadCopilotMessages());
@@ -95,11 +124,13 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
   const [attachResults, setAttachResults] = useState([]);
   const [attachSearching, setAttachSearching] = useState(false);
   const [undoItem, setUndoItem] = useState(null);
+  const [toast, setToast] = useState(null);
 
   const { addToCart, removeItem } = useContext(CartContext) || {};
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const panelRef = useRef(null);
+  const toastTimerRef = useRef(null);
 
   // persist display copy
   useEffect(() => {
@@ -113,6 +144,12 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
   useEffect(() => {
     if (isOpen) setTimeout(() => inputRef.current?.focus(), 150);
   }, [isOpen]);
+
+  useEffect(() => {
+    return () => {
+      if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    };
+  }, []);
 
   // Escape closes the attach menu first, then the floating panel
   const handleEsc = useCallback(
@@ -244,7 +281,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
             streamingInserted = true;
             setMessages((prev) => [
               ...prev,
-              { role: "assistant", content: fullText, products: [], uiActions: [], feedback: null },
+              { role: "assistant", content: fullText, products: [], outfit: null, uiActions: [], feedback: null },
             ]);
           } else {
             setMessages((prev) => {
@@ -263,6 +300,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
         role: "assistant",
         content: res.reply,
         products: res.products || [],
+        outfit: res.outfit || null,
         uiActions: res.ui_actions || [],
         guardrail: res.guardrail || null,
         feedback: null,
@@ -286,6 +324,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
           content:
             "Maaf kak, asisten AI lagi ada kendala koneksi. Boleh coba kirim lagi ya!",
           products: [],
+          outfit: null,
         },
       ]);
     } finally {
@@ -338,6 +377,22 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
     postEvent({ eventType: "copilot_add_to_cart", asin: product.asin, qty, priceIdr: product.priceIdr });
     setUndoItem({ ...product, qty, size });
     setTimeout(() => setUndoItem((cur) => (cur && cur.asin === product.asin ? null : cur)), 6000);
+  }
+
+  function showToast(message) {
+    setToast(message);
+    if (toastTimerRef.current) clearTimeout(toastTimerRef.current);
+    toastTimerRef.current = setTimeout(() => setToast(null), 4000);
+  }
+
+  function handleAddOutfit(outfit) {
+    const slots = outfitSlots(outfit);
+    if (slots.length === 0 || !addToCart) return;
+
+    slots.forEach(({ product }) => handleAddToCart(product, 1));
+    // A set-level undo is not offered; clear the per-item undo banner.
+    setUndoItem(null);
+    showToast(`✓ 1 set outfit (${slots.length} item) masuk keranjang`);
   }
 
   function executeUiActions(actions) {
@@ -537,7 +592,9 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                         </button>
                       </div>
 
-                      {msg.products?.length > 0 && (
+                      {outfitSlots(msg.outfit).length > 0 ? (
+                        <OutfitCard outfit={msg.outfit} onAddAll={handleAddOutfit} />
+                      ) : msg.products?.length > 0 ? (
                         <div className="space-y-2 pt-1">
                           {msg.products.map((p) => (
                             <ProductCard
@@ -549,7 +606,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                             />
                           ))}
                         </div>
-                      )}
+                      ) : null}
                     </div>
                   </div>
                 )}
@@ -568,8 +625,19 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
             <div ref={messagesEndRef} />
           </div>
 
+          {/* Outfit set toast */}
+          {toast && (
+            <div
+              role="status"
+              data-testid="copilot-toast"
+              className="mx-3 mb-1 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] font-medium text-emerald-900"
+            >
+              {toast}
+            </div>
+          )}
+
           {/* Undo add-to-cart */}
-          {undoItem && (
+          {!toast && undoItem && (
             <div className="mx-3 mb-1 flex items-center justify-between gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-[11px] text-emerald-900">
               <span className="truncate">✓ Masuk keranjang: {undoItem.title}</span>
               <button type="button" onClick={handleUndo} className="shrink-0 font-semibold underline">
@@ -716,6 +784,79 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
         </div>
       )}
     </>
+  );
+}
+
+function OutfitCard({ outfit, onAddAll }) {
+  const slots = outfitSlots(outfit);
+  if (slots.length === 0) return null;
+
+  const totalIdr =
+    Number(outfit.total_idr) ||
+    slots.reduce((sum, { product }) => sum + (product.priceIdr || 0), 0);
+  const budgetIdr = Number(outfit.budget_idr) || 0;
+
+  return (
+    <div
+      data-testid="outfit-card"
+      className="rounded-xl border border-border bg-surface p-3 shadow-xs"
+    >
+      <div className="flex flex-wrap items-center justify-between gap-1.5 border-b border-border pb-2">
+        <div>
+          <p className="text-xs font-semibold text-foreground">Set Outfit Pilihan</p>
+          <p className="text-[10px] text-muted">{slots.length} item dipadukan sesuai budget</p>
+        </div>
+        <div className="flex flex-wrap items-center gap-1">
+          <span className="rounded-full bg-foreground px-2 py-0.5 text-[10px] font-semibold text-background">
+            Total: {formatRp(totalIdr)}
+          </span>
+          {budgetIdr > 0 && (
+            <span className="rounded-full border border-border bg-muted/10 px-2 py-0.5 text-[10px] font-medium text-muted">
+              Budget: {formatRp(budgetIdr)}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div className="mt-2 space-y-1.5">
+        {slots.map(({ key, label, product }) => (
+          <div
+            key={`${key}-${product.asin}`}
+            className="flex items-center gap-2 rounded-lg border border-border/70 bg-background/50 p-1.5"
+          >
+            <span className="shrink-0 rounded-md bg-muted/20 px-1.5 py-0.5 text-[10px] font-semibold text-foreground">
+              {label}
+            </span>
+            <span className="flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-foreground text-[10px] font-bold text-background">
+              {product.ref}
+            </span>
+            <div className="h-10 w-10 shrink-0 overflow-hidden rounded-lg border border-border/80 bg-white">
+              <ProductImage src={product.imageUrl} alt={product.title} padding="p-0.5" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <Link
+                href={product.id ? `/product/${product.id}` : "#"}
+                className="line-clamp-1 text-xs font-medium text-foreground hover:underline"
+                onClick={() => postEvent({ eventType: "copilot_product_click", asin: product.asin })}
+              >
+                {product.title}
+              </Link>
+              <p className="text-[11px] font-semibold text-foreground">
+                {formatRp(product.priceIdr || 0)}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <button
+        type="button"
+        onClick={() => onAddAll(outfit)}
+        className="mt-2.5 w-full rounded-lg bg-cta px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-cta-hover active:scale-[0.99]"
+      >
+        🛍️ Masukkan 1 Set ke Keranjang
+      </button>
+    </div>
   );
 }
 
