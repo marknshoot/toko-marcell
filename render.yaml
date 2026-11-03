@@ -6,10 +6,13 @@ services:
     plan: free
     region: singapore
     buildCommand: pip install -r requirements.txt
-    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --limit-concurrency 8 --backlog 64
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT --limit-concurrency 8 --backlog 64 --no-access-log
     envVars:
       - key: PYTHON_VERSION
         value: 3.12.7
+      # Reported in every log line; defaults to "development" elsewhere.
+      - key: ENVIRONMENT
+        value: production
       - key: CORS_ORIGINS
         value: "*"
       - key: DATABASE_URL
