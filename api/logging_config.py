@@ -18,11 +18,38 @@ import logging
 import os
 import sys
 from datetime import UTC, datetime
+from typing import Any
 
 from logging_context import ctx_request_id, ctx_span_id, ctx_trace_id
 
 SERVICE_NAME = "toko-marcell-api"
-SERVICE_VERSION = "1.0.0"
+# Build identity: Render injects RENDER_GIT_COMMIT; GIT_SHA covers local Docker
+# or CI builds.  "dev" marks a process that was not built from a known commit.
+SERVICE_VERSION = (os.environ.get("RENDER_GIT_COMMIT") or os.environ.get("GIT_SHA") or "dev")[:12]
+
+# Values longer than this are cut so a single oversized field cannot bloat a line.
+_MAX_VALUE_CHARS = 2048
+# Any key containing one of these fragments (case-insensitive) is masked, so
+# ``access_token``, ``refresh_token`` and ``X-Api-Key`` are covered as well as ``token``.
+_REDACT_KEY_FRAGMENTS = ("authorization", "password", "token", "secret", "api_key", "apikey", "cookie")
+_REDACTED = "***"
+_TRUNCATED_SUFFIX = "…[truncated]"
+
+
+def _truncate(value: str) -> str:
+    if len(value) > _MAX_VALUE_CHARS:
+        return value[:_MAX_VALUE_CHARS] + _TRUNCATED_SUFFIX
+    return value
+
+
+def _safe(key: str, value: Any) -> Any:
+    """Mask credential-like keys and cap string length for one log field."""
+    lowered = key.lower()
+    if any(fragment in lowered for fragment in _REDACT_KEY_FRAGMENTS):
+        return _REDACTED
+    if isinstance(value, str):
+        return _truncate(value)
+    return value
 
 # LogRecord attributes that are part of the logging machinery, not user extras.
 _STANDARD_ATTRS = frozenset(
@@ -65,19 +92,18 @@ class JSONLogFormatter(logging.Formatter):
             "level": record.levelname.lower(),
             "service": SERVICE_NAME,
             "version": SERVICE_VERSION,
-            "message": record.getMessage(),
+            "message": _truncate(record.getMessage()),
             "trace_id": ctx_trace_id.get(),
             "span_id": ctx_span_id.get(),
             "request_id": ctx_request_id.get(),
-            "environment": os.environ.get(
-                "ENVIRONMENT",
-                "production" if not os.environ.get("DEBUG") else "development",
-            ),
+            # Defaults to development so a laptop never claims to be production;
+            # render.yaml sets ENVIRONMENT=production explicitly.
+            "environment": os.environ.get("ENVIRONMENT") or "development",
         }
 
         for key, value in record.__dict__.items():
             if key not in _STANDARD_ATTRS and key not in payload:
-                payload[key] = value
+                payload[key] = _safe(key, value)
 
         if record.exc_info:
             payload.setdefault("exception", self.formatException(record.exc_info))
@@ -127,8 +153,16 @@ def setup_logging(level: int | str | None = None) -> None:
     root.addHandler(handler)
     root.setLevel(resolved)
 
-    for name in ("uvicorn", "uvicorn.error", "uvicorn.access"):
+    for name in ("uvicorn", "uvicorn.error"):
         uvicorn_logger = logging.getLogger(name)
         uvicorn_logger.handlers = [handler]
         uvicorn_logger.propagate = False
         uvicorn_logger.setLevel(resolved)
+
+    # The ``request.completed`` line from the request middleware already carries
+    # method, route, status and duration with trace correlation.  Uvicorn's own
+    # access line would be a second, uncorrelated line per request.
+    access_logger = logging.getLogger("uvicorn.access")
+    access_logger.handlers = []
+    access_logger.propagate = False
+    access_logger.disabled = True

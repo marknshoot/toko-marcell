@@ -101,6 +101,8 @@ app.add_middleware(
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
+    # Lets browser JS read the correlation id for support/debug reports.
+    expose_headers=["X-Request-ID"],
 )
 
 
@@ -146,24 +148,44 @@ async def request_context_middleware(request: Request, call_next):
     span_token = ctx_span_id.set(span_id)
     started = time.perf_counter()
     status_code = 500
+    response = None
+    failure: BaseException | None = None
 
     try:
         response = await call_next(request)
         status_code = response.status_code
+    except BaseException as exc:
+        failure = exc
+        raise
     finally:
         duration_ms = round((time.perf_counter() - started) * 1000, 2)
-        logger.info(
-            "request.completed",
-            extra={
-                "method": request.method,
-                "path": request.url.path,
-                "status_code": status_code,
-                "duration_ms": duration_ms,
-                "request_id": request_id,
-                "trace_id": trace_id,
-                "span_id": span_id,
-            },
+        # Log the route template ("/orders/{token}"), never the raw path: order
+        # tokens are credentials, and every product id would otherwise be its
+        # own log bucket.  The raw path is only emitted at DEBUG.
+        route = request.scope.get("route")
+        route_template = getattr(route, "path", None) or "unmatched"
+        # Starlette hands back its own wrapper for every response, so streaming
+        # is detected from the SSE content type.  For streams ``duration_ms`` is
+        # time to first byte; the full turn time is ``took_ms`` in the ``done`` event.
+        is_stream = response is not None and response.headers.get("content-type", "").startswith(
+            "text/event-stream"
         )
+        fields = {
+            "method": request.method,
+            "route": route_template,
+            "status_code": status_code,
+            "duration_ms": duration_ms,
+            "kind": "stream" if is_stream else "buffered",
+            "request_id": request_id,
+            "trace_id": trace_id,
+            "span_id": span_id,
+        }
+        if logger.isEnabledFor(logging.DEBUG):
+            fields["path"] = request.url.path
+        if failure is not None:
+            logger.error("request.completed", extra=fields, exc_info=failure)
+        else:
+            logger.info("request.completed", extra=fields)
         ctx_span_id.reset(span_token)
         ctx_trace_id.reset(trace_token)
         ctx_request_id.reset(request_token)
