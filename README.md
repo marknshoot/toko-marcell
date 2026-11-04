@@ -525,7 +525,7 @@ cd shop && npm test -- --run
 
 ## 4. Data Architecture & Schema
 
-The schema is owned by Alembic revisions `0001` → `0006` and is visualised once, below, so the
+The schema is owned by Alembic revisions `0001` → `0007` and is visualised once, below, so the
 catalog, order, telemetry, retrieval and authentication planes can be read together. The column-level
 dictionary, per-table notes and the full index list live in
 [`api/README.md#database-schema`](./api/README.md#database-schema).
@@ -614,6 +614,9 @@ erDiagram
         TEXT model
         NUMERIC cost_usd
         TEXT unanswered_question "populated by flag_unanswered"
+        TEXT route "guardrail, agent, fast_policy or degraded"
+        SMALLINT llm_calls "model calls this turn, guardrail included"
+        TEXT verify_status "ok, unsupported_price or skipped"
     }
     copilot_feedback {
         BIGSERIAL id PK
@@ -802,7 +805,7 @@ toko-marcell/
 ├── api/                    FastAPI service, LangGraph agent, Alembic migrations, tests
 │   ├── routers/            HTTP surface: search, catalog, recs, copilot, admin, checkout
 │   ├── knowledge/          Authored store policies, size charts, category → size-kind map
-│   ├── migrations/         Versioned schema (0001 → 0006)
+│   ├── migrations/         Versioned schema (0001 → 0007)
 │   └── tests/              Unit + integration suites
 ├── shop/                   Next.js storefront, copilot UI, /admin/kpi
 ├── pipelines/              Offline catalog build, embeddings, recommendation training, evaluations

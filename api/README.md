@@ -9,7 +9,7 @@ sales copilot, and the operations KPI dashboard.
 | **Database** | PostgreSQL 16 + pgvector (HNSW cosine indexes) |
 | **Embeddings** | `fastembed` ONNX — 384-d pruned multilingual MiniLM (113k tokens, 124 MB) |
 | **Agent** | LangChain v1 `create_agent` on LangGraph, checkpointed in PostgreSQL |
-| **Migrations** | Alembic, hand-written SQL, head revision `0006` |
+| **Migrations** | Alembic, hand-written SQL, head revision `0007` |
 | **Tests** | pytest (unit + integration), Ruff |
 
 ---
@@ -655,9 +655,10 @@ variables taking precedence. Unknown variables are ignored.
 
 ## Database schema
 
-Defined by Alembic revisions `0001` → `0006`. Revision `0005` drops the retired
+Defined by Alembic revisions `0001` → `0007`. Revision `0005` drops the retired
 `products.image_embedding` column and its HNSW index; revision `0006` adds the admin-authentication
-tables and seeds the demo `admin` user with an Argon2id hash generated at migration time.
+tables and seeds the demo `admin` user with an Argon2id hash generated at migration time; revision
+`0007` adds `route`, `llm_calls` and `verify_status` to `copilot_turns`.
 
 ```mermaid
 erDiagram
@@ -743,6 +744,9 @@ erDiagram
         TEXT model
         NUMERIC cost_usd
         TEXT unanswered_question "populated by flag_unanswered"
+        TEXT route "guardrail, agent, fast_policy or degraded"
+        SMALLINT llm_calls "model calls this turn, guardrail included"
+        TEXT verify_status "ok, unsupported_price or skipped"
     }
     copilot_feedback {
         BIGSERIAL id PK
@@ -937,8 +941,11 @@ One row per turn, written for the deterministic guardrail fast path as well as f
 | `input_tokens` | `INTEGER` | | Prompt tokens reported by the provider |
 | `output_tokens` | `INTEGER` | | Completion tokens reported by the provider |
 | `model` | `TEXT` | | Provider/model id, or `fake` in CI |
-| `cost_usd` | `NUMERIC` | | Estimated from the configured per-million-token prices |
+| `cost_usd` | `NUMERIC` | | List-price estimate: `COST_REFERENCE_MODEL` prices when set, else the configured per-million prices; includes the guardrail call |
 | `unanswered_question` | `TEXT` | | Populated by `flag_unanswered` for the operations backlog |
+| `route` | `TEXT` | | Path that produced the reply: `guardrail`, `agent`, `fast_policy` or `degraded`; NULL on rows from before `0007` |
+| `llm_calls` | `SMALLINT` | | Model calls made during the turn, guardrail classifier and provider-fallback attempts included |
+| `verify_status` | `TEXT` | | Reply grounding check: `ok`, `unsupported_price` or `skipped`; NULL when it did not run |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` | |
 
 Indexes: `copilot_turns_created_idx` (`created_at DESC`), `copilot_turns_thread_idx` (`thread_id`).

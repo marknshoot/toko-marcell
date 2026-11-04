@@ -25,27 +25,46 @@ logger = logging.getLogger(__name__)
 OUTCOMES = {"answered", "guardrail", "unanswered", "cart", "error"}
 
 
+# USD per million tokens (input, output) for a *named reference model*. The free tier costs
+# $0, so a turn's cost here means "what these tokens would cost at list price". Pricing one
+# reference model keeps cost per assisted order comparable across runs even when
+# ``openrouter/free`` routes to a different model each time.
+# Source: Mistral first-party list prices, docs.mistral.ai/inference/pricing, 2026-11-04.
+REFERENCE_PRICES: dict[str, tuple[float, float]] = {
+    "ministral-3-8b": (0.15, 0.15),
+    # Equals the historical LLM_*_COST_PER_MILLION defaults.
+    "mistral-small-4": (0.15, 0.60),
+}
+
+
+def _prices_per_million() -> tuple[float, float]:
+    settings = get_settings()
+    reference = (getattr(settings, "COST_REFERENCE_MODEL", "") or "").strip().lower()
+    if reference:
+        if reference in REFERENCE_PRICES:
+            return REFERENCE_PRICES[reference]
+        logger.warning("[copilot_metrics] unknown COST_REFERENCE_MODEL=%r; using configured prices", reference)
+    return float(settings.LLM_INPUT_COST_PER_MILLION), float(settings.LLM_OUTPUT_COST_PER_MILLION)
+
+
 def estimate_cost_usd(
     input_tokens: int | None,
     output_tokens: int | None,
     model: str | None = None,
 ) -> float | None:
-    """Estimate one turn's model spend from configured per-million token prices.
+    """Estimate one turn's spend at list price, or ``None`` when no tokens were reported.
 
-    ``model`` is accepted for future per-model pricing; today the deployment
-    price is global. Returns ``None`` when the provider reported neither token
-    count, because an unknown cost is not the same as a free turn. The
-    pre-agent guardrail runs outside the agent result, so its tokens are not
-    included in this estimate.
+    Priced with ``COST_REFERENCE_MODEL`` when set, else the configured per-million prices.
+    ``model`` (the model that actually answered) is accepted for future per-model pricing;
+    it does not change the price today, so runs stay comparable. Returns ``None`` when the
+    provider reported neither token count, because an unknown cost is not the same as a
+    free turn. Callers pass the turn's *total* tokens, guardrail call included.
     """
     if input_tokens is None and output_tokens is None:
         return None
 
-    settings = get_settings()
-    cost = (
-        (input_tokens or 0) * float(settings.LLM_INPUT_COST_PER_MILLION)
-        + (output_tokens or 0) * float(settings.LLM_OUTPUT_COST_PER_MILLION)
-    ) / 1_000_000
+    input_price, output_price = _prices_per_million()
+    cost = ((input_tokens or 0) * input_price + (output_tokens or 0) * output_price) / 1_000_000
     return round(cost, 8)
 
 
@@ -122,6 +141,9 @@ def record_turn(
     model: str | None = None,
     cost_usd: float | None = None,
     unanswered_question: str | None = None,
+    route: str | None = None,
+    llm_calls: int | None = None,
+    verify_status: str | None = None,
 ) -> None:
     """Insert one turn row, estimating `cost_usd` when omitted. Never raises."""
     if outcome not in OUTCOMES:
@@ -140,8 +162,8 @@ def record_turn(
                     INSERT INTO copilot_turns
                         (thread_id, session_id, guardrail, outcome, tool_names,
                          latency_ms, input_tokens, output_tokens, model, cost_usd,
-                         unanswered_question)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         route, llm_calls, verify_status, unanswered_question)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         thread_id,
@@ -154,6 +176,9 @@ def record_turn(
                         output_tokens,
                         model,
                         cost_usd,
+                        route,
+                        llm_calls,
+                        verify_status,
                         question,
                     ),
                 )

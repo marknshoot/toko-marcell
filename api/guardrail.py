@@ -258,6 +258,7 @@ def classify_with_llm(
     history: list[dict[str, str]] | None = None,
     *,
     model: Any = None,
+    callbacks: list[Any] | None = None,
 ) -> GuardrailResult | None:
     """Classify ``message`` using an LLM with up to 3 user + 3 assistant turns of history.
 
@@ -285,10 +286,16 @@ def classify_with_llm(
     try:
         from langchain_core.messages import HumanMessage, SystemMessage
 
-        resp = model.invoke([
-            SystemMessage(content=_GUARDRAIL_SYSTEM_PROMPT),
-            HumanMessage(content=user_payload),
-        ])
+        # Only pass a config when there is something to attach, so callers and test doubles
+        # that implement a plain ``invoke(messages)`` keep working.
+        invoke_kwargs = {"config": {"callbacks": callbacks}} if callbacks else {}
+        resp = model.invoke(
+            [
+                SystemMessage(content=_GUARDRAIL_SYSTEM_PROMPT),
+                HumanMessage(content=user_payload),
+            ],
+            **invoke_kwargs,
+        )
         content = getattr(resp, "content", "")
         if isinstance(content, list):
             content = "".join(p if isinstance(p, str) else p.get("text", "") for p in content)
@@ -315,6 +322,7 @@ def classify(
     *,
     use_llm: bool = True,
     model: Any = None,
+    callbacks: list[Any] | None = None,
 ) -> GuardrailResult:
     """Classify a message. Returns (label, canned_reply) or (None, None).
 
@@ -337,7 +345,7 @@ def classify(
 
         # 2. Only ambiguous messages pay for the LLM classifier.
         if use_llm:
-            llm_res = classify_with_llm(message, history=history, model=model)
+            llm_res = classify_with_llm(message, history=history, model=model, callbacks=callbacks)
             if llm_res is not None:
                 return llm_res
         return (None, None)
@@ -348,7 +356,7 @@ def classify(
 
     # LLM-based guardrail with 3 user + 3 assistant history context.
     if use_llm:
-        llm_res = classify_with_llm(message, history=history, model=model)
+        llm_res = classify_with_llm(message, history=history, model=model, callbacks=callbacks)
         if llm_res is not None:
             return llm_res
 

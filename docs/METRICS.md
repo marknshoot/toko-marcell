@@ -384,6 +384,11 @@ LLM_INPUT_COST_PER_MILLION  = $0.15
 LLM_OUTPUT_COST_PER_MILLION = $0.60
 ```
 
+When `COST_REFERENCE_MODEL` is set (production sets `ministral-3-8b`, $0.15 in / $0.15 out per
+million tokens, Mistral list price on 2026-11-04), every turn is priced at that model's list price
+instead, whichever model actually answered. The free tier's real spend is $0; this is a
+list-price equivalent that stays comparable across runs.
+
 ```text
 turn_cost = input_tokens  × input_price  / 1,000,000
           + output_tokens × output_price / 1,000,000
@@ -417,9 +422,10 @@ phase 9 and is written from phase 13 onward.
   conversation and hides the prior spend.
 - **Model spend only.** Excludes embeddings, vector search, hosting, payment fees, marketing and
   human time.
-- **Guardrail tokens are not included.** The pre-agent classifier's LLM call happens outside the
-  agent result whose token usage is recorded, so switching `GUARDRAIL_LLM_MODE` can change true
-  spend without moving this metric. Treat the estimate as a lower bound when the guardrail is active.
+- **Guardrail tokens are included from revision `0007` onward.** A per-turn callback counts every
+  model call and its tokens, the classifier's included. Rows written before `0007` excluded the
+  guardrail and, on checkpointed threads, could carry earlier turns' tokens, so compare cost figures
+  across that date with care. `copilot_turns.llm_calls` records the call count.
 - **Outliers and small n.** A single long conversation can dominate the mean; report count and median
   beside it.
 - **Price changes over time.** Historical estimates must record the configured price version; this
