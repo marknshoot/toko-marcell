@@ -105,7 +105,10 @@ async def copilot_chat_stream(payload: CopilotChatV2In, request: Request):
     settings = get_settings()
     ctx = payload.context
     fake = os.environ.get("COPILOT_FAKE_LLM") == "1"
-    label, _ = classify(payload.message)
+    # Regex only: no model call and no blocking I/O on the event loop. The check exists so a
+    # greeting still gets its canned reply when no LLM key is configured; stream_turn does the
+    # real, history-aware classification.
+    label, _ = classify(payload.message, use_llm=False)
     if label is None and not fake and not is_llm_available():
         raise HTTPException(
             status_code=503,

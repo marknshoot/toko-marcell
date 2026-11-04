@@ -644,7 +644,7 @@ variables taking precedence. Unknown variables are ignored.
 | `LLM_FALLBACK_BASE_URL` / `_API_KEY` / `_MODEL` | empty | Generic OpenAI-compatible fallback |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | empty | Gemini fallback credentials |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model id |
-| `GUARDRAIL_LLM_MODE` | `always` | `always` or `ambiguous` classifier policy |
+| `GUARDRAIL_LLM_MODE` | `always` | `always` or `ambiguous` classifier policy (`render.yaml` sets `ambiguous`) |
 | `COPILOT_RATE_LIMIT_PER_MIN` | `10` | Per-IP requests per minute |
 | `COPILOT_RATE_LIMIT_PER_DAY` | `100` | Per-IP requests per day |
 | `COPILOT_FAKE_LLM` | unset | `1` enables the deterministic fake model |

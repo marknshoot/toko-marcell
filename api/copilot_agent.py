@@ -17,6 +17,7 @@ is wired in a later slice; here the agent runs statelessly per call and the
 router passes recent history explicitly.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -386,9 +387,12 @@ async def run_turn(
     """
     started = time.perf_counter()
     clean_message = sanitize_user_message(message)
-    recent_history = _resolve_guardrail_history(history, checkpointer, thread_id, db_url)
-
-    label, canned = classify(
+    # Both calls do blocking I/O (database read, model HTTP call), so keep them off the event loop.
+    recent_history = await asyncio.to_thread(
+        _resolve_guardrail_history, history, checkpointer, thread_id, db_url
+    )
+    label, canned = await asyncio.to_thread(
+        classify,
         clean_message or message,
         history=recent_history,
         use_llm=not bool(fake),
@@ -420,8 +424,8 @@ async def run_turn(
         page_asin=page_asin,
         referenced_asins=referenced_asins or [],
     )
-    _seed_registry_from_checkpoint(ctx, checkpointer, thread_id)
-    agent = build_agent(ctx, session_id, fake=fake, checkpointer=checkpointer)
+    await asyncio.to_thread(_seed_registry_from_checkpoint, ctx, checkpointer, thread_id)
+    agent = await asyncio.to_thread(build_agent, ctx, session_id, fake=fake, checkpointer=checkpointer)
     if agent is None:
         took_ms = round((time.perf_counter() - started) * 1000, 2)
         record_turn(
@@ -455,7 +459,6 @@ async def run_turn(
         if checkpointer is not None:
             # The sync PostgresSaver doesn't implement async methods, so run the
             # synchronous graph in a worker thread to keep the route async.
-            import asyncio
             result = await asyncio.to_thread(
                 agent.invoke, {"messages": input_messages}, invoke_cfg
             )
@@ -548,14 +551,16 @@ async def stream_turn(
     thread_id: str | None = None,
 ):
     """Stream one copilot v2 turn as event dicts (`token` and `done`)."""
-    import asyncio
     import threading
 
     started = time.perf_counter()
     clean_message = sanitize_user_message(message)
-    recent_history = _resolve_guardrail_history(history, checkpointer, thread_id, db_url)
-
-    label, canned = classify(
+    # Both calls do blocking I/O (database read, model HTTP call), so keep them off the event loop.
+    recent_history = await asyncio.to_thread(
+        _resolve_guardrail_history, history, checkpointer, thread_id, db_url
+    )
+    label, canned = await asyncio.to_thread(
+        classify,
         clean_message or message,
         history=recent_history,
         use_llm=not bool(fake),
@@ -591,8 +596,8 @@ async def stream_turn(
         page_asin=page_asin,
         referenced_asins=referenced_asins or [],
     )
-    _seed_registry_from_checkpoint(ctx, checkpointer, thread_id)
-    agent = build_agent(ctx, session_id, fake=fake, checkpointer=checkpointer)
+    await asyncio.to_thread(_seed_registry_from_checkpoint, ctx, checkpointer, thread_id)
+    agent = await asyncio.to_thread(build_agent, ctx, session_id, fake=fake, checkpointer=checkpointer)
     if agent is None:
         took_ms = round((time.perf_counter() - started) * 1000, 2)
         record_turn(
