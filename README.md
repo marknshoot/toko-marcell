@@ -116,10 +116,18 @@ Toko Marcell treats inference as a first-class Service Level Objective (SLO):
 | **Cost per assisted order** | **≤ $0.005** | **$0.0016** |
 | Copilot p95 turn latency | < 5.0 s | Live in `/admin/kpi` |
 
-An **assisted order** is an order whose session had at least one copilot turn. Cost is estimated
-from configured per-million-token prices and recorded per turn in `copilot_turns.cost_usd`. The
-dashboard reports cost per turn, per conversation, per resolved conversation, and per assisted order
-side by side with conversion — so a cheap-but-useless copilot cannot hide.
+An **assisted order** is an order whose session had at least one copilot turn. Cost is a list-price
+estimate: production prices every turn at one reference model (`COST_REFERENCE_MODEL=ministral-3-8b`,
+$0.15 per million input and output tokens), whichever free model actually answered. Real spend on the
+free tier is $0; pricing one named model keeps the figure comparable across runs. A turn's cost now
+includes the guardrail classifier's tokens and is recorded per turn in `copilot_turns.cost_usd`, next
+to its model-call count in `copilot_turns.llm_calls`. The dashboard reports cost per turn, per
+conversation, per resolved conversation, and per assisted order side by side with conversion — so a
+cheap-but-useless copilot cannot hide.
+
+> The **$0.0016** in the table above was measured before this change, with placeholder prices
+> ($0.15 input, $0.60 output) and without the guardrail call's tokens, so it is not comparable with
+> turns recorded since. It is re-measured from post-change traffic, not recomputed by hand.
 
 ### 1.5 Design Constraints & Free-Tier Architectural Realities
 
@@ -207,6 +215,10 @@ so a per-request `connect()` or an oversized pool is simply denied.
   `DB_POOL_MAX=5`, opened once in the FastAPI lifespan and closed on shutdown. Outside the server
   (pipelines, standalone tests) `get_conn()` falls back to a one-shot `psycopg.connect()`, so no
   component depends on the pool existing.
+- **A separate, reconnecting pool for conversation memory**: the LangGraph `PostgresSaver` runs on
+  its own pool (at most 2 connections, none held while idle, idle ones closed after 240 s, a dead one
+  replaced when handed out). A single cached connection would die for good when Neon suspends compute
+  while Render stays awake.
 - **A dual-backend health probe**: `GET /health` executes `SELECT 1;` through that same pool and
   reports the two platforms separately:
   `{"status": "ok", "services": {"api": "ok", "database": "ok"}}` when both answer, and a `503`
@@ -398,7 +410,8 @@ is safe, bounded, and cheap. This system is the difference between a demo and a 
 **Engineering design.**
 
 - **Runtime:** LangChain v1 `create_agent` on a **LangGraph** state machine, with conversation memory
-  checkpointed in PostgreSQL (`PostgresSaver`) keyed by a browser-generated `thread_id`.
+  checkpointed in PostgreSQL (`PostgresSaver`, on a small reconnecting pool) keyed by a
+  browser-generated `thread_id`.
 - **Three-class guardrail layer:** deterministic regex plus LLM classification route every message into
   `greeting` (fast-path canned reply), `off_topic` (polite deflection), `injection` (prompt-injection
   and jailbreak defense), or `on_topic`. Guardrail replies never consume a full agent turn.
@@ -614,9 +627,9 @@ erDiagram
         TEXT model
         NUMERIC cost_usd
         TEXT unanswered_question "populated by flag_unanswered"
-        TEXT route "guardrail, agent, fast_policy or degraded"
+        TEXT route "guardrail or agent; NULL before 0007"
         SMALLINT llm_calls "model calls this turn, guardrail included"
-        TEXT verify_status "ok, unsupported_price or skipped"
+        TEXT verify_status "reserved, not populated yet"
     }
     copilot_feedback {
         BIGSERIAL id PK
@@ -793,6 +806,7 @@ Copy [`.env.example`](./.env.example) and set only what you need. The most impor
 | `COPILOT_RATE_LIMIT_PER_MIN` / `_PER_DAY` | Per-IP copilot rate limits | `10` / `100` |
 | `ENABLE_RERANKER` | Optional cross-encoder stage-2 reranking | `false` |
 | `ENABLE_DENSE_SEARCH` | Dense/embedding retrieval; enabled on Render with the pruned model | `true` |
+| `COST_REFERENCE_MODEL` | Prices each turn at a named model's list price (`ministral-3-8b`, `mistral-small-4`); empty uses `LLM_*_COST_PER_MILLION` | empty (`render.yaml` sets `ministral-3-8b`) |
 
 The full reference is in [`api/README.md`](./api/README.md#environment-variables).
 

@@ -513,8 +513,9 @@ Evaluation uses RAGAS (`pipelines/eval_rag.py`) with ID-based and non-LLM contex
 ## Copilot and tools
 
 `create_agent` runs on a LangGraph state machine. The graph holds message history in PostgreSQL via
-`PostgresSaver`, keyed by the browser-generated `thread_id`; a sidecar activity table enables TTL
-cleanup of abandoned threads.
+`PostgresSaver`, keyed by the browser-generated `thread_id`. The saver runs on its own small
+connection pool (max 2, none held while idle, dead connections replaced on checkout) so it survives
+Neon's auto-suspend; a sidecar activity table enables TTL cleanup of abandoned threads.
 
 One turn end to end — deterministic triage first, then a bounded agent loop:
 
@@ -650,6 +651,7 @@ variables taking precedence. Unknown variables are ignored.
 | `COPILOT_FAKE_LLM` | unset | `1` enables the deterministic fake model |
 | `LLM_INPUT_COST_PER_MILLION` | `0.15` | USD per 1M input tokens for cost estimates |
 | `LLM_OUTPUT_COST_PER_MILLION` | `0.60` | USD per 1M output tokens for cost estimates |
+| `COST_REFERENCE_MODEL` | empty | Prices every turn at a named model's list price (`ministral-3-8b` or `mistral-small-4`) instead of the two values above; `render.yaml` sets `ministral-3-8b` |
 
 ---
 
@@ -658,7 +660,8 @@ variables taking precedence. Unknown variables are ignored.
 Defined by Alembic revisions `0001` → `0007`. Revision `0005` drops the retired
 `products.image_embedding` column and its HNSW index; revision `0006` adds the admin-authentication
 tables and seeds the demo `admin` user with an Argon2id hash generated at migration time; revision
-`0007` adds `route`, `llm_calls` and `verify_status` to `copilot_turns`.
+`0007` adds `route`, `llm_calls` and `verify_status` to `copilot_turns` (`verify_status` is reserved and
+not populated yet).
 
 ```mermaid
 erDiagram
@@ -744,9 +747,9 @@ erDiagram
         TEXT model
         NUMERIC cost_usd
         TEXT unanswered_question "populated by flag_unanswered"
-        TEXT route "guardrail, agent, fast_policy or degraded"
+        TEXT route "guardrail or agent; NULL before 0007"
         SMALLINT llm_calls "model calls this turn, guardrail included"
-        TEXT verify_status "ok, unsupported_price or skipped"
+        TEXT verify_status "reserved, not populated yet"
     }
     copilot_feedback {
         BIGSERIAL id PK
@@ -943,9 +946,9 @@ One row per turn, written for the deterministic guardrail fast path as well as f
 | `model` | `TEXT` | | Provider/model id, or `fake` in CI |
 | `cost_usd` | `NUMERIC` | | List-price estimate: `COST_REFERENCE_MODEL` prices when set, else the configured per-million prices; includes the guardrail call |
 | `unanswered_question` | `TEXT` | | Populated by `flag_unanswered` for the operations backlog |
-| `route` | `TEXT` | | Path that produced the reply: `guardrail`, `agent`, `fast_policy` or `degraded`; NULL on rows from before `0007` |
+| `route` | `TEXT` | | Path that produced the reply: `guardrail` (canned reply) or `agent`; NULL on rows from before `0007` |
 | `llm_calls` | `SMALLINT` | | Model calls made during the turn, guardrail classifier and provider-fallback attempts included |
-| `verify_status` | `TEXT` | | Reply grounding check: `ok`, `unsupported_price` or `skipped`; NULL when it did not run |
+| `verify_status` | `TEXT` | | Reserved for a reply grounding check; not populated yet, so always NULL |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` | |
 
 Indexes: `copilot_turns_created_idx` (`created_at DESC`), `copilot_turns_thread_idx` (`thread_id`).
