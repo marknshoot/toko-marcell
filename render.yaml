@@ -36,10 +36,10 @@ services:
       # Cross-encoder off on 512 MB.
       - key: ENABLE_RERANKER
         value: "false"
-      # Deterministic regex settles obvious greetings / off-topic / injection first, so the
-      # model classifier only sees messages the regex could not place. Saves free-tier quota.
+      # Every message except an explicit injection is judged by the LLM classifier (with
+      # recent history). "ambiguous" would let regex decide greetings/off-topic without a model.
       - key: GUARDRAIL_LLM_MODE
-        value: ambiguous
+        value: always
       # Price turns at Ministral 3 8B list price ($0.15 in / $0.15 out per million tokens).
       # The free tier costs $0; this keeps cost per assisted order comparable across runs.
       - key: COST_REFERENCE_MODEL
