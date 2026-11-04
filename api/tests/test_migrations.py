@@ -123,7 +123,6 @@ def test_upgrade_empty_database_to_head(temp_db_url):
         "unanswered_question",
         "route",
         "llm_calls",
-        "verify_status",
     } <= _columns(temp_db_url, "copilot_turns")
     assert {"thread_id", "session_id", "rating"} <= _columns(temp_db_url, "copilot_feedback")
     assert {

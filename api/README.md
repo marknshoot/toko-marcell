@@ -660,8 +660,7 @@ variables taking precedence. Unknown variables are ignored.
 Defined by Alembic revisions `0001` → `0007`. Revision `0005` drops the retired
 `products.image_embedding` column and its HNSW index; revision `0006` adds the admin-authentication
 tables and seeds the demo `admin` user with an Argon2id hash generated at migration time; revision
-`0007` adds `route`, `llm_calls` and `verify_status` to `copilot_turns` (`verify_status` is reserved and
-not populated yet).
+`0007` adds `route` and `llm_calls` to `copilot_turns`.
 
 ```mermaid
 erDiagram
@@ -749,7 +748,6 @@ erDiagram
         TEXT unanswered_question "populated by flag_unanswered"
         TEXT route "guardrail or agent; NULL before 0007"
         SMALLINT llm_calls "model calls this turn, guardrail included"
-        TEXT verify_status "reserved, not populated yet"
     }
     copilot_feedback {
         BIGSERIAL id PK
@@ -948,7 +946,6 @@ One row per turn, written for the deterministic guardrail fast path as well as f
 | `unanswered_question` | `TEXT` | | Populated by `flag_unanswered` for the operations backlog |
 | `route` | `TEXT` | | Path that produced the reply: `guardrail` (canned reply) or `agent`; NULL on rows from before `0007` |
 | `llm_calls` | `SMALLINT` | | Model calls made during the turn, guardrail classifier and provider-fallback attempts included |
-| `verify_status` | `TEXT` | | Reserved for a reply grounding check; not populated yet, so always NULL |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` | |
 
 Indexes: `copilot_turns_created_idx` (`created_at DESC`), `copilot_turns_thread_idx` (`thread_id`).

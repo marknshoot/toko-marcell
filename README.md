@@ -629,7 +629,6 @@ erDiagram
         TEXT unanswered_question "populated by flag_unanswered"
         TEXT route "guardrail or agent; NULL before 0007"
         SMALLINT llm_calls "model calls this turn, guardrail included"
-        TEXT verify_status "reserved, not populated yet"
     }
     copilot_feedback {
         BIGSERIAL id PK

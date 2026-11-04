@@ -143,7 +143,6 @@ def record_turn(
     unanswered_question: str | None = None,
     route: str | None = None,
     llm_calls: int | None = None,
-    verify_status: str | None = None,
 ) -> None:
     """Insert one turn row, estimating `cost_usd` when omitted. Never raises."""
     if outcome not in OUTCOMES:
@@ -162,8 +161,8 @@ def record_turn(
                     INSERT INTO copilot_turns
                         (thread_id, session_id, guardrail, outcome, tool_names,
                          latency_ms, input_tokens, output_tokens, model, cost_usd,
-                         route, llm_calls, verify_status, unanswered_question)
-                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                         route, llm_calls, unanswered_question)
+                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     """,
                     (
                         thread_id,
@@ -178,7 +177,6 @@ def record_turn(
                         cost_usd,
                         route,
                         llm_calls,
-                        verify_status,
                         question,
                     ),
                 )
