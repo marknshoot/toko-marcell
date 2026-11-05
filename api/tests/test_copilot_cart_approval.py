@@ -367,7 +367,7 @@ def test_a_streamed_turn_ends_with_the_approval_request(monkeypatch, products):
 
     types = [e["type"] for e in events]
     assert types[-2:] == ["approval_required", "done"]
-    assert set(types[:-2]) == {"token"}
+    assert set(types[:-2]) <= {"token", "status"}
     approval, done = events[-2], events[-1]
     assert approval["thread_id"] == thread_id
     assert (approval["items"][0]["asin"], approval["items"][0]["priceIdr"]) == (asin, price)

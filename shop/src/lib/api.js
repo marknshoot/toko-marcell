@@ -248,7 +248,7 @@ export async function sendCopilotMessage({ message, threadId, context = null }) 
   return response.json();
 }
 
-export async function streamCopilotMessage({ message, threadId, context = null, onToken }) {
+export async function streamCopilotMessage({ message, threadId, context = null, onToken, onStatus }) {
   const sessionId = getSessionId();
   const response = await fetch(`${API_URL}/copilot/chat/stream`, {
     method: "POST",
@@ -298,9 +298,13 @@ export async function streamCopilotMessage({ message, threadId, context = null, 
         if (evt.type === "token" && evt.content) {
           fullReply += evt.content;
           if (onToken) onToken(evt.content, fullReply);
+        } else if (evt.type === "status" && evt.label) {
+          if (onStatus) onStatus(evt.label);
         } else if (evt.type === "done") {
           donePayload = evt;
         }
+        // Any other event type (for example approval_required, whose data also arrives in the
+        // done event) is ignored here, so a newer server never breaks this client.
       } catch {
         // ignore malformed chunk
       }

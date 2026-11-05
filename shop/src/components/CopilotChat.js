@@ -115,6 +115,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
   const [messages, setMessages] = useState(() => loadCopilotMessages());
   const [inputValue, setInputValue] = useState("");
   const [isLoading, setIsLoading] = useState(false);
+  const [statusLabel, setStatusLabel] = useState(null);
   const [isThinking, setIsThinking] = useState(false);
   const [threadId, setThreadId] = useState(() => getCopilotThreadId());
   const [attachedProducts, setAttachedProducts] = useState(() =>
@@ -276,7 +277,14 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
         message: query,
         threadId,
         context: buildContext(),
+        onStatus: (label) => {
+          // Progress from the server ("Mencari produk…"). It replaces the generic text and stays
+          // until the next token arrives, even if a first part of the reply is already on screen.
+          setStatusLabel(label);
+          setIsThinking(true);
+        },
         onToken: (_chunk, fullText) => {
+          setStatusLabel(null);
           setIsThinking(false);
           if (!streamingInserted) {
             streamingInserted = true;
@@ -330,6 +338,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
         },
       ]);
     } finally {
+      setStatusLabel(null);
       setIsThinking(false);
       setIsLoading(false);
     }
@@ -674,7 +683,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
               <div className="flex items-start gap-2">
                 <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-foreground text-background text-[11px] font-bold">TM</div>
                 <div className="flex items-center rounded-2xl rounded-tl-xs border border-border bg-muted/10 px-3.5 py-2.5 text-xs">
-                  <span className="animate-pulse font-medium text-muted">Sedang berpikir...</span>
+                  <span className="animate-pulse font-medium text-muted">{statusLabel || "Sedang berpikir..."}</span>
                 </div>
               </div>
             )}
