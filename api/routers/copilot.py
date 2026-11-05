@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import JSONResponse, StreamingResponse
 from memory_trim import trim_memory
 from rate_limiter import check_copilot_rate_limit, check_write_rate_limit
-from schemas import CopilotChatV2In, CopilotFeedbackIn
+from schemas import CopilotChatV2In, CopilotFeedbackIn, CopilotResumeIn
 
 logger = logging.getLogger(__name__)
 
@@ -77,6 +77,52 @@ async def copilot_chat(payload: CopilotChatV2In, request: Request):
     result["thread_id"] = payload.thread_id
     # glibc keeps freed LangGraph/tool allocations in its arenas; hand them back
     # to the kernel now so a chatty session cannot creep into the 512 MB ceiling.
+    trim_memory()
+    return result
+
+
+@router.post("/copilot/chat/resume")
+async def copilot_chat_resume(payload: CopilotResumeIn, request: Request):
+    """Answer a pending cart confirmation (yes or no) and finish the paused turn."""
+    client_ip = _get_client_ip(request)
+    allowed, retry_after, which = check_copilot_rate_limit(client_ip)
+    if not allowed:
+        return JSONResponse(
+            status_code=429,
+            content={
+                "detail": "Kak, mimin butuh istirahat sebentar ya 😊 Terlalu banyak permintaan dalam waktu singkat. "
+                "Silakan coba lagi nanti!",
+                "limit": which,
+            },
+            headers={"Retry-After": str(retry_after)},
+        )
+
+    from copilot_agent import resume_turn
+    from copilot_approval import NoPendingApproval
+    from copilot_memory import get_checkpointer
+
+    settings = get_settings()
+    fake = os.environ.get("COPILOT_FAKE_LLM") == "1"
+    checkpointer = None if fake else get_checkpointer()
+    if checkpointer is None:
+        # Approvals need a saved thread; without one nothing can be waiting.
+        raise HTTPException(status_code=404, detail="Tidak ada permintaan yang menunggu konfirmasi.")
+
+    try:
+        result = await resume_turn(
+            payload.thread_id,
+            approve=payload.approve,
+            db_url=settings.DATABASE_URL,
+            session_id=payload.session_id,
+            fake=fake,
+            checkpointer=checkpointer,
+        )
+    except NoPendingApproval as exc:
+        if exc.thread_exists:
+            raise HTTPException(status_code=409, detail="Tidak ada permintaan yang menunggu konfirmasi.") from None
+        raise HTTPException(status_code=404, detail="Percakapan tidak ditemukan.") from None
+
+    result["thread_id"] = payload.thread_id
     trim_memory()
     return result
 

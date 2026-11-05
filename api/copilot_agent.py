@@ -27,11 +27,23 @@ import os
 import re
 import threading
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Annotated, Any, NotRequired
 
 from agent_tools import _connect
 from config import get_settings
+from copilot_approval import (
+    CART_TOOL,
+    CONFIRM_REPLY,
+    AbandonedApprovalMiddleware,
+    CartApproval,
+    NoPendingApproval,
+    approval_decisions,
+    approval_from_result,
+    cart_approval_middleware,
+    pending_items,
+    pending_request,
+)
 from copilot_llm import build_chat_model, llm_available
 from copilot_metrics import derive_outcome, estimate_cost_usd, extract_token_usage, record_turn
 from copilot_tools import ToolContext, _slim, build_tools
@@ -44,6 +56,7 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatResult
 from langgraph.channels.untracked_value import UntrackedValue
+from langgraph.types import Command
 from llm_usage import LLMCallCounter
 
 logger = logging.getLogger(__name__)
@@ -270,6 +283,9 @@ class CopilotState(AgentState):
     # The page-product and browsing part of the context block, built once per turn. Per-turn
     # scratch: not saved with the thread and not part of the graph's input or output.
     turn_context: NotRequired[Annotated[str, UntrackedValue, PrivateStateAttr]]
+    # Work done before a cart-approval pause (model calls, tokens, time), saved with the thread so
+    # the request that resumes the turn can record one complete row. ``None`` outside a pause.
+    turn_carry: NotRequired[dict | None]
 
 
 class LLMUnavailable(RuntimeError):  # noqa: N818 - reads better than "...Error" at call sites
@@ -387,10 +403,40 @@ class RegistryMiddleware(AgentMiddleware):
     def after_agent(self, state, runtime):  # type: ignore[override]
         if state.get("guardrail"):
             return None
-        return {"shown_products": self._ctx.snapshot()}
+        return {"shown_products": self._ctx.snapshot(), "turn_carry": None}
 
     async def aafter_agent(self, state, runtime):  # type: ignore[override]
         return self.after_agent(state, runtime)
+
+
+class TurnCarryMiddleware(AgentMiddleware):
+    """Save what the turn has used so far, just before a cart-approval pause.
+
+    An approval ends one HTTP request and the answer arrives in another, so the request that
+    resumes the turn would otherwise record only its own model calls and time. This must be
+    listed AFTER the approval middleware: ``after_model`` hooks run in reverse list order, and the
+    pause happens inside the approval middleware's hook.
+    """
+
+    state_schema = CopilotState
+
+    def __init__(self, ctx: ToolContext, turn: "_Turn", approval: CartApproval):
+        super().__init__()
+        self._ctx = ctx
+        self._turn = turn
+        self._approval = approval
+
+    def after_model(self, state, runtime):  # type: ignore[override]
+        last_ai = next((m for m in reversed(state["messages"]) if isinstance(m, AIMessage)), None)
+        if not last_ai or not any(call.get("name") == CART_TOOL for call in last_ai.tool_calls):
+            return None
+        # The resolved items are saved here, before the pause, because the approval hook is
+        # re-run from its start when the answer arrives (see CartApproval).
+        carry = {**self._turn.totals(), "approval_items": self._approval.items_for_message(last_ai)}
+        return {"turn_carry": carry, "shown_products": self._ctx.snapshot()}
+
+    async def aafter_model(self, state, runtime):  # type: ignore[override]
+        return self.after_model(state, runtime)
 
 
 # Shown when a turn uses up its model-call budget without reaching an answer.
@@ -526,6 +572,7 @@ def build_agent(
     fake: bool | None = None,
     checkpointer=None,
     thread_id: str | None = None,
+    turn: "_Turn | None" = None,
 ):
     """Construct a per-request compiled agent. Always returns a graph.
 
@@ -536,13 +583,20 @@ def build_agent(
     if model is None:
         model = _UnavailableChatModel()
     tools = build_tools(ctx, _catalog_categories(ctx.db_url))
-    middleware = [
+    middleware: list[AgentMiddleware] = [
         GuardrailMiddleware(use_llm=not bool(fake)),
+        AbandonedApprovalMiddleware(thread_id),
         RegistryMiddleware(ctx, checkpointer, thread_id),
         ContextInjectionMiddleware(ctx, session_id),
         TrimHistoryMiddleware(),
-        LoopCapMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
     ]
+    if checkpointer is not None and turn is not None:
+        # A pause needs somewhere to keep the paused graph. Without a checkpointer (the fake-LLM
+        # test mode) a cart add runs straight away, as it always did. Order matters: see
+        # TurnCarryMiddleware.
+        approval_middleware, approval = cart_approval_middleware(ctx)
+        middleware += [approval_middleware, TurnCarryMiddleware(ctx, turn, approval)]
+    middleware.append(LoopCapMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"))
     return create_agent(
         model,
         tools,
@@ -593,6 +647,21 @@ class _Turn:
     db_url: str
     fake: bool | None
     checkpointer: Any = None
+    # What an earlier request of this same turn used before a cart-approval pause.
+    carried: dict[str, Any] = field(default_factory=dict)
+
+    def totals(self) -> dict[str, Any]:
+        """Model calls, tokens and active time of the whole turn, earlier requests included."""
+        in_new, out_new = self.usage.usage
+        in_old, out_old = self.carried.get("input_tokens"), self.carried.get("output_tokens")
+        return {
+            "llm_calls": self.usage.calls + int(self.carried.get("llm_calls") or 0),
+            "input_tokens": None if in_new is None and in_old is None else (in_new or 0) + (in_old or 0),
+            "output_tokens": None if out_new is None and out_old is None else (out_new or 0) + (out_old or 0),
+            "elapsed_ms": round(
+                (time.perf_counter() - self.started) * 1000 + float(self.carried.get("elapsed_ms") or 0), 2
+            ),
+        }
 
 
 def _finish_turn(
@@ -611,7 +680,8 @@ def _finish_turn(
     cannot drift between the sync and streaming paths.
     """
     turn_model = _turn_model(turn.fake)
-    input_tokens, output_tokens = turn.usage.usage
+    totals = turn.totals()
+    input_tokens, output_tokens = totals["input_tokens"], totals["output_tokens"]
 
     tool_calls: list[dict[str, Any]] = []
     capped = False
@@ -620,8 +690,13 @@ def _finish_turn(
         turn_messages = _current_turn(result.get("messages", []))
         if turn_messages and isinstance(turn_messages[0], HumanMessage):
             shopper_message = _chunk_text(turn_messages[0])
+        # A call whose result is an error (the shopper declined a cart add, or the arguments were
+        # invalid) did not run, so it must not count as a tool the turn used.
+        failed = {m.tool_call_id for m in turn_messages if isinstance(m, ToolMessage) and m.status == "error"}
         for m in turn_messages:
             for tc in getattr(m, "tool_calls", None) or []:
+                if tc.get("id") in failed:
+                    continue
                 tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
             if isinstance(m, AIMessage) and m.additional_kwargs.get(_LOOP_CAP_MARKER):
                 capped = True
@@ -636,10 +711,10 @@ def _finish_turn(
         outcome = "unanswered"
         logger.warning(
             "copilot.turn.loop_cap",
-            extra={"thread_id": turn.thread_id, "llm_calls": turn.usage.calls, "tool_names": tool_names},
+            extra={"thread_id": turn.thread_id, "llm_calls": totals["llm_calls"], "tool_names": tool_names},
         )
     route = "guardrail" if guardrail else "agent"
-    took_ms = round((time.perf_counter() - turn.started) * 1000, 2)
+    took_ms = totals["elapsed_ms"]
 
     record_turn(
         thread_id=turn.thread_id,
@@ -659,7 +734,7 @@ def _finish_turn(
             else None
         ),
         route=route,
-        llm_calls=turn.usage.calls,
+        llm_calls=totals["llm_calls"],
     )
 
     # Ids, labels and counts only. Never the shopper's message, tool arguments or the reply:
@@ -671,7 +746,7 @@ def _finish_turn(
             "turn_route": route,
             "guardrail": guardrail,
             "outcome": outcome,
-            "llm_calls": turn.usage.calls,
+            "llm_calls": totals["llm_calls"],
             "tool_names": tool_names,
             "latency_ms": took_ms,
             "model": turn_model,
@@ -718,6 +793,7 @@ async def _prepare_agent(
         fake=turn.fake,
         checkpointer=turn.checkpointer,
         thread_id=turn.thread_id,
+        turn=turn,
     )
     return ctx, agent
 
@@ -748,6 +824,38 @@ def _run_config(turn: _Turn) -> dict[str, Any]:
     if turn.checkpointer and turn.thread_id:
         config["configurable"] = {"thread_id": turn.thread_id}
     return config
+
+
+def _pause_turn(
+    turn: _Turn, ctx: ToolContext, result: dict[str, Any], items: list[dict[str, Any]]
+) -> dict[str, Any]:
+    """Response for a turn that stopped to ask the shopper to confirm a cart add.
+
+    No ``copilot_turns`` row is written: the turn is not finished. The request that resumes it
+    records one row for the whole turn (the work done so far is saved in the thread state).
+    """
+    logger.info(
+        "copilot.approval.requested",
+        extra={"thread_id": turn.thread_id, "asins": [str(item.get("asin")) for item in items]},
+    )
+    if turn.checkpointer is not None and turn.thread_id:
+        try:
+            from copilot_memory import touch_thread
+
+            touch_thread(turn.thread_id, db_url=turn.db_url)
+        except Exception:
+            pass
+    reply = _extract_reply({"messages": _current_turn(result.get("messages", []))}) or CONFIRM_REPLY
+    return {
+        "reply": reply,
+        "products": ctx.turn_products(limit=6),
+        "ui_actions": [],
+        "outfit": ctx.outfit,
+        "tool_calls": [],
+        "guardrail": None,
+        "took_ms": turn.totals()["elapsed_ms"],
+        "pending_approval": {"items": items},
+    }
 
 
 async def run_turn(
@@ -796,6 +904,73 @@ async def run_turn(
         _finish_turn(turn, reply="", error=True)
         raise HTTPException(status_code=502, detail=_LLM_NETWORK_DETAIL) from None
 
+    items = approval_from_result(result)
+    if items is not None:
+        return _pause_turn(turn, ctx, result, items)
+
+    reply = _extract_reply(result) or _EMPTY_REPLY
+    return _finish_turn(turn, reply=reply, ctx=ctx, result=result, guardrail=result.get("guardrail"))
+
+
+async def resume_turn(
+    thread_id: str,
+    *,
+    approve: bool,
+    db_url: str,
+    session_id: str | None = None,
+    fake: bool | None = None,
+    checkpointer=None,
+) -> dict[str, Any]:
+    """Answer a pending cart approval and finish the paused turn.
+
+    The question the shopper saw is read back from the saved thread; the only thing the
+    caller supplies is yes or no. Raises ``NoPendingApproval`` if nothing is waiting.
+    """
+    turn = _Turn(
+        started=time.perf_counter(),
+        usage=LLMCallCounter(),
+        thread_id=thread_id,
+        session_id=session_id,
+        db_url=db_url,
+        fake=fake,
+        checkpointer=checkpointer,
+    )
+    ctx, agent = await _prepare_agent(turn, page_asin=None, referenced_asins=None)
+    config = _run_config(turn)
+
+    snapshot = await asyncio.to_thread(agent.get_state, config)
+    request = pending_request(snapshot)
+    if request is None:
+        raise NoPendingApproval(thread_exists=bool(getattr(snapshot, "values", None)))
+
+    # The resumed run starts inside the paused node, so the before-agent steps do not run again:
+    # restore what the rest of the turn needs from the saved state.
+    saved = snapshot.values
+    ctx.seed(saved.get("shown_products") or [])
+    turn.carried = dict(saved.get("turn_carry") or {})
+
+    decisions = approval_decisions(request, approve=approve)
+    logger.info(
+        "copilot.approval.answered",
+        extra={
+            "thread_id": thread_id,
+            "approved": approve,
+            "asins": [str(item.get("asin")) for item in pending_items(request)],
+        },
+    )
+    try:
+        result = await asyncio.to_thread(agent.invoke, Command(resume={"decisions": decisions}), config)
+    except LLMUnavailable:
+        _finish_turn(turn, reply="", error=True)
+        raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL) from None
+    except Exception as e:
+        logger.error("copilot resume error: %s", e, exc_info=True)
+        _finish_turn(turn, reply="", error=True)
+        raise HTTPException(status_code=502, detail=_LLM_NETWORK_DETAIL) from None
+
+    items = approval_from_result(result)
+    if items is not None:  # the model asked for another cart add
+        return _pause_turn(turn, ctx, result, items)
     reply = _extract_reply(result) or _EMPTY_REPLY
     return _finish_turn(turn, reply=reply, ctx=ctx, result=result, guardrail=result.get("guardrail"))
 
@@ -884,6 +1059,15 @@ async def stream_turn(
                     yield {"type": "token", "content": txt}
         elif mode == "values" and isinstance(event, dict):
             final_result = event
+
+    items = approval_from_result(final_result)
+    if items is not None:
+        summary = _pause_turn(turn, ctx, final_result, items)
+        if not streamed_parts and summary["reply"]:
+            yield {"type": "token", "content": summary["reply"]}
+        yield {"type": "approval_required", "thread_id": thread_id, "items": items}
+        yield {"type": "done", "thread_id": thread_id, **summary}
+        return
 
     reply = _extract_reply(final_result) or "".join(streamed_parts) or _EMPTY_REPLY
     if not streamed_parts and reply:
