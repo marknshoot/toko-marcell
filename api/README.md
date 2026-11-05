@@ -9,7 +9,7 @@ sales copilot, and the operations KPI dashboard.
 | **Database** | PostgreSQL 16 + pgvector (HNSW cosine indexes) |
 | **Embeddings** | `fastembed` ONNX — 384-d pruned multilingual MiniLM (113k tokens, 124 MB) |
 | **Agent** | LangChain v1 `create_agent` on LangGraph, checkpointed in PostgreSQL |
-| **Migrations** | Alembic, hand-written SQL, head revision `0006` |
+| **Migrations** | Alembic, hand-written SQL, head revision `0007` |
 | **Tests** | pytest (unit + integration), Ruff |
 
 ---
@@ -513,8 +513,9 @@ Evaluation uses RAGAS (`pipelines/eval_rag.py`) with ID-based and non-LLM contex
 ## Copilot and tools
 
 `create_agent` runs on a LangGraph state machine. The graph holds message history in PostgreSQL via
-`PostgresSaver`, keyed by the browser-generated `thread_id`; a sidecar activity table enables TTL
-cleanup of abandoned threads.
+`PostgresSaver`, keyed by the browser-generated `thread_id`. The saver runs on its own small
+connection pool (max 2, none held while idle, dead connections replaced on checkout) so it survives
+Neon's auto-suspend; a sidecar activity table enables TTL cleanup of abandoned threads.
 
 One turn end to end — deterministic triage first, then a bounded agent loop:
 
@@ -644,20 +645,22 @@ variables taking precedence. Unknown variables are ignored.
 | `LLM_FALLBACK_BASE_URL` / `_API_KEY` / `_MODEL` | empty | Generic OpenAI-compatible fallback |
 | `GEMINI_API_KEY` / `GOOGLE_API_KEY` | empty | Gemini fallback credentials |
 | `GEMINI_MODEL` | `gemini-3.5-flash-lite` | Gemini model id |
-| `GUARDRAIL_LLM_MODE` | `always` | `always` or `ambiguous` classifier policy |
+| `GUARDRAIL_LLM_MODE` | `always` | `always` or `ambiguous` classifier policy (`render.yaml` sets `always`) |
 | `COPILOT_RATE_LIMIT_PER_MIN` | `10` | Per-IP requests per minute |
 | `COPILOT_RATE_LIMIT_PER_DAY` | `100` | Per-IP requests per day |
 | `COPILOT_FAKE_LLM` | unset | `1` enables the deterministic fake model |
 | `LLM_INPUT_COST_PER_MILLION` | `0.15` | USD per 1M input tokens for cost estimates |
 | `LLM_OUTPUT_COST_PER_MILLION` | `0.60` | USD per 1M output tokens for cost estimates |
+| `COST_REFERENCE_MODEL` | empty | Prices every turn at a named model's list price (`ministral-3-8b` or `mistral-small-4`) instead of the two values above; `render.yaml` sets `ministral-3-8b` |
 
 ---
 
 ## Database schema
 
-Defined by Alembic revisions `0001` → `0006`. Revision `0005` drops the retired
+Defined by Alembic revisions `0001` → `0007`. Revision `0005` drops the retired
 `products.image_embedding` column and its HNSW index; revision `0006` adds the admin-authentication
-tables and seeds the demo `admin` user with an Argon2id hash generated at migration time.
+tables and seeds the demo `admin` user with an Argon2id hash generated at migration time; revision
+`0007` adds `route` and `llm_calls` to `copilot_turns`.
 
 ```mermaid
 erDiagram
@@ -743,6 +746,8 @@ erDiagram
         TEXT model
         NUMERIC cost_usd
         TEXT unanswered_question "populated by flag_unanswered"
+        TEXT route "guardrail or agent; NULL before 0007"
+        SMALLINT llm_calls "model calls this turn, guardrail included"
     }
     copilot_feedback {
         BIGSERIAL id PK
@@ -937,8 +942,10 @@ One row per turn, written for the deterministic guardrail fast path as well as f
 | `input_tokens` | `INTEGER` | | Prompt tokens reported by the provider |
 | `output_tokens` | `INTEGER` | | Completion tokens reported by the provider |
 | `model` | `TEXT` | | Provider/model id, or `fake` in CI |
-| `cost_usd` | `NUMERIC` | | Estimated from the configured per-million-token prices |
+| `cost_usd` | `NUMERIC` | | List-price estimate: `COST_REFERENCE_MODEL` prices when set, else the configured per-million prices; includes the guardrail call |
 | `unanswered_question` | `TEXT` | | Populated by `flag_unanswered` for the operations backlog |
+| `route` | `TEXT` | | Path that produced the reply: `guardrail` (canned reply) or `agent`; NULL on rows from before `0007` |
+| `llm_calls` | `SMALLINT` | | Model calls made during the turn, guardrail classifier and provider-fallback attempts included |
 | `created_at` | `TIMESTAMPTZ` | `NOT NULL DEFAULT now()` | |
 
 Indexes: `copilot_turns_created_idx` (`created_at DESC`), `copilot_turns_thread_idx` (`thread_id`).

@@ -17,6 +17,7 @@ is wired in a later slice; here the agent runs statelessly per call and the
 router passes recent history explicitly.
 """
 
+import asyncio
 import json
 import logging
 import os
@@ -33,6 +34,7 @@ from guardrail import classify, trim_guardrail_history
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from llm_usage import LLMCallCounter
 
 logger = logging.getLogger(__name__)
 
@@ -367,6 +369,19 @@ def _extract_reply(result: dict[str, Any]) -> str:
     return ""
 
 
+def _current_turn(messages: list[Any]) -> list[Any]:
+    """Messages produced by this turn: from the newest ``HumanMessage`` onward.
+
+    With a checkpointer, ``result["messages"]`` holds the whole thread, so reading tool
+    calls or token usage from it attributes earlier turns' work to this one. Tools only
+    append ``ToolMessage``s, so the newest ``HumanMessage`` always marks this turn's start.
+    """
+    for index in range(len(messages) - 1, -1, -1):
+        if isinstance(messages[index], HumanMessage):
+            return messages[index:]
+    return messages
+
+
 async def run_turn(
     message: str,
     *,
@@ -385,13 +400,18 @@ async def run_turn(
     2. Otherwise invoke the create_agent agent with the tools + context middleware.
     """
     started = time.perf_counter()
+    usage = LLMCallCounter()
     clean_message = sanitize_user_message(message)
-    recent_history = _resolve_guardrail_history(history, checkpointer, thread_id, db_url)
-
-    label, canned = classify(
+    # Both calls do blocking I/O (database read, model HTTP call), so keep them off the event loop.
+    recent_history = await asyncio.to_thread(
+        _resolve_guardrail_history, history, checkpointer, thread_id, db_url
+    )
+    label, canned = await asyncio.to_thread(
+        classify,
         clean_message or message,
         history=recent_history,
         use_llm=not bool(fake),
+        callbacks=[usage],
     )
     if label is not None:
         took_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -404,6 +424,8 @@ async def run_turn(
             tool_names=[],
             latency_ms=took_ms,
             model=_turn_model(fake),
+            route="guardrail",
+            llm_calls=usage.calls,
         )
         return {
             "reply": canned,
@@ -420,8 +442,8 @@ async def run_turn(
         page_asin=page_asin,
         referenced_asins=referenced_asins or [],
     )
-    _seed_registry_from_checkpoint(ctx, checkpointer, thread_id)
-    agent = build_agent(ctx, session_id, fake=fake, checkpointer=checkpointer)
+    await asyncio.to_thread(_seed_registry_from_checkpoint, ctx, checkpointer, thread_id)
+    agent = await asyncio.to_thread(build_agent, ctx, session_id, fake=fake, checkpointer=checkpointer)
     if agent is None:
         took_ms = round((time.perf_counter() - started) * 1000, 2)
         record_turn(
@@ -431,6 +453,8 @@ async def run_turn(
             outcome=derive_outcome(None, [], True),
             latency_ms=took_ms,
             model=_turn_model(fake),
+            route="agent",
+            llm_calls=usage.calls,
         )
         from fastapi import HTTPException
         raise HTTPException(
@@ -449,13 +473,16 @@ async def run_turn(
                 input_messages.append(AIMessage(content=h["content"]))
     input_messages.append(HumanMessage(content=clean_message or message))
 
-    invoke_cfg = {"configurable": {"thread_id": thread_id}} if (checkpointer and thread_id) else {}
+    # The counter rides in the run config so every model call in the graph, including
+    # provider-fallback attempts, is counted for this turn.
+    invoke_cfg: dict[str, Any] = {"callbacks": [usage]}
+    if checkpointer and thread_id:
+        invoke_cfg["configurable"] = {"thread_id": thread_id}
 
     try:
         if checkpointer is not None:
             # The sync PostgresSaver doesn't implement async methods, so run the
             # synchronous graph in a worker thread to keep the route async.
-            import asyncio
             result = await asyncio.to_thread(
                 agent.invoke, {"messages": input_messages}, invoke_cfg
             )
@@ -471,6 +498,8 @@ async def run_turn(
             outcome=derive_outcome(None, [], True),
             latency_ms=took_ms,
             model=_turn_model(fake),
+            route="agent",
+            llm_calls=usage.calls,
         )
         from fastapi import HTTPException
         raise HTTPException(
@@ -490,14 +519,16 @@ async def run_turn(
 
     # Collect tool_calls from the message trace.
     tool_calls = []
-    for m in result.get("messages", []):
+    for m in _current_turn(result.get("messages", [])):
         for tc in getattr(m, "tool_calls", None) or []:
             tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
 
     # Products shown during this turn (not merely rehydrated from history), capped at 6.
     products = ctx.turn_products(limit=6)
     tool_names = _tool_names(tool_calls)
-    input_tokens, output_tokens = extract_token_usage(result.get("messages", []))
+    input_tokens, output_tokens = usage.usage
+    if input_tokens is None and output_tokens is None:
+        input_tokens, output_tokens = extract_token_usage(_current_turn(result.get("messages", [])))
     turn_model = _turn_model(fake)
 
     took_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -514,6 +545,8 @@ async def run_turn(
         model=turn_model,
         cost_usd=estimate_cost_usd(input_tokens, output_tokens, turn_model),
         unanswered_question=ctx.unanswered_question if outcome == "unanswered" else None,
+        route="agent",
+        llm_calls=usage.calls,
     )
     return {
         "reply": reply,
@@ -548,17 +581,21 @@ async def stream_turn(
     thread_id: str | None = None,
 ):
     """Stream one copilot v2 turn as event dicts (`token` and `done`)."""
-    import asyncio
     import threading
 
     started = time.perf_counter()
+    usage = LLMCallCounter()
     clean_message = sanitize_user_message(message)
-    recent_history = _resolve_guardrail_history(history, checkpointer, thread_id, db_url)
-
-    label, canned = classify(
+    # Both calls do blocking I/O (database read, model HTTP call), so keep them off the event loop.
+    recent_history = await asyncio.to_thread(
+        _resolve_guardrail_history, history, checkpointer, thread_id, db_url
+    )
+    label, canned = await asyncio.to_thread(
+        classify,
         clean_message or message,
         history=recent_history,
         use_llm=not bool(fake),
+        callbacks=[usage],
     )
     if label is not None:
         took_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -571,6 +608,8 @@ async def stream_turn(
             tool_names=[],
             latency_ms=took_ms,
             model=_turn_model(fake),
+            route="guardrail",
+            llm_calls=usage.calls,
         )
         yield {"type": "token", "content": canned}
         yield {
@@ -591,8 +630,8 @@ async def stream_turn(
         page_asin=page_asin,
         referenced_asins=referenced_asins or [],
     )
-    _seed_registry_from_checkpoint(ctx, checkpointer, thread_id)
-    agent = build_agent(ctx, session_id, fake=fake, checkpointer=checkpointer)
+    await asyncio.to_thread(_seed_registry_from_checkpoint, ctx, checkpointer, thread_id)
+    agent = await asyncio.to_thread(build_agent, ctx, session_id, fake=fake, checkpointer=checkpointer)
     if agent is None:
         took_ms = round((time.perf_counter() - started) * 1000, 2)
         record_turn(
@@ -602,6 +641,8 @@ async def stream_turn(
             outcome=derive_outcome(None, [], True),
             latency_ms=took_ms,
             model=_turn_model(fake),
+            route="agent",
+            llm_calls=usage.calls,
         )
         from fastapi import HTTPException
         raise HTTPException(
@@ -618,7 +659,11 @@ async def stream_turn(
                 input_messages.append(AIMessage(content=h["content"]))
     input_messages.append(HumanMessage(content=clean_message or message))
 
-    invoke_cfg = {"configurable": {"thread_id": thread_id}} if (checkpointer and thread_id) else {}
+    # The counter rides in the run config so every model call in the graph, including
+    # provider-fallback attempts, is counted for this turn.
+    invoke_cfg: dict[str, Any] = {"callbacks": [usage]}
+    if checkpointer and thread_id:
+        invoke_cfg["configurable"] = {"thread_id": thread_id}
 
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
@@ -655,6 +700,8 @@ async def stream_turn(
                 outcome=derive_outcome(None, [], True),
                 latency_ms=took_ms,
                 model=_turn_model(fake),
+                route="agent",
+                llm_calls=usage.calls,
             )
             if not streamed_parts:
                 yield {"type": "token", "content": fallback_err}
@@ -701,13 +748,15 @@ async def stream_turn(
             pass
 
     tool_calls = []
-    for m in final_result.get("messages", []):
+    for m in _current_turn(final_result.get("messages", [])):
         for tc in getattr(m, "tool_calls", None) or []:
             tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
 
     products = ctx.turn_products(limit=6)
     tool_names = _tool_names(tool_calls)
-    input_tokens, output_tokens = extract_token_usage(final_result.get("messages", []))
+    input_tokens, output_tokens = usage.usage
+    if input_tokens is None and output_tokens is None:
+        input_tokens, output_tokens = extract_token_usage(_current_turn(final_result.get("messages", [])))
     turn_model = _turn_model(fake)
 
     took_ms = round((time.perf_counter() - started) * 1000, 2)
@@ -724,6 +773,8 @@ async def stream_turn(
         model=turn_model,
         cost_usd=estimate_cost_usd(input_tokens, output_tokens, turn_model),
         unanswered_question=ctx.unanswered_question if outcome == "unanswered" else None,
+        route="agent",
+        llm_calls=usage.calls,
     )
     yield {
         "type": "done",

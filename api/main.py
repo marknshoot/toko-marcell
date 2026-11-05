@@ -76,6 +76,12 @@ async def lifespan(app: FastAPI):
 
     if cleanup_task is not None:
         cleanup_task.cancel()
+    try:
+        from copilot_memory import close_checkpointer
+
+        close_checkpointer()
+    except Exception as e:
+        logger.warning("[copilot] checkpointer close error: %s", e)
     close_pool()
 
 

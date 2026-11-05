@@ -7,8 +7,9 @@ last_seen)`` that we touch on every turn; the 7-day TTL cleanup deletes threads
 whose ``last_seen`` is older than 7 days (both the sidecar row and the
 checkpointer's per-thread rows).
 
-A module-level singleton saver is created lazily from ``DATABASE_URL`` and
-``setup()`` is run once (idempotent). History is trimmed by a token budget via
+A module-level singleton saver is created lazily from ``DATABASE_URL`` on a small
+validating connection pool (see ``get_checkpointer``) and ``setup()`` is run once
+(idempotent). History is trimmed by a token budget via
 ``trim_messages`` in the agent's ``before_model`` middleware (wired in
 copilot_agent when a checkpointer is present).
 """
@@ -24,8 +25,14 @@ logger = logging.getLogger(__name__)
 TTL_DAYS = 7
 
 _SAVER = None
-_SAVER_CM = None
+_POOL = None
 _LOCK = threading.Lock()
+
+# Pool sizing for the checkpointer. The app pool is DB_POOL_MAX (3 on Render) and Neon's
+# free tier caps connection slots, so the checkpointer adds at most this many.
+CHECKPOINT_POOL_MAX = 2
+# Close idle connections before Neon's 5-minute auto-suspend would drop them silently.
+CHECKPOINT_POOL_MAX_IDLE_SECONDS = 240
 
 _ACTIVITY_DDL = """
 CREATE TABLE IF NOT EXISTS copilot_thread_activity (
@@ -47,8 +54,15 @@ def ensure_activity_table(db_url: str | None = None) -> None:
 
 
 def get_checkpointer():
-    """Lazily create and setup the PostgresSaver singleton. Returns None on failure."""
-    global _SAVER, _SAVER_CM
+    """Lazily create and setup the PostgresSaver singleton. Returns None on failure.
+
+    The saver runs on a small ``ConnectionPool`` rather than
+    ``PostgresSaver.from_conn_string``: that opens one connection and keeps it for the
+    life of the process, and it dies for good when Neon suspends compute (5 min) while
+    Render stays awake (15 min).  The pool tests a connection when it is handed out and
+    replaces a dead one, and ``min_size=0`` holds nothing while idle so Neon can suspend.
+    """
+    global _SAVER, _POOL
     if _SAVER is not None:
         return _SAVER
     with _LOCK:
@@ -56,18 +70,42 @@ def get_checkpointer():
             return _SAVER
         try:
             from langgraph.checkpoint.postgres import PostgresSaver
+            from psycopg.rows import dict_row
+            from psycopg_pool import ConnectionPool
 
-            # from_conn_string is a context manager; keep it open for process life.
-            _SAVER_CM = PostgresSaver.from_conn_string(_db_url())
-            saver = _SAVER_CM.__enter__()
+            pool = ConnectionPool(
+                conninfo=_db_url(),
+                min_size=0,
+                max_size=CHECKPOINT_POOL_MAX,
+                max_idle=CHECKPOINT_POOL_MAX_IDLE_SECONDS,
+                max_lifetime=1800,
+                check=ConnectionPool.check_connection,
+                # PostgresSaver requires autocommit, no prepared statements and dict rows.
+                kwargs={"autocommit": True, "prepare_threshold": 0, "row_factory": dict_row},
+                open=True,
+            )
+            saver = PostgresSaver(pool)
             saver.setup()
             ensure_activity_table()
+            _POOL = pool
             _SAVER = saver
-            logger.info("[copilot memory] PostgresSaver ready")
+            logger.info("[copilot memory] PostgresSaver ready (pooled)")
         except Exception as e:
             logger.warning("[copilot memory] checkpointer unavailable: %s", e)
             _SAVER = None
     return _SAVER
+
+
+def close_checkpointer() -> None:
+    """Close the checkpointer pool (called from the FastAPI lifespan on shutdown)."""
+    global _SAVER, _POOL
+    with _LOCK:
+        pool, _POOL, _SAVER = _POOL, None, None
+    if pool is not None:
+        try:
+            pool.close()
+        except Exception as e:
+            logger.info("[copilot memory] close_checkpointer note: %s", e)
 
 
 def touch_thread(thread_id: str, db_url: str | None = None) -> None:

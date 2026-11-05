@@ -51,6 +51,9 @@ class Settings(BaseSettings):
     # ── Unit economics (USD per 1M tokens) ──────────────────────────────────
     LLM_INPUT_COST_PER_MILLION: float = 0.15
     LLM_OUTPUT_COST_PER_MILLION: float = 0.60
+    # Price every turn at this reference model's list price (see copilot_metrics.REFERENCE_PRICES),
+    # whichever model actually answered. Empty keeps the LLM_*_COST_PER_MILLION values above.
+    COST_REFERENCE_MODEL: str = ""
 
     # ── LLM — OpenRouter / Mistral (preferred, OpenAI-compatible) ───────────
     OPENROUTER_API_KEY: str = ""
