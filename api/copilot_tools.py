@@ -96,6 +96,25 @@ class ToolContext:
             self._turn_refs.add(ref)
         return ref
 
+    def seed(self, products: list[dict]) -> None:
+        """Restore the registry from a saved snapshot (``[{"ref": 1, ...product}]``).
+
+        Refs keep the numbers the shopper and the model already saw, new products continue
+        after the highest restored ref, and nothing is marked as shown in the current turn.
+        """
+        for item in products:
+            ref = item.get("ref")
+            if isinstance(ref, int) and not isinstance(ref, bool):
+                self.registry[ref] = {k: v for k, v in item.items() if k != "ref"}
+        while len(self.registry) > MAX_REGISTRY:
+            del self.registry[min(self.registry)]
+        if self.registry:
+            self._next_ref = max(self._next_ref, max(self.registry) + 1)
+
+    def snapshot(self) -> list[dict]:
+        """The registry as a list that can be saved in the graph state and passed to ``seed``."""
+        return [{"ref": ref, **self.registry[ref]} for ref in sorted(self.registry)]
+
     def turn_products(self, limit: int = 6) -> list[dict]:
         """Products shown during this turn (not merely rehydrated from history)."""
         return [
