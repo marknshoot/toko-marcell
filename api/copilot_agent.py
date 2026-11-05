@@ -347,6 +347,31 @@ class RegistrySeedMiddleware(AgentMiddleware):
         return None
 
 
+# Shown when a turn uses up its model-call budget without reaching an answer.
+LOOP_CAP_REPLY = "Maaf kak, mimin belum bisa menyelesaikan ini. Boleh ditanyakan dengan cara lain ya?"
+_LOOP_CAP_MARKER = "loop_cap"
+
+
+class LoopCapMiddleware(ModelCallLimitMiddleware):
+    """The model-call cap, with a shopper-facing reply instead of the library's English text.
+
+    ``ModelCallLimitMiddleware`` builds its exit message in a module-level function, so the text
+    can only be changed by overriding ``before_model``. The message is tagged so the turn can
+    be recognised (and recorded as unanswered) without matching on its wording.
+    """
+
+    @hook_config(can_jump_to=["end"])
+    def before_model(self, state, runtime):  # type: ignore[override]
+        update = super().before_model(state, runtime)
+        if update and update.get("jump_to") == "end":
+            update["messages"] = [AIMessage(content=LOOP_CAP_REPLY, additional_kwargs={_LOOP_CAP_MARKER: True})]
+        return update
+
+    @hook_config(can_jump_to=["end"])
+    async def abefore_model(self, state, runtime):  # type: ignore[override]
+        return self.before_model(state, runtime)
+
+
 class ContextInjectionMiddleware(AgentMiddleware):
     """Prepend the authoritative context block to the system prompt each model call."""
 
@@ -456,7 +481,7 @@ def build_agent(
         RegistrySeedMiddleware(ctx, checkpointer, thread_id),
         ContextInjectionMiddleware(ctx, session_id),
         TrimHistoryMiddleware(),
-        ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
+        LoopCapMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
     ]
     return create_agent(
         model,
@@ -529,16 +554,30 @@ def _finish_turn(
     input_tokens, output_tokens = turn.usage.usage
 
     tool_calls: list[dict[str, Any]] = []
+    capped = False
+    shopper_message = ""
     if result is not None:
         turn_messages = _current_turn(result.get("messages", []))
+        if turn_messages and isinstance(turn_messages[0], HumanMessage):
+            shopper_message = _chunk_text(turn_messages[0])
         for m in turn_messages:
             for tc in getattr(m, "tool_calls", None) or []:
                 tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
+            if isinstance(m, AIMessage) and m.additional_kwargs.get(_LOOP_CAP_MARKER):
+                capped = True
         if input_tokens is None and output_tokens is None:
             input_tokens, output_tokens = extract_token_usage(turn_messages)
 
     tool_names = _tool_names(tool_calls)
     outcome = derive_outcome(guardrail, tool_names, error)
+    if capped and outcome == "answered":
+        # The shopper got the fallback text, not an answer: count it with the questions we
+        # could not answer so it shows up in the backlog. A cart action still wins.
+        outcome = "unanswered"
+        logger.warning(
+            "copilot.turn.loop_cap",
+            extra={"thread_id": turn.thread_id, "llm_calls": turn.usage.calls, "tool_names": tool_names},
+        )
     route = "guardrail" if guardrail else "agent"
     took_ms = round((time.perf_counter() - turn.started) * 1000, 2)
 
@@ -554,7 +593,11 @@ def _finish_turn(
         output_tokens=output_tokens,
         model=turn_model,
         cost_usd=estimate_cost_usd(input_tokens, output_tokens, turn_model),
-        unanswered_question=ctx.unanswered_question if (ctx is not None and outcome == "unanswered") else None,
+        unanswered_question=(
+            ((ctx.unanswered_question if ctx is not None else None) or (shopper_message if capped else None))
+            if outcome == "unanswered"
+            else None
+        ),
         route=route,
         llm_calls=turn.usage.calls,
     )
