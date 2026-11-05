@@ -94,6 +94,20 @@ class CopilotChatV2In(BaseModel):
     context: CopilotContextV2 | None = None
 
 
+class CopilotResumeIn(BaseModel):
+    """The shopper's answer to a pending cart confirmation.
+
+    Only yes or no travels from the browser. The item, price and quantity being confirmed are read
+    back from the saved conversation, so nothing here can change what gets added.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    session_id: str | None = Field(default=None, max_length=64)
+    thread_id: str = Field(min_length=1, max_length=64, pattern=r"^[a-zA-Z0-9_-]+$")
+    approve: bool
+
+
 class CopilotFeedbackIn(BaseModel):
     """One thumbs up/down vote for a copilot reply.
 

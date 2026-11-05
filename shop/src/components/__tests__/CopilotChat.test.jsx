@@ -411,4 +411,157 @@ describe("CopilotChat v2", () => {
     await waitFor(() => expect(delSpy).toHaveBeenCalled());
     expect(queryByText("hi")).toBeNull();
   });
+
+  describe("cart confirmation", () => {
+    const item = {
+      asin: "B01",
+      title: "Volcom Chino",
+      priceIdr: 495800,
+      imageUrl: "https://example.com/chino.jpg",
+      qty: 2,
+      size: "M",
+    };
+
+    const pausedReply = {
+      reply: "Sebentar ya kak.",
+      thread_id: "t1",
+      products: [],
+      ui_actions: [],
+      guardrail: null,
+      took_ms: 5,
+      pending_approval: { items: [item] },
+    };
+
+    const approvedReply = {
+      reply: "Sudah masuk keranjang kak.",
+      thread_id: "t1",
+      products: [],
+      ui_actions: [{ type: "add_to_cart", id: 5, ...item }],
+      guardrail: null,
+      took_ms: 5,
+    };
+
+    async function askToAdd(extra = {}) {
+      vi.spyOn(api, "streamCopilotMessage").mockResolvedValue({ ...pausedReply, ...extra });
+      const view = render(
+        <CartProvider>
+          <CopilotChat />
+        </CartProvider>
+      );
+      openPanel(view.container);
+      const input = view.getByLabelText("Ketik pesan untuk Admin Toko Marcell");
+      fireEvent.change(input, { target: { value: "masukin celana chinonya dong" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+      await waitFor(() => expect(view.getByText("Masukkan ke keranjang?")).toBeTruthy());
+      return view;
+    }
+
+    const cart = () => JSON.parse(localStorage.getItem("toko-cart-v2") || "[]");
+
+    it("shows the item, price and quantity and adds nothing before the shopper answers", async () => {
+      const { getByText, getByRole } = await askToAdd();
+
+      const card = getByRole("group", { name: "Konfirmasi keranjang" });
+      expect(within(card).getByText("Volcom Chino")).toBeTruthy();
+      expect(card.textContent).toContain("× 2");
+      expect(card.textContent).toContain("Ukuran M");
+      expect(getByText("Setuju, masukkan")).toBeTruthy();
+      expect(getByText("Batal")).toBeTruthy();
+      expect(cart()).toHaveLength(0);
+    });
+
+    it("sends only yes or no, then adds the item the server returns", async () => {
+      const resume = vi.spyOn(api, "resumeCopilot").mockResolvedValue(approvedReply);
+      const { getByText, queryByText } = await askToAdd();
+
+      fireEvent.click(getByText("Setuju, masukkan"));
+
+      await waitFor(() => expect(resume).toHaveBeenCalledTimes(1));
+      expect(Object.keys(resume.mock.calls[0][0]).sort()).toEqual(["approve", "threadId"]);
+      expect(resume.mock.calls[0][0].approve).toBe(true);
+
+      await waitFor(() => expect(getByText("Sudah masuk keranjang kak.")).toBeTruthy());
+      expect(getByText("✓ Dimasukkan ke keranjang")).toBeTruthy();
+      expect(queryByText("Setuju, masukkan")).toBeNull();
+      expect(cart()).toHaveLength(1);
+      expect(cart()[0]).toMatchObject({ asin: "B01", qty: 2, priceIdr: 495800 });
+    });
+
+    it("declining adds nothing and shows the answer", async () => {
+      const resume = vi.spyOn(api, "resumeCopilot").mockResolvedValue({
+        reply: "Baik kak, tidak jadi.",
+        thread_id: "t1",
+        products: [],
+        ui_actions: [],
+        guardrail: null,
+        took_ms: 5,
+      });
+      const { getByText } = await askToAdd();
+
+      fireEvent.click(getByText("Batal"));
+
+      await waitFor(() => expect(getByText("Baik kak, tidak jadi.")).toBeTruthy());
+      expect(resume.mock.calls[0][0].approve).toBe(false);
+      expect(getByText("Dibatalkan, tidak ada yang ditambahkan")).toBeTruthy();
+      expect(cart()).toHaveLength(0);
+    });
+
+    it("lets the shopper try again after a network failure", async () => {
+      const resume = vi
+        .spyOn(api, "resumeCopilot")
+        .mockRejectedValueOnce(new TypeError("Failed to fetch"))
+        .mockResolvedValueOnce(approvedReply);
+      const { getByText, findByText } = await askToAdd();
+
+      fireEvent.click(getByText("Setuju, masukkan"));
+      expect(await findByText("Belum tersambung. Coba lagi ya kak.")).toBeTruthy();
+      expect(cart()).toHaveLength(0);
+
+      fireEvent.click(getByText("Setuju, masukkan"));
+      await waitFor(() => expect(cart()).toHaveLength(1));
+      expect(resume).toHaveBeenCalledTimes(2);
+    });
+
+    it("marks the request expired when the server says nothing is pending", async () => {
+      const error = Object.assign(new Error("Tidak ada permintaan"), { status: 409 });
+      vi.spyOn(api, "resumeCopilot").mockRejectedValue(error);
+      const { getByText, queryByText } = await askToAdd();
+
+      fireEvent.click(getByText("Setuju, masukkan"));
+
+      await waitFor(() => expect(getByText("Permintaan ini sudah tidak berlaku. Minta lagi ya kak.")).toBeTruthy());
+      expect(queryByText("Setuju, masukkan")).toBeNull();
+      expect(cart()).toHaveLength(0);
+    });
+
+    it("expires a waiting card when the shopper sends another message", async () => {
+      const { getByLabelText, getByText, queryByText } = await askToAdd();
+      api.streamCopilotMessage.mockResolvedValue({
+        reply: "Ini kemeja pilihan kak.",
+        thread_id: "t1",
+        products: [],
+        ui_actions: [],
+        guardrail: null,
+        took_ms: 5,
+      });
+
+      const input = getByLabelText("Ketik pesan untuk Admin Toko Marcell");
+      fireEvent.change(input, { target: { value: "eh, cariin kemeja aja" } });
+      fireEvent.keyDown(input, { key: "Enter" });
+
+      await waitFor(() => expect(getByText("Ini kemeja pilihan kak.")).toBeTruthy());
+      expect(queryByText("Setuju, masukkan")).toBeNull();
+      expect(getByText("Permintaan ini sudah tidak berlaku. Minta lagi ya kak.")).toBeTruthy();
+    });
+
+    it("shows a combined total when several items are waiting", async () => {
+      const second = { ...item, asin: "B02", title: "Levi's Jeans", priceIdr: 100000, qty: 1, size: null };
+      const { getByRole } = await askToAdd({ pending_approval: { items: [item, second] } });
+
+      const card = getByRole("group", { name: "Konfirmasi keranjang" });
+      expect(card.textContent).toContain("Volcom Chino");
+      expect(card.textContent).toContain("Levi's Jeans");
+      expect(card.textContent).toContain("Total");
+    });
+  });
 });
