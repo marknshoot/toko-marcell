@@ -28,7 +28,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any, NotRequired
+from typing import Annotated, Any, NotRequired
 
 from agent_tools import _connect
 from config import get_settings
@@ -39,10 +39,11 @@ from fastapi import HTTPException
 from guardrail import classify, trim_guardrail_history
 from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
-from langchain.agents.middleware.types import hook_config
+from langchain.agents.middleware.types import PrivateStateAttr, hook_config
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 from langchain_core.outputs import ChatResult
+from langgraph.channels.untracked_value import UntrackedValue
 from llm_usage import LLMCallCounter
 
 logger = logging.getLogger(__name__)
@@ -216,8 +217,9 @@ def _browsing_context(cur, session_id: str | None) -> str:
     return "\n".join(lines)
 
 
-def build_context_block(ctx: ToolContext, session_id: str | None) -> str:
-    """Assemble the authoritative context string injected before the model call."""
+def build_static_context(ctx: ToolContext, session_id: str | None) -> str:
+    """The part of the context block that needs the database: the viewed page product, the
+    products the shopper attached, and recent browsing. Built once per turn."""
     parts: list[str] = []
     if ctx.page_asin or ctx.referenced_asins or session_id:
         with _connect(ctx.db_url) as conn:
@@ -233,13 +235,28 @@ def build_context_block(ctx: ToolContext, session_id: str | None) -> str:
                 browse = _browsing_context(cur, session_id)
                 if browse:
                     parts.append(browse)
-    if ctx.registry:
-        reg_lines = [_REGISTRY_HEADER]
-        for ref in sorted(ctx.registry):
-            p = ctx.registry[ref]
-            reg_lines.append(f"[{ref}] {p.get('title','')} — {p.get('brand') or ''} (ASIN {p.get('asin')}, Rp {p.get('priceIdr',0):,})")
-        parts.append("\n".join(reg_lines))
     return "\n\n".join(parts)
+
+
+def build_registry_block(registry: dict[int, dict]) -> str:
+    """The shown-products list ("[1] ... [2] ..."). No database access, so it can be rebuilt on
+    every model call: a tool may add products between two calls in the same turn."""
+    if not registry:
+        return ""
+    reg_lines = [_REGISTRY_HEADER]
+    for ref in sorted(registry):
+        p = registry[ref]
+        reg_lines.append(f"[{ref}] {p.get('title','')} — {p.get('brand') or ''} (ASIN {p.get('asin')}, Rp {p.get('priceIdr',0):,})")
+    return "\n".join(reg_lines)
+
+
+def compose_context(static: str, registry_block: str) -> str:
+    return "\n\n".join(part for part in (static, registry_block) if part)
+
+
+def build_context_block(ctx: ToolContext, session_id: str | None) -> str:
+    """Assemble the authoritative context string injected before the model call."""
+    return compose_context(build_static_context(ctx, session_id), build_registry_block(ctx.registry))
 
 
 class CopilotState(AgentState):
@@ -250,6 +267,9 @@ class CopilotState(AgentState):
     # The products shown so far, with the numeric refs the shopper and the model use
     # ("[2]", "yang kedua"): ``[{"ref": 1, "asin": ..., ...}]``. Saved with the thread.
     shown_products: NotRequired[list[dict]]
+    # The page-product and browsing part of the context block, built once per turn. Per-turn
+    # scratch: not saved with the thread and not part of the graph's input or output.
+    turn_context: NotRequired[Annotated[str, UntrackedValue, PrivateStateAttr]]
 
 
 class LLMUnavailable(RuntimeError):  # noqa: N818 - reads better than "...Error" at call sites
@@ -399,28 +419,42 @@ class LoopCapMiddleware(ModelCallLimitMiddleware):
 
 
 class ContextInjectionMiddleware(AgentMiddleware):
-    """Prepend the authoritative context block to the system prompt each model call."""
+    """Prepend the authoritative context block to the system prompt each model call.
+
+    The database part (page product, browsing history) is read once, before the agent starts,
+    and kept in the graph state for the rest of the turn. Only the registry part is rebuilt per
+    model call, from memory.
+    """
+
+    state_schema = CopilotState
 
     def __init__(self, ctx: ToolContext, session_id: str | None):
         super().__init__()
         self._ctx = ctx
         self._session_id = session_id
 
+    def before_agent(self, state, runtime):  # type: ignore[override]
+        return {"turn_context": build_static_context(self._ctx, self._session_id)}
+
+    async def abefore_agent(self, state, runtime):  # type: ignore[override]
+        return {"turn_context": await asyncio.to_thread(build_static_context, self._ctx, self._session_id)}
+
+    def _with_context(self, request):
+        static = request.state.get("turn_context")
+        if static is None:  # the hook did not run (middleware used on its own)
+            static = build_static_context(self._ctx, self._session_id)
+        block = compose_context(static, build_registry_block(self._ctx.registry))
+        if not block:
+            return request
+        return request.override(
+            system_prompt=f"{request.system_prompt or ADMIN_SYSTEM_PROMPT}\n\n<store_context>\n{block}\n</store_context>"
+        )
+
     def wrap_model_call(self, request, handler):  # type: ignore[override]
-        block = build_context_block(self._ctx, self._session_id)
-        if block:
-            request = request.override(
-                system_prompt=f"{request.system_prompt or ADMIN_SYSTEM_PROMPT}\n\n<store_context>\n{block}\n</store_context>"
-            )
-        return handler(request)
+        return handler(self._with_context(request))
 
     async def awrap_model_call(self, request, handler):  # type: ignore[override]
-        block = build_context_block(self._ctx, self._session_id)
-        if block:
-            request = request.override(
-                system_prompt=f"{request.system_prompt or ADMIN_SYSTEM_PROMPT}\n\n<store_context>\n{block}\n</store_context>"
-            )
-        return await handler(request)
+        return await handler(self._with_context(request))
 
 
 # Token budget for the rolling history kept in the prompt (design §2: trim by
