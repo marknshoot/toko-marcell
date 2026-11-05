@@ -124,6 +124,7 @@ Base URL locally: `http://localhost:8001`. Interactive OpenAPI docs: `/docs`.
 | `GET` | `/recs/session` | Recommendations from the current anonymous session |
 | `POST` | `/copilot/chat` | One agentic copilot turn |
 | `POST` | `/copilot/chat/stream` | Same turn streamed as Server-Sent Events |
+| `POST` | `/copilot/chat/resume` | Answer a pending cart confirmation (yes or no) and finish the paused turn |
 | `GET` | `/copilot/tools` | Names of the seven deterministic tools |
 | `POST` | `/copilot/feedback` | Thumbs up/down for a thread |
 | `GET` | `/copilot/threads/{thread_id}` | Replay a thread's display messages |
@@ -335,7 +336,50 @@ curl -s -X POST http://localhost:8001/copilot/chat \
   cannot set a price.
 - `products` is capped at six and uses stable `ref` numbers so follow-ups can say "yang kedua".
 - `503` when no LLM provider is configured. `429` with `Retry-After` when rate-limited.
-- `POST /copilot/chat/stream` emits `token` events followed by one `done` event with the same payload.
+- When the model asks for `add_to_cart`, the turn pauses and the response carries `pending_approval`
+  (see below) instead of a cart action. `ui_actions` stays empty until the shopper answers.
+- A turn that used up its three model calls answers with a short Indonesian fallback and is recorded as
+  `unanswered`, with the shopper's question in the backlog.
+- Greeting, refusal and deflection turns are saved in the conversation like any other turn.
+- `POST /copilot/chat/stream` emits these events, each as one `data:` line of JSON:
+
+| `type` | When | Fields |
+|---|---|---|
+| `status` | A tool is about to run, and again when the answer is being written | `label` (display text such as `Mencari produk…`), `tool` (when a tool) |
+| `token` | A piece of the reply | `content` |
+| `approval_required` | The turn paused for a cart confirmation | `thread_id`, `items` |
+| `done` | The turn ended or paused | the same payload as `/copilot/chat`, plus `thread_id` |
+
+Clients ignore event types they do not know, so new types never break an older client.
+
+### `POST /copilot/chat/resume`
+
+Answers a cart confirmation. The browser sends only a yes or no; the item, price, quantity and size are
+read back from the saved conversation, so nothing in the request can change what is added.
+
+```json
+{"thread_id": "thread-abc123", "session_id": "session-12345678", "approve": true}
+```
+
+The response has the same shape as `/copilot/chat`. `ui_actions` holds the validated `add_to_cart`
+action after an approval and is empty after a refusal. The model may ask for another cart add, in which
+case the response again carries `pending_approval`.
+
+```json
+"pending_approval": {
+  "items": [{"asin": "B000ABC123", "title": "...", "priceIdr": 495800, "imageUrl": "...", "qty": 2, "size": "M"}]
+}
+```
+
+- `422` for anything but `thread_id`, `session_id` and `approve` (a client price is rejected, not ignored).
+- `404` for an unknown thread, `409` when nothing is waiting for an answer, `429` with `Retry-After` when
+  rate-limited (the resumed run makes model calls, so it counts like a chat message).
+- A new chat message on a thread that is waiting abandons the request: the model's unanswered tool call is
+  replaced by a plain note so the history stays valid for the model provider.
+- Approvals need a saved conversation. With `COPILOT_FAKE_LLM=1` there is none, so a cart add runs
+  immediately, as it did before approvals existed.
+- One `copilot_turns` row is written when the turn finishes, with the model calls, tokens and active time
+  of both requests. Time the shopper spent deciding is not counted.
 
 ### Admin authentication
 
@@ -517,42 +561,50 @@ Evaluation uses RAGAS (`pipelines/eval_rag.py`) with ID-based and non-LLM contex
 connection pool (max 2, none held while idle, dead connections replaced on checkout) so it survives
 Neon's auto-suspend; a sidecar activity table enables TTL cleanup of abandoned threads.
 
-One turn end to end — deterministic triage first, then a bounded agent loop:
+One turn end to end — the guardrail is the first node of the graph, then a bounded agent loop:
 
 ```mermaid
 flowchart TB
     MSG["Shopper message<br/>thread_id + session_id"] --> SAN["Sanitization<br/>strip control characters, trim, cap length"]
-    SAN --> TRIAGE{"Pre-agent guardrail triage<br/>guardrail.classify()"}
-    TRIAGE -->|greeting| GREET["Canned greeting reply<br/>0 agent model calls"]
-    TRIAGE -->|off_topic| OFF["Polite scope deflection<br/>0 agent model calls"]
-    TRIAGE -->|injection| INJ["Prompt-injection refusal<br/>0 agent model calls"]
-    TRIAGE -->|on_topic| ASSEMBLE["Dynamic context assembly"]
 
-    GREET --> FASTLOG[("Fast log path → copilot_turns<br/>guardrail label, outcome = guardrail")]
-    OFF --> FASTLOG
-    INJ --> FASTLOG
-
-    ASSEMBLE --> CONTEXT["Authoritative context block<br/>pinned page product re-read from the DB<br/>shown-products registry<br/>recent browsing events"]
-
-    subgraph AGENT["LangGraph agent execution loop — create_agent"]
+    subgraph GRAPH["LangGraph agent — create_agent, compiled per request (generated: docs/graph.mmd)"]
         direction TB
-        CONTEXT --> MODEL["Model call<br/>OpenRouter primary, Gemini failover"]
-        MODEL --> CAP{"ModelCallLimitMiddleware<br/>cap = 3 model calls"}
-        CAP -->|tool calls| TOOLS["7 deterministic tools<br/>search_catalog, get_product_details<br/>recommend_size, build_outfit<br/>lookup_store_policy, add_to_cart<br/>flag_unanswered"]
+        SAN --> GUARD{"Guardrail node (first)<br/>guardrail.classify() with recent history<br/>LLM classifier, regex fallback"}
+        GUARD -->|greeting, off_topic, injection| CANNED["Canned reply<br/>saved in the conversation<br/>0 agent model calls"]
+        GUARD -->|on_topic| PREP["Abandoned-approval cleanup<br/>registry restored from state<br/>page + browsing context read once"]
+        PREP --> CAP{"Loop cap<br/>checked before each model call"}
+        CAP -->|under 3 calls| MODEL["Model call<br/>OpenRouter primary, Gemini failover"]
+        CAP -->|3 reached| FALLBACK["Indonesian fallback reply<br/>recorded as unanswered"]
+        MODEL -->|no tool calls| REPLY["Grounded reply<br/>product cards + ui_actions"]
+        MODEL -->|tool calls| CART{"add_to_cart?"}
+        CART -->|no| TOOLS["7 deterministic tools<br/>search_catalog, get_product_details<br/>recommend_size, build_outfit<br/>lookup_store_policy, add_to_cart<br/>flag_unanswered"]
+        CART -->|yes| PAUSE["Pause: approval_required<br/>item + price read from the DB<br/>POST /copilot/chat/resume"]
+        PAUSE -->|approve| TOOLS
+        PAUSE -->|reject| MODEL
         TOOLS --> INV["Code invariants enforced<br/>outfit total summed against budget<br/>product price re-read server-side<br/>size refusal instead of a guess"]
-        INV --> MODEL
-        CAP -->|end| REPLY["Grounded reply<br/>product cards + ui_actions"]
+        INV --> CAP
     end
 
-    REPLY --> CKPT[("PostgresSaver checkpoint<br/>thread state keyed by thread_id")]
-    REPLY --> METRICS["OpenTelemetry-aligned turn metrics<br/>guardrail, outcome, tools, latency<br/>tokens, model, cost_usd"]
-    METRICS --> TURNS[("copilot_turns")]
-    FASTLOG --> TURNS
+    CANNED --> RECORD
+    FALLBACK --> RECORD
+    REPLY --> RECORD["Finalize<br/>registry saved in the thread state<br/>one copilot_turns row + copilot.turn.completed log line"]
+    RECORD --> CKPT[("PostgresSaver checkpoint<br/>thread state keyed by thread_id")]
+    RECORD --> TURNS[("copilot_turns<br/>guardrail, route, outcome, tools, latency<br/>tokens, model calls, cost_usd")]
 ```
 
-Guardrail labels never enter the agent loop, so a greeting, deflection, or refusal costs zero agent
-model calls. With `GUARDRAIL_LLM_MODE=ambiguous`, a decisive regex label also skips the small
-classifier call, making the entire triage path LLM-free.
+The guardrail is the first node of the graph, so its canned replies are part of the conversation
+memory. A greeting, deflection, or refusal ends the run before the model node and costs zero agent
+model calls (the classifier's own call is counted in `copilot_turns.llm_calls`). With
+`GUARDRAIL_LLM_MODE=ambiguous`, a decisive regex label also skips the small classifier call, making
+the entire triage path LLM-free.
+
+A cart add never happens on the model's say-so alone. The graph pauses, the chat shows a confirmation
+card with the item, price and quantity read from the database, and only the shopper's yes or no
+(`POST /copilot/chat/resume`) continues the turn. While the agent works, the stream also sends short
+`status` events ("Mencari produk…") so the chat can show progress.
+
+The exact graph, node by node, is generated from the code into [`docs/graph.mmd`](../docs/graph.mmd). Run
+`python scripts/dump_graph.py` to regenerate it; a test fails if the committed file drifts from the code.
 
 ### Guardrails
 
@@ -564,6 +616,10 @@ classifier call, making the entire triage path LLM-free.
 | `greeting` | Fast-path canned greeting; no model call |
 | `off_topic` | Fixed, polite scope deflection |
 | `on_topic` | Proceeds to the agent loop |
+
+The guardrail is the first node of the agent graph (`GuardrailMiddleware`), so it reads recent history
+from the graph state and its canned replies are saved in the conversation. Without an LLM provider the
+graph still builds with a stand-in model: a greeting is answered, and a real question returns `503`.
 
 `GUARDRAIL_LLM_MODE=always` uses the LLM classifier for every non-injection message;
 `ambiguous` lets decisive regex labels short-circuit and only sends ambiguous messages to the LLM.
@@ -578,7 +634,7 @@ Trimming older turns from the classifier prompt prevents multi-turn injection fr
 | `recommend_size` | Category-aware deterministic sizing | Returns `applicable=false` instead of guessing |
 | `build_outfit` | Top + bottom + footwear within a budget | `total <= budget` summed and verified in code |
 | `lookup_store_policy` | Policy and sizing RAG | Grounded citations from `store_knowledge` |
-| `add_to_cart` | Emit a validated UI action | Price re-read from `products`; qty bounds enforced |
+| `add_to_cart` | Emit a validated UI action after the shopper confirms | Price re-read from `products`; qty bounds enforced; runs only after a yes |
 | `flag_unanswered` | Record an unanswerable question | Sets the turn outcome and backlog entry |
 
 ### Provider chain
@@ -596,8 +652,10 @@ stable assertions.
 
 Every turn writes to `copilot_turns`: guardrail label, outcome (`answered`, `guardrail`,
 `unanswered`, `cart`, `error`), tools called, latency, token counts, model, estimated `cost_usd`, and
-the `unanswered_question` when applicable. `GET /admin/kpi` and `GET /events/summary` aggregate these
-rows into the unit-economics and quality panels.
+the `unanswered_question` when applicable. `route` is `guardrail` or `agent`, and `llm_calls` counts every
+model call of the turn: the guardrail classifier, the agent, and provider fallback attempts. Tool calls,
+outcome and tokens are read from the current turn only, not from the whole saved thread.
+`GET /admin/kpi` and `GET /events/summary` aggregate these rows into the unit-economics and quality panels.
 
 ---
 
@@ -1032,6 +1090,20 @@ followed from the edge through the API and into the database without grep archae
 ```json
 {"timestamp":"2026-10-30T15:00:00.123Z","level":"info","service":"toko-marcell-api","version":"1.0.0","environment":"production","message":"request.completed","trace_id":"4bf92f3577b34da6a3ce929d0e0e4736","span_id":"00f067aa0ba902b7","request_id":"req_8ac34d30","method":"GET","path":"/admin/kpi","status_code":200,"duration_ms":42.17}
 ```
+
+**Copilot events.** Each copilot turn writes ids, labels and counts only: never the shopper's message,
+tool arguments or the reply (the formatter masks credential-like keys, not content).
+
+| `message` | Fields beyond the nine standard ones |
+|---|---|
+| `copilot.turn.completed` | `thread_id`, `turn_route`, `guardrail`, `outcome`, `llm_calls`, `tool_names`, `latency_ms`, `model` |
+| `copilot.turn.loop_cap` (warning) | `thread_id`, `llm_calls`, `tool_names` |
+| `copilot.approval.requested` / `copilot.approval.answered` / `copilot.approval.abandoned` | `thread_id`, `asins` (and `approved` on `answered`) |
+
+`turn_route` is the `copilot_turns.route` column (`guardrail` or `agent`). It is not the `route` field of
+the `request.completed` access line, which is the URL template. Agent and stream errors carry their
+traceback in the same record, and the streaming worker runs with the request's context, so tool and
+model logs of a streamed turn keep the request and trace ids.
 
 **W3C TraceContext propagation.** When a caller sends
 `traceparent: 00-<32hex>-<16hex>-01`, the API adopts that trace and span ID and echoes the request

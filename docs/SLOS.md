@@ -90,8 +90,10 @@ Example: 2,000 input + 500 output tokens at the defaults costs
 `copilot_turns.cost_usd` is populated when the provider reports either token count. If neither count
 is reported, the cost stays `NULL`; a missing cost is not treated as free. The configured price is a
 **planning estimate**, not an invoice: provider discounts, free tiers, retries, guardrail calls and
-currency conversion can differ. The pre-agent guardrail's LLM tokens are **not** in the recorded
-agent usage, so the estimate is a lower bound when the guardrail runs.
+currency conversion can differ. From revision `0007` the guardrail classifier's tokens are included in
+the turn's usage (a per-turn callback counts every model call), and a turn that paused for a cart
+confirmation includes both of its requests. Rows from before that revision exclude the guardrail, so
+they are a lower bound.
 
 ### 4.2 Aggregates exposed by `GET /events/summary` and `GET /admin/kpi`
 
@@ -160,7 +162,7 @@ prices must be reconciled before its spend is treated as equivalent to the prima
 
 ## 6. Guardrail token-saving mode
 
-`GUARDRAIL_LLM_MODE` controls the pre-agent classifier:
+`GUARDRAIL_LLM_MODE` controls the guardrail, the first node of the agent graph:
 
 | Mode | Behaviour | Trade-off |
 |---|---|---|

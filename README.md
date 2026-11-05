@@ -412,14 +412,18 @@ is safe, bounded, and cheap. This system is the difference between a demo and a 
 - **Runtime:** LangChain v1 `create_agent` on a **LangGraph** state machine, with conversation memory
   checkpointed in PostgreSQL (`PostgresSaver`, on a small reconnecting pool) keyed by a
   browser-generated `thread_id`.
-- **Three-class guardrail layer:** deterministic regex plus LLM classification route every message into
-  `greeting` (fast-path canned reply), `off_topic` (polite deflection), `injection` (prompt-injection
-  and jailbreak defense), or `on_topic`. Guardrail replies never consume a full agent turn.
+- **Three-class guardrail layer, as the first node of the graph:** deterministic regex plus LLM
+  classification route every message into `greeting` (fast-path canned reply), `off_topic` (polite
+  deflection), `injection` (prompt-injection and jailbreak defense), or `on_topic`. Guardrail replies
+  never consume a full agent turn, and they are saved in the conversation like any other reply.
 - **Seven deterministic tools:** `search_catalog`, `get_product_details`, `recommend_size`,
   `build_outfit`, `lookup_store_policy`, `add_to_cart`, and `flag_unanswered`.
 - **Mathematical invariants live in code, not prompts:** `build_outfit` sums item prices and rejects
   any combination where `total > budget`; `add_to_cart` re-reads the server-side price; `flag_unanswered`
   records the unresolved question for the operations backlog.
+- **A cart add needs the shopper's yes:** the graph pauses before `add_to_cart` runs, shows the item the
+  server resolved (title and price from the database, quantity clamped), and continues only on the
+  shopper's answer. A new message abandons the request; nothing reaches the cart in the meantime.
 - **Provider resilience:** OpenRouter is preferred, Gemini is the fallback, and rate limits are
   enforced per client IP. `COPILOT_FAKE_LLM=1` provides a deterministic fake tool-calling model so CI
   never depends on a live provider.
@@ -429,37 +433,45 @@ How one turn flows through the hardened runtime:
 ```mermaid
 flowchart TB
     MSG["Shopper message<br/>thread_id + session_id"] --> SAN["Sanitization<br/>strip control characters, trim, cap length"]
-    SAN --> TRIAGE{"Pre-agent guardrail triage<br/>guardrail.classify()"}
-    TRIAGE -->|greeting| GREET["Canned greeting reply<br/>0 agent model calls"]
-    TRIAGE -->|off_topic| OFF["Polite scope deflection<br/>0 agent model calls"]
-    TRIAGE -->|injection| INJ["Prompt-injection refusal<br/>0 agent model calls"]
-    TRIAGE -->|on_topic| ASSEMBLE["Dynamic context assembly"]
 
-    GREET --> FASTLOG[("Fast log path → copilot_turns<br/>guardrail label, outcome = guardrail")]
-    OFF --> FASTLOG
-    INJ --> FASTLOG
-
-    ASSEMBLE --> CONTEXT["Authoritative context block<br/>pinned page product re-read from the DB<br/>shown-products registry<br/>recent browsing events"]
-
-    subgraph AGENT["LangGraph agent execution loop — create_agent"]
+    subgraph GRAPH["LangGraph agent — create_agent, compiled per request (generated: docs/graph.mmd)"]
         direction TB
-        CONTEXT --> MODEL["Model call<br/>OpenRouter primary, Gemini failover"]
-        MODEL --> CAP{"ModelCallLimitMiddleware<br/>cap = 3 model calls"}
-        CAP -->|tool calls| TOOLS["7 deterministic tools<br/>search_catalog, get_product_details<br/>recommend_size, build_outfit<br/>lookup_store_policy, add_to_cart<br/>flag_unanswered"]
+        SAN --> GUARD{"Guardrail node (first)<br/>guardrail.classify() with recent history<br/>LLM classifier, regex fallback"}
+        GUARD -->|greeting, off_topic, injection| CANNED["Canned reply<br/>saved in the conversation<br/>0 agent model calls"]
+        GUARD -->|on_topic| PREP["Abandoned-approval cleanup<br/>registry restored from state<br/>page + browsing context read once"]
+        PREP --> CAP{"Loop cap<br/>checked before each model call"}
+        CAP -->|under 3 calls| MODEL["Model call<br/>OpenRouter primary, Gemini failover"]
+        CAP -->|3 reached| FALLBACK["Indonesian fallback reply<br/>recorded as unanswered"]
+        MODEL -->|no tool calls| REPLY["Grounded reply<br/>product cards + ui_actions"]
+        MODEL -->|tool calls| CART{"add_to_cart?"}
+        CART -->|no| TOOLS["7 deterministic tools<br/>search_catalog, get_product_details<br/>recommend_size, build_outfit<br/>lookup_store_policy, add_to_cart<br/>flag_unanswered"]
+        CART -->|yes| PAUSE["Pause: approval_required<br/>item + price read from the DB<br/>POST /copilot/chat/resume"]
+        PAUSE -->|approve| TOOLS
+        PAUSE -->|reject| MODEL
         TOOLS --> INV["Code invariants enforced<br/>outfit total summed against budget<br/>product price re-read server-side<br/>size refusal instead of a guess"]
-        INV --> MODEL
-        CAP -->|end| REPLY["Grounded reply<br/>product cards + ui_actions"]
+        INV --> CAP
     end
 
-    REPLY --> CKPT[("PostgresSaver checkpoint<br/>thread state keyed by thread_id")]
-    REPLY --> METRICS["OpenTelemetry-aligned turn metrics<br/>guardrail, outcome, tools, latency<br/>tokens, model, cost_usd"]
-    METRICS --> TURNS[("copilot_turns")]
-    FASTLOG --> TURNS
+    CANNED --> RECORD
+    FALLBACK --> RECORD
+    REPLY --> RECORD["Finalize<br/>registry saved in the thread state<br/>one copilot_turns row + copilot.turn.completed log line"]
+    RECORD --> CKPT[("PostgresSaver checkpoint<br/>thread state keyed by thread_id")]
+    RECORD --> TURNS[("copilot_turns<br/>guardrail, route, outcome, tools, latency<br/>tokens, model calls, cost_usd")]
 ```
 
-Guardrail labels never enter the agent loop, so a greeting, deflection, or refusal costs zero agent
-model calls. With `GUARDRAIL_LLM_MODE=ambiguous`, a decisive regex label also skips the small
-classifier call, making the entire triage path LLM-free.
+The guardrail is the first node of the graph, so its canned replies are part of the conversation
+memory. A greeting, deflection, or refusal ends the run before the model node and costs zero agent
+model calls (the classifier's own call is counted in `copilot_turns.llm_calls`). With
+`GUARDRAIL_LLM_MODE=ambiguous`, a decisive regex label also skips the small classifier call, making
+the entire triage path LLM-free.
+
+A cart add never happens on the model's say-so alone. The graph pauses, the chat shows a confirmation
+card with the item, price and quantity read from the database, and only the shopper's yes or no
+(`POST /copilot/chat/resume`) continues the turn. While the agent works, the stream also sends short
+`status` events ("Mencari produk…") so the chat can show progress.
+
+The exact graph, node by node, is generated from the code into [`docs/graph.mmd`](./docs/graph.mmd). Run
+`python scripts/dump_graph.py` to regenerate it; a test fails if the committed file drifts from the code.
 
 ### System 6 — Production Operations Telemetry & KPI Dashboard
 
@@ -478,10 +490,13 @@ annoying customers — in one screen, without asking an engineer to run a query.
   - **Search health:** zero-result rate and top zero-result queries.
   - **Copilot quality:** unanswered rate, deflection rate, and thumbs up/down.
   - **Unanswered backlog:** the actual customer questions the system could not answer.
-- **OpenTelemetry-aligned structured JSON logging** for every request: nine standard fields
+- **Structured JSON logging** (OpenTelemetry-aligned field names) for every request: nine standard fields
   (timestamp, level, service, version, environment, message, trace/span/request IDs), W3C
   `traceparent` propagation or automatic ID generation, and newline-delimited JSON streamed to
-  `stdout` for Render, Datadog, CloudWatch and similar collectors with no sidecar agent.
+  `stdout` for Render, Datadog, CloudWatch and similar collectors with no sidecar agent. Each copilot
+  turn also writes one `copilot.turn.completed` line (thread id, route, guardrail label, outcome,
+  model calls, tool names, latency; never the message or the reply), so a request can be matched to
+  its `copilot_turns` row without querying the database.
 - Backed by `GET /admin/kpi`, which returns explicit `synthetic` and `caveat` metadata rather than
   presenting demo data as audited revenue.
 
