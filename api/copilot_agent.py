@@ -18,11 +18,14 @@ router passes recent history explicitly.
 """
 
 import asyncio
+import contextvars
 import json
 import logging
 import os
 import re
+import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from agent_tools import _connect
@@ -30,6 +33,7 @@ from config import get_settings
 from copilot_llm import build_chat_model, llm_available
 from copilot_metrics import derive_outcome, estimate_cost_usd, extract_token_usage, record_turn
 from copilot_tools import ToolContext, _slim, build_tools
+from fastapi import HTTPException
 from guardrail import classify, trim_guardrail_history
 from langchain.agents import create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
@@ -382,6 +386,158 @@ def _current_turn(messages: list[Any]) -> list[Any]:
     return messages
 
 
+_LLM_UNAVAILABLE_DETAIL = "Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti."
+_LLM_NETWORK_DETAIL = "Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!"
+_STREAM_ERROR_REPLY = "Maaf kak, asisten AI lagi ada kendala koneksi. Boleh coba kirim lagi ya!"
+_EMPTY_REPLY = "Maaf kak, mimin belum nemu jawabannya. Boleh ulangi ya?"
+
+
+@dataclass
+class _Turn:
+    """Per-turn scope shared by ``run_turn`` and ``stream_turn``."""
+
+    started: float
+    usage: LLMCallCounter
+    thread_id: str | None
+    session_id: str | None
+    db_url: str
+    fake: bool | None
+    checkpointer: Any = None
+
+
+def _finish_turn(
+    turn: _Turn,
+    *,
+    reply: str,
+    ctx: ToolContext | None = None,
+    result: dict[str, Any] | None = None,
+    guardrail: str | None = None,
+    error: bool = False,
+) -> dict[str, Any]:
+    """Record a finished turn once and return the response fields shared by every exit.
+
+    Every way a turn can end (guardrail reply, agent unavailable, agent failure, normal
+    answer) goes through here, so telemetry and the ``copilot.turn.completed`` log line
+    cannot drift between the sync and streaming paths.
+    """
+    turn_model = _turn_model(turn.fake)
+    input_tokens, output_tokens = turn.usage.usage
+
+    tool_calls: list[dict[str, Any]] = []
+    if result is not None:
+        turn_messages = _current_turn(result.get("messages", []))
+        for m in turn_messages:
+            for tc in getattr(m, "tool_calls", None) or []:
+                tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
+        if input_tokens is None and output_tokens is None:
+            input_tokens, output_tokens = extract_token_usage(turn_messages)
+
+    tool_names = _tool_names(tool_calls)
+    outcome = derive_outcome(guardrail, tool_names, error)
+    route = "guardrail" if guardrail else "agent"
+    took_ms = round((time.perf_counter() - turn.started) * 1000, 2)
+
+    record_turn(
+        thread_id=turn.thread_id,
+        session_id=turn.session_id,
+        db_url=turn.db_url,
+        guardrail=guardrail,
+        outcome=outcome,
+        tool_names=tool_names,
+        latency_ms=took_ms,
+        input_tokens=input_tokens,
+        output_tokens=output_tokens,
+        model=turn_model,
+        cost_usd=estimate_cost_usd(input_tokens, output_tokens, turn_model),
+        unanswered_question=ctx.unanswered_question if (ctx is not None and outcome == "unanswered") else None,
+        route=route,
+        llm_calls=turn.usage.calls,
+    )
+
+    # Ids, labels and counts only. Never the shopper's message, tool arguments or the reply:
+    # the log formatter masks credential-like keys, not content.
+    logger.info(
+        "copilot.turn.completed",
+        extra={
+            "thread_id": turn.thread_id,
+            "turn_route": route,
+            "guardrail": guardrail,
+            "outcome": outcome,
+            "llm_calls": turn.usage.calls,
+            "tool_names": tool_names,
+            "latency_ms": took_ms,
+            "model": turn_model,
+        },
+    )
+
+    # Record activity for TTL cleanup (design §2). Only a turn that ran the graph is checkpointed.
+    if result is not None and turn.checkpointer is not None and turn.thread_id:
+        try:
+            from copilot_memory import touch_thread
+
+            touch_thread(turn.thread_id, db_url=turn.db_url)
+        except Exception:
+            pass
+
+    return {
+        "reply": reply,
+        # Products shown during this turn (not merely rehydrated from history), capped at 6.
+        "products": ctx.turn_products(limit=6) if (ctx is not None and result is not None) else [],
+        "ui_actions": ctx.ui_actions if (ctx is not None and result is not None) else [],
+        "outfit": ctx.outfit if (ctx is not None and result is not None) else None,
+        "tool_calls": tool_calls,
+        "guardrail": guardrail,
+        "took_ms": took_ms,
+    }
+
+
+async def _prepare_agent(
+    turn: _Turn,
+    *,
+    page_asin: str | None,
+    referenced_asins: list[str] | None,
+) -> tuple[ToolContext, Any]:
+    """Per-request tool context plus the compiled agent (blocking work runs off the event loop)."""
+    ctx = ToolContext(
+        db_url=turn.db_url,
+        page_asin=page_asin,
+        referenced_asins=referenced_asins or [],
+    )
+    await asyncio.to_thread(_seed_registry_from_checkpoint, ctx, turn.checkpointer, turn.thread_id)
+    agent = await asyncio.to_thread(
+        build_agent, ctx, turn.session_id, fake=turn.fake, checkpointer=turn.checkpointer
+    )
+    return ctx, agent
+
+
+def _turn_input(
+    clean_message: str, message: str, recent_history: list[dict[str, str]], checkpointer: Any
+) -> list[Any]:
+    """Messages for this turn.
+
+    With a checkpointer, prior turns are restored by ``thread_id``, so only the new human
+    message is passed; otherwise the caller's history is replayed first.
+    """
+    messages: list[Any] = []
+    if checkpointer is None and recent_history:
+        for h in recent_history:
+            if h["role"] == "user":
+                messages.append(HumanMessage(content=sanitize_user_message(h["content"])))
+            elif h["role"] == "assistant":
+                messages.append(AIMessage(content=h["content"]))
+    messages.append(HumanMessage(content=clean_message or message))
+    return messages
+
+
+def _run_config(turn: _Turn) -> dict[str, Any]:
+    """Run config. The counter rides here so every model call in the graph, provider-fallback
+    attempts included, is counted for this turn."""
+    config: dict[str, Any] = {"callbacks": [turn.usage]}
+    if turn.checkpointer and turn.thread_id:
+        config["configurable"] = {"thread_id": turn.thread_id}
+    return config
+
+
 async def run_turn(
     message: str,
     *,
@@ -399,8 +555,15 @@ async def run_turn(
     1. Deterministic guardrail → canned reply (zero LLM) if it fires.
     2. Otherwise invoke the create_agent agent with the tools + context middleware.
     """
-    started = time.perf_counter()
-    usage = LLMCallCounter()
+    turn = _Turn(
+        started=time.perf_counter(),
+        usage=LLMCallCounter(),
+        thread_id=thread_id,
+        session_id=session_id,
+        db_url=db_url,
+        fake=fake,
+        checkpointer=checkpointer,
+    )
     clean_message = sanitize_user_message(message)
     # Both calls do blocking I/O (database read, model HTTP call), so keep them off the event loop.
     recent_history = await asyncio.to_thread(
@@ -411,152 +574,32 @@ async def run_turn(
         clean_message or message,
         history=recent_history,
         use_llm=not bool(fake),
-        callbacks=[usage],
+        callbacks=[turn.usage],
     )
     if label is not None:
-        took_ms = round((time.perf_counter() - started) * 1000, 2)
-        record_turn(
-            thread_id=thread_id,
-            session_id=session_id,
-            db_url=db_url,
-            guardrail=label,
-            outcome=derive_outcome(label, [], False),
-            tool_names=[],
-            latency_ms=took_ms,
-            model=_turn_model(fake),
-            route="guardrail",
-            llm_calls=usage.calls,
-        )
-        return {
-            "reply": canned,
-            "products": [],
-            "ui_actions": [],
-            "outfit": None,
-            "tool_calls": [],
-            "guardrail": label,
-            "took_ms": took_ms,
-        }
+        return _finish_turn(turn, reply=canned, guardrail=label)
 
-    ctx = ToolContext(
-        db_url=db_url,
-        page_asin=page_asin,
-        referenced_asins=referenced_asins or [],
-    )
-    await asyncio.to_thread(_seed_registry_from_checkpoint, ctx, checkpointer, thread_id)
-    agent = await asyncio.to_thread(build_agent, ctx, session_id, fake=fake, checkpointer=checkpointer)
+    ctx, agent = await _prepare_agent(turn, page_asin=page_asin, referenced_asins=referenced_asins)
     if agent is None:
-        took_ms = round((time.perf_counter() - started) * 1000, 2)
-        record_turn(
-            thread_id=thread_id,
-            session_id=session_id,
-            db_url=db_url,
-            outcome=derive_outcome(None, [], True),
-            latency_ms=took_ms,
-            model=_turn_model(fake),
-            route="agent",
-            llm_calls=usage.calls,
-        )
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=503,
-            detail="Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti.",
-        )
+        _finish_turn(turn, reply="", error=True)
+        raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL)
 
-    # Build the input messages. With a checkpointer, prior turns are restored by
-    # thread_id, so we pass only the new human message; otherwise we pass history.
-    input_messages: list[Any] = []
-    if checkpointer is None and recent_history:
-        for h in recent_history:
-            if h["role"] == "user":
-                input_messages.append(HumanMessage(content=sanitize_user_message(h["content"])))
-            elif h["role"] == "assistant":
-                input_messages.append(AIMessage(content=h["content"]))
-    input_messages.append(HumanMessage(content=clean_message or message))
-
-    # The counter rides in the run config so every model call in the graph, including
-    # provider-fallback attempts, is counted for this turn.
-    invoke_cfg: dict[str, Any] = {"callbacks": [usage]}
-    if checkpointer and thread_id:
-        invoke_cfg["configurable"] = {"thread_id": thread_id}
-
+    payload = {"messages": _turn_input(clean_message, message, recent_history, checkpointer)}
+    config = _run_config(turn)
     try:
         if checkpointer is not None:
             # The sync PostgresSaver doesn't implement async methods, so run the
             # synchronous graph in a worker thread to keep the route async.
-            result = await asyncio.to_thread(
-                agent.invoke, {"messages": input_messages}, invoke_cfg
-            )
+            result = await asyncio.to_thread(agent.invoke, payload, config)
         else:
-            result = await agent.ainvoke({"messages": input_messages}, config=invoke_cfg)
+            result = await agent.ainvoke(payload, config=config)
     except Exception as e:
-        logger.error("copilot agent error: %s", e)
-        took_ms = round((time.perf_counter() - started) * 1000, 2)
-        record_turn(
-            thread_id=thread_id,
-            session_id=session_id,
-            db_url=db_url,
-            outcome=derive_outcome(None, [], True),
-            latency_ms=took_ms,
-            model=_turn_model(fake),
-            route="agent",
-            llm_calls=usage.calls,
-        )
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=502,
-            detail="Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!",
-        ) from None
+        logger.error("copilot agent error: %s", e, exc_info=True)
+        _finish_turn(turn, reply="", error=True)
+        raise HTTPException(status_code=502, detail=_LLM_NETWORK_DETAIL) from None
 
-    reply = _extract_reply(result) or "Maaf kak, mimin belum nemu jawabannya. Boleh ulangi ya?"
-
-    # Record activity for TTL cleanup (design §2).
-    if checkpointer is not None and thread_id:
-        try:
-            from copilot_memory import touch_thread
-            touch_thread(thread_id, db_url=db_url)
-        except Exception:
-            pass
-
-    # Collect tool_calls from the message trace.
-    tool_calls = []
-    for m in _current_turn(result.get("messages", [])):
-        for tc in getattr(m, "tool_calls", None) or []:
-            tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
-
-    # Products shown during this turn (not merely rehydrated from history), capped at 6.
-    products = ctx.turn_products(limit=6)
-    tool_names = _tool_names(tool_calls)
-    input_tokens, output_tokens = usage.usage
-    if input_tokens is None and output_tokens is None:
-        input_tokens, output_tokens = extract_token_usage(_current_turn(result.get("messages", [])))
-    turn_model = _turn_model(fake)
-
-    took_ms = round((time.perf_counter() - started) * 1000, 2)
-    outcome = derive_outcome(None, tool_names, False)
-    record_turn(
-        thread_id=thread_id,
-        session_id=session_id,
-        db_url=db_url,
-        outcome=outcome,
-        tool_names=tool_names,
-        latency_ms=took_ms,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        model=turn_model,
-        cost_usd=estimate_cost_usd(input_tokens, output_tokens, turn_model),
-        unanswered_question=ctx.unanswered_question if outcome == "unanswered" else None,
-        route="agent",
-        llm_calls=usage.calls,
-    )
-    return {
-        "reply": reply,
-        "products": products,
-        "ui_actions": ctx.ui_actions,
-        "outfit": ctx.outfit,
-        "tool_calls": tool_calls,
-        "guardrail": None,
-        "took_ms": took_ms,
-    }
+    reply = _extract_reply(result) or _EMPTY_REPLY
+    return _finish_turn(turn, reply=reply, ctx=ctx, result=result)
 
 
 def _chunk_text(msg: Any) -> str:
@@ -581,12 +624,16 @@ async def stream_turn(
     thread_id: str | None = None,
 ):
     """Stream one copilot v2 turn as event dicts (`token` and `done`)."""
-    import threading
-
-    started = time.perf_counter()
-    usage = LLMCallCounter()
+    turn = _Turn(
+        started=time.perf_counter(),
+        usage=LLMCallCounter(),
+        thread_id=thread_id,
+        session_id=session_id,
+        db_url=db_url,
+        fake=fake,
+        checkpointer=checkpointer,
+    )
     clean_message = sanitize_user_message(message)
-    # Both calls do blocking I/O (database read, model HTTP call), so keep them off the event loop.
     recent_history = await asyncio.to_thread(
         _resolve_guardrail_history, history, checkpointer, thread_id, db_url
     )
@@ -595,130 +642,54 @@ async def stream_turn(
         clean_message or message,
         history=recent_history,
         use_llm=not bool(fake),
-        callbacks=[usage],
+        callbacks=[turn.usage],
     )
     if label is not None:
-        took_ms = round((time.perf_counter() - started) * 1000, 2)
-        record_turn(
-            thread_id=thread_id,
-            session_id=session_id,
-            db_url=db_url,
-            guardrail=label,
-            outcome=derive_outcome(label, [], False),
-            tool_names=[],
-            latency_ms=took_ms,
-            model=_turn_model(fake),
-            route="guardrail",
-            llm_calls=usage.calls,
-        )
+        summary = _finish_turn(turn, reply=canned, guardrail=label)
         yield {"type": "token", "content": canned}
-        yield {
-            "type": "done",
-            "reply": canned,
-            "thread_id": thread_id,
-            "products": [],
-            "ui_actions": [],
-            "outfit": None,
-            "tool_calls": [],
-            "guardrail": label,
-            "took_ms": took_ms,
-        }
+        yield {"type": "done", "thread_id": thread_id, **summary}
         return
 
-    ctx = ToolContext(
-        db_url=db_url,
-        page_asin=page_asin,
-        referenced_asins=referenced_asins or [],
-    )
-    await asyncio.to_thread(_seed_registry_from_checkpoint, ctx, checkpointer, thread_id)
-    agent = await asyncio.to_thread(build_agent, ctx, session_id, fake=fake, checkpointer=checkpointer)
+    ctx, agent = await _prepare_agent(turn, page_asin=page_asin, referenced_asins=referenced_asins)
     if agent is None:
-        took_ms = round((time.perf_counter() - started) * 1000, 2)
-        record_turn(
-            thread_id=thread_id,
-            session_id=session_id,
-            db_url=db_url,
-            outcome=derive_outcome(None, [], True),
-            latency_ms=took_ms,
-            model=_turn_model(fake),
-            route="agent",
-            llm_calls=usage.calls,
-        )
-        from fastapi import HTTPException
-        raise HTTPException(
-            status_code=503,
-            detail="Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti.",
-        )
+        _finish_turn(turn, reply="", error=True)
+        raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL)
 
-    input_messages: list[Any] = []
-    if checkpointer is None and recent_history:
-        for h in recent_history:
-            if h["role"] == "user":
-                input_messages.append(HumanMessage(content=sanitize_user_message(h["content"])))
-            elif h["role"] == "assistant":
-                input_messages.append(AIMessage(content=h["content"]))
-    input_messages.append(HumanMessage(content=clean_message or message))
-
-    # The counter rides in the run config so every model call in the graph, including
-    # provider-fallback attempts, is counted for this turn.
-    invoke_cfg: dict[str, Any] = {"callbacks": [usage]}
-    if checkpointer and thread_id:
-        invoke_cfg["configurable"] = {"thread_id": thread_id}
+    payload = {"messages": _turn_input(clean_message, message, recent_history, checkpointer)}
+    config = _run_config(turn)
 
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
 
     def _worker():
         try:
-            for mode, chunk in agent.stream(
-                {"messages": input_messages},
-                config=invoke_cfg,
-                stream_mode=["messages", "values"],
-            ):
+            for mode, chunk in agent.stream(payload, config=config, stream_mode=["messages", "values"]):
                 loop.call_soon_threadsafe(queue.put_nowait, (mode, chunk))
             loop.call_soon_threadsafe(queue.put_nowait, ("__eof__", None))
         except Exception as exc:
             loop.call_soon_threadsafe(queue.put_nowait, ("__err__", exc))
 
-    threading.Thread(target=_worker, daemon=True).start()
+    # A plain Thread starts with an empty context, which would drop the request and trace
+    # ids from every log line written by tools and model calls during a streamed turn.
+    worker_context = contextvars.copy_context()
+    threading.Thread(target=worker_context.run, args=(_worker,), daemon=True).start()
 
     final_result: dict[str, Any] = {}
     streamed_parts: list[str] = []
 
     while True:
-        mode, payload = await queue.get()
+        mode, event = await queue.get()
         if mode == "__eof__":
             break
         if mode == "__err__":
-            logger.error("copilot stream error: %s", payload)
-            fallback_err = "Maaf kak, asisten AI lagi ada kendala koneksi. Boleh coba kirim lagi ya!"
-            took_ms = round((time.perf_counter() - started) * 1000, 2)
-            record_turn(
-                thread_id=thread_id,
-                session_id=session_id,
-                db_url=db_url,
-                outcome=derive_outcome(None, [], True),
-                latency_ms=took_ms,
-                model=_turn_model(fake),
-                route="agent",
-                llm_calls=usage.calls,
-            )
+            logger.error("copilot stream error: %s", event, exc_info=event)
+            summary = _finish_turn(turn, reply="".join(streamed_parts) or _STREAM_ERROR_REPLY, error=True)
             if not streamed_parts:
-                yield {"type": "token", "content": fallback_err}
-            yield {
-                "type": "done",
-                "reply": "".join(streamed_parts) or fallback_err,
-                "thread_id": thread_id,
-                "products": [],
-                "ui_actions": [],
-                "outfit": None,
-                "tool_calls": [],
-                "guardrail": None,
-                "took_ms": took_ms,
-            }
+                yield {"type": "token", "content": _STREAM_ERROR_REPLY}
+            yield {"type": "done", "thread_id": thread_id, **summary}
             return
         if mode == "messages":
-            msg_chunk, meta = payload
+            msg_chunk, meta = event
             if (
                 isinstance(msg_chunk, AIMessage)
                 and (meta or {}).get("langgraph_node") == "model"
@@ -729,64 +700,15 @@ async def stream_turn(
                 if txt:
                     streamed_parts.append(txt)
                     yield {"type": "token", "content": txt}
-        elif mode == "values" and isinstance(payload, dict):
-            final_result = payload
+        elif mode == "values" and isinstance(event, dict):
+            final_result = event
 
-    reply = (
-        _extract_reply(final_result)
-        or "".join(streamed_parts)
-        or "Maaf kak, mimin belum nemu jawabannya. Boleh ulangi ya?"
-    )
+    reply = _extract_reply(final_result) or "".join(streamed_parts) or _EMPTY_REPLY
     if not streamed_parts and reply:
         yield {"type": "token", "content": reply}
 
-    if checkpointer is not None and thread_id:
-        try:
-            from copilot_memory import touch_thread
-            touch_thread(thread_id, db_url=db_url)
-        except Exception:
-            pass
-
-    tool_calls = []
-    for m in _current_turn(final_result.get("messages", [])):
-        for tc in getattr(m, "tool_calls", None) or []:
-            tool_calls.append({"name": tc.get("name"), "args": tc.get("args") or {}})
-
-    products = ctx.turn_products(limit=6)
-    tool_names = _tool_names(tool_calls)
-    input_tokens, output_tokens = usage.usage
-    if input_tokens is None and output_tokens is None:
-        input_tokens, output_tokens = extract_token_usage(_current_turn(final_result.get("messages", [])))
-    turn_model = _turn_model(fake)
-
-    took_ms = round((time.perf_counter() - started) * 1000, 2)
-    outcome = derive_outcome(None, tool_names, False)
-    record_turn(
-        thread_id=thread_id,
-        session_id=session_id,
-        db_url=db_url,
-        outcome=outcome,
-        tool_names=tool_names,
-        latency_ms=took_ms,
-        input_tokens=input_tokens,
-        output_tokens=output_tokens,
-        model=turn_model,
-        cost_usd=estimate_cost_usd(input_tokens, output_tokens, turn_model),
-        unanswered_question=ctx.unanswered_question if outcome == "unanswered" else None,
-        route="agent",
-        llm_calls=usage.calls,
-    )
-    yield {
-        "type": "done",
-        "reply": reply,
-        "thread_id": thread_id,
-        "products": products,
-        "ui_actions": ctx.ui_actions,
-        "outfit": ctx.outfit,
-        "tool_calls": tool_calls,
-        "guardrail": None,
-        "took_ms": took_ms,
-    }
+    summary = _finish_turn(turn, reply=reply, ctx=ctx, result=final_result)
+    yield {"type": "done", "thread_id": thread_id, **summary}
 
 
 def is_llm_available() -> bool:
