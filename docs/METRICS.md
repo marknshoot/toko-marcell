@@ -297,8 +297,10 @@ counts eligible final outcomes.
 **Status:** Live (phase 10). `GET /events/summary` and `GET /admin/kpi` return
 `copilot_quality.unanswered_rate` (the dashboard also returns the raw turn counts).
 
-**Definition:** Share of logged copilot turns where the model called `flag_unanswered` because it
-could not answer from tool evidence, and did not complete a cart action.
+**Definition:** Share of logged copilot turns where the shopper did not get an answer: the model called
+`flag_unanswered` because it could not answer from tool evidence, or the turn used up its three model
+calls and the shopper received the fallback reply instead of an answer. A completed cart action is never
+counted as unanswered.
 
 **Formula:**
 
@@ -309,6 +311,11 @@ unanswered_rate = COUNT(outcome = 'unanswered') / COUNT(*)
 `derive_outcome` precedence is `error → guardrail → cart → unanswered → answered`. A turn that both
 calls `add_to_cart` and flags a fallback is counted as `cart`, because the shopper still received a
 concrete server-validated outcome.
+
+A turn that hits the model-call cap is recorded as `unanswered` with the shopper's message in
+`unanswered_question`, so those questions join the same backlog. This can raise the rate for the same
+traffic: rows recorded before this change counted those turns as `answered`, so compare the rate across
+that date with care.
 
 **Source:** `copilot_turns.outcome`; the tool's `question` argument is stored in
 `copilot_turns.unanswered_question` (trimmed to 300 characters) for audit and future query analysis;
@@ -426,6 +433,10 @@ phase 9 and is written from phase 13 onward.
   model call and its tokens, the classifier's included. Rows written before `0007` excluded the
   guardrail and, on checkpointed threads, could carry earlier turns' tokens, so compare cost figures
   across that date with care. `copilot_turns.llm_calls` records the call count.
+- **A cart confirmation spans two requests but one turn.** The turn that pauses for the shopper's yes
+  or no writes no row; the request that resumes it writes one row holding the model calls, tokens and
+  active time of both. Time spent waiting for the shopper is not counted in `latency_ms`. A request the
+  shopper abandons by typing something else leaves no row for the abandoned half.
 - **Outliers and small n.** A single long conversation can dominate the mean; report count and median
   beside it.
 - **Price changes over time.** Historical estimates must record the configured price version; this
