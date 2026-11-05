@@ -247,6 +247,9 @@ class CopilotState(AgentState):
 
     # The guardrail verdict for the current turn (``None`` = on-topic). Overwritten every turn.
     guardrail: NotRequired[str | None]
+    # The products shown so far, with the numeric refs the shopper and the model use
+    # ("[2]", "yang kedua"): ``[{"ref": 1, "asin": ..., ...}]``. Saved with the thread.
+    shown_products: NotRequired[list[dict]]
 
 
 class LLMUnavailable(RuntimeError):  # noqa: N818 - reads better than "...Error" at call sites
@@ -326,11 +329,17 @@ class GuardrailMiddleware(AgentMiddleware):
         return await asyncio.to_thread(self._verdict, state)
 
 
-class RegistrySeedMiddleware(AgentMiddleware):
-    """Restore the shown-products registry from the thread, after the guardrail has passed.
+class RegistryMiddleware(AgentMiddleware):
+    """Keep the shown-products registry in the graph state, so refs survive between turns.
 
-    Runs only for messages that reach the agent, so a greeting never pays for the checkpoint read.
+    Before the agent runs, restore the registry from ``state["shown_products"]``. Threads saved
+    before this field existed have no such key; for those the registry is rebuilt once by
+    replaying earlier tool results (the old behaviour) and then saved like any other.
+    After the agent finishes, save the registry back. Guardrail turns skip both steps: they exit
+    before this node's seed and must not overwrite the saved registry with an empty one.
     """
+
+    state_schema = CopilotState
 
     def __init__(self, ctx: ToolContext, checkpointer: Any, thread_id: str | None):
         super().__init__()
@@ -338,13 +347,30 @@ class RegistrySeedMiddleware(AgentMiddleware):
         self._checkpointer = checkpointer
         self._thread_id = thread_id
 
+    def _seed(self, state: dict[str, Any]) -> None:
+        saved = state.get("shown_products")
+        if saved is not None:
+            self._ctx.seed(saved)
+        elif len(state.get("messages", [])) > 1:
+            # A thread that predates the state field. A brand-new thread (only the current
+            # message) has nothing to replay and costs no checkpoint read.
+            _seed_registry_from_checkpoint(self._ctx, self._checkpointer, self._thread_id)
+
     def before_agent(self, state, runtime):  # type: ignore[override]
-        _seed_registry_from_checkpoint(self._ctx, self._checkpointer, self._thread_id)
+        self._seed(state)
         return None
 
     async def abefore_agent(self, state, runtime):  # type: ignore[override]
-        await asyncio.to_thread(_seed_registry_from_checkpoint, self._ctx, self._checkpointer, self._thread_id)
+        await asyncio.to_thread(self._seed, state)
         return None
+
+    def after_agent(self, state, runtime):  # type: ignore[override]
+        if state.get("guardrail"):
+            return None
+        return {"shown_products": self._ctx.snapshot()}
+
+    async def aafter_agent(self, state, runtime):  # type: ignore[override]
+        return self.after_agent(state, runtime)
 
 
 # Shown when a turn uses up its model-call budget without reaching an answer.
@@ -478,7 +504,7 @@ def build_agent(
     tools = build_tools(ctx, _catalog_categories(ctx.db_url))
     middleware = [
         GuardrailMiddleware(use_llm=not bool(fake)),
-        RegistrySeedMiddleware(ctx, checkpointer, thread_id),
+        RegistryMiddleware(ctx, checkpointer, thread_id),
         ContextInjectionMiddleware(ctx, session_id),
         TrimHistoryMiddleware(),
         LoopCapMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
