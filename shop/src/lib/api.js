@@ -318,6 +318,27 @@ export async function streamCopilotMessage({ message, threadId, context = null, 
   );
 }
 
+// Answer a pending cart confirmation. Only yes or no is sent: the server reads the item back from
+// the saved conversation. The thrown error carries the HTTP status (404 unknown thread, 409
+// nothing pending) so the caller can tell an expired request from a network failure.
+export async function resumeCopilot({ threadId, approve }) {
+  const sessionId = getSessionId();
+  const response = await fetch(`${API_URL}/copilot/chat/resume`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ session_id: sessionId, thread_id: threadId, approve: Boolean(approve) }),
+  });
+
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({}));
+    const error = new Error(err.detail || "Could not answer the confirmation");
+    error.status = response.status;
+    throw error;
+  }
+
+  return response.json();
+}
+
 export async function postCopilotFeedback({ threadId, rating }) {
   const sessionId = getSessionId();
   const response = await fetch(`${API_URL}/copilot/feedback`, {

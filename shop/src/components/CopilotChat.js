@@ -12,6 +12,7 @@ import {
   getProducts,
   postEvent,
   postCopilotFeedback,
+  resumeCopilot,
 } from "../lib/api";
 import {
   getCopilotThreadId,
@@ -260,7 +261,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
       content: query,
       attached: attachedProducts.map((p) => ({ asin: p.asin, title: p.title })),
     };
-    setMessages((prev) => [...prev, userMsg]);
+    setMessages((prev) => [...prev.map(expirePendingApproval), userMsg]);
     setInputValue("");
     setShowAttachMenu(false);
     setIsLoading(true);
@@ -304,6 +305,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
         uiActions: res.ui_actions || [],
         guardrail: res.guardrail || null,
         feedback: null,
+        ...approvalFields(res),
       };
 
       setMessages((prev) => {
@@ -327,6 +329,50 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
           outfit: null,
         },
       ]);
+    } finally {
+      setIsThinking(false);
+      setIsLoading(false);
+    }
+  }
+
+  async function handleApproval(index, approve) {
+    const target = messages[index];
+    if (!target || target.approvalState !== "pending" || isLoading || !threadId) return;
+
+    setMessages((prev) => prev.map((m, i) => (i === index ? { ...m, approvalState: "answering", approvalError: null } : m)));
+    setIsLoading(true);
+    setIsThinking(true);
+    try {
+      const res = await resumeCopilot({ threadId, approve });
+      setMessages((prev) => [
+        ...prev.map((m, i) => (i === index ? { ...m, approvalState: approve ? "approved" : "declined" } : m)),
+        {
+          role: "assistant",
+          content: res.reply,
+          products: res.products || [],
+          outfit: res.outfit || null,
+          uiActions: res.ui_actions || [],
+          guardrail: null,
+          feedback: null,
+          ...approvalFields(res),
+        },
+      ]);
+      executeUiActions(res.ui_actions || []);
+    } catch (err) {
+      // 404 / 409: the request is gone (answered elsewhere, thread cleaned up). Anything else is
+      // a network problem and the shopper may try again.
+      const gone = err?.status === 404 || err?.status === 409;
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === index
+            ? {
+                ...m,
+                approvalState: gone ? "expired" : "pending",
+                approvalError: gone ? null : "Belum tersambung. Coba lagi ya kak.",
+              }
+            : m
+        )
+      );
     } finally {
       setIsThinking(false);
       setIsLoading(false);
@@ -560,6 +606,17 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                           {normalizeMarkdown(msg.content)}
                         </ReactMarkdown>
                       </div>
+
+                      {msg.pendingApproval?.items?.length > 0 && (
+                        <ApprovalCard
+                          items={msg.pendingApproval.items}
+                          state={msg.approvalState}
+                          error={msg.approvalError}
+                          disabled={isLoading}
+                          onApprove={() => handleApproval(index, true)}
+                          onDecline={() => handleApproval(index, false)}
+                        />
+                      )}
 
                       <div className="flex items-center gap-1 pl-0.5">
                         <button
@@ -892,6 +949,79 @@ function ProductCard({ product, isAttached, onAttach, onAdd }) {
       </div>
     </div>
   );
+}
+
+// A card the server asks us to show before an item goes into the cart. The item, price and
+// quantity come from the server; the only thing the shopper sends back is yes or no.
+const APPROVAL_STATUS = {
+  approved: "✓ Dimasukkan ke keranjang",
+  declined: "Dibatalkan, tidak ada yang ditambahkan",
+  expired: "Permintaan ini sudah tidak berlaku. Minta lagi ya kak.",
+};
+
+function ApprovalCard({ items, state, error, disabled, onApprove, onDecline }) {
+  const open = state === "pending" || state === "answering";
+  const total = items.reduce((sum, item) => sum + (item.priceIdr || 0) * (item.qty || 1), 0);
+  return (
+    <div className="rounded-xl border border-border bg-surface p-2.5 shadow-xs" role="group" aria-label="Konfirmasi keranjang">
+      <p className="mb-2 text-[11px] font-semibold text-foreground">Masukkan ke keranjang?</p>
+      <div className="space-y-2">
+        {items.map((item) => (
+          <div key={item.asin} className="flex items-start gap-2.5">
+            <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-border/80 bg-white">
+              <ProductImage src={item.imageUrl} alt={item.title} padding="p-1" />
+            </div>
+            <div className="min-w-0 flex-1">
+              <p className="line-clamp-2 text-xs font-medium text-foreground">{item.title}</p>
+              <p className="text-[11px] text-muted">
+                {formatRp(item.priceIdr || 0)} × {item.qty || 1}
+                {item.size ? ` · Ukuran ${item.size}` : ""}
+              </p>
+            </div>
+          </div>
+        ))}
+      </div>
+      {items.length > 1 && (
+        <p className="mt-2 text-[11px] font-semibold text-foreground">Total {formatRp(total)}</p>
+      )}
+      {open ? (
+        <div className="mt-2.5 flex flex-wrap gap-1.5">
+          <button
+            type="button"
+            onClick={onApprove}
+            disabled={disabled}
+            className="rounded-lg bg-cta px-2.5 py-1.5 text-[11px] font-semibold text-white transition hover:bg-cta-hover active:scale-95 disabled:opacity-60"
+          >
+            Setuju, masukkan
+          </button>
+          <button
+            type="button"
+            onClick={onDecline}
+            disabled={disabled}
+            className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] font-medium text-foreground transition hover:bg-muted/15 active:scale-95 disabled:opacity-60"
+          >
+            Batal
+          </button>
+        </div>
+      ) : (
+        <p className="mt-2.5 text-[11px] font-medium text-muted">{APPROVAL_STATUS[state] || ""}</p>
+      )}
+      {error && <p className="mt-1.5 text-[11px] text-rose-700">{error}</p>}
+    </div>
+  );
+}
+
+// Fields a chat message carries when the server paused to ask for confirmation.
+function approvalFields(res) {
+  const pending = res?.pending_approval;
+  return pending?.items?.length
+    ? { pendingApproval: pending, approvalState: "pending", approvalError: null }
+    : {};
+}
+
+// A card still waiting for an answer is dropped when the shopper moves on (the server does the same).
+function expirePendingApproval(message) {
+  return message.approvalState === "pending" ? { ...message, approvalState: "expired" } : message;
 }
 
 function CardBtn({ children, onClick, primary = false, active = false }) {
