@@ -2,8 +2,10 @@
 
 LangChain v1 ``create_agent`` (runs on LangGraph) with:
 
-  - a deterministic pre-agent guardrail (``guardrail.classify``) that short-
-    circuits greetings / off-topic / injection with ZERO LLM calls;
+  - the guardrail (``guardrail.classify``) as the FIRST NODE of the graph: it judges
+    each message with recent history from the graph state and, for a greeting /
+    off-topic / injection, answers with a canned reply and ends the run before the
+    model is called. The canned reply is part of the conversation memory;
   - the v2 tool layer (``copilot_tools.build_tools``);
   - a context-injection middleware that, before each model call, prepends an
     authoritative block: the pinned/page product (re-read from DB), the
@@ -26,7 +28,7 @@ import re
 import threading
 import time
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, NotRequired
 
 from agent_tools import _connect
 from config import get_settings
@@ -35,9 +37,12 @@ from copilot_metrics import derive_outcome, estimate_cost_usd, extract_token_usa
 from copilot_tools import ToolContext, _slim, build_tools
 from fastapi import HTTPException
 from guardrail import classify, trim_guardrail_history
-from langchain.agents import create_agent
+from langchain.agents import AgentState, create_agent
 from langchain.agents.middleware import AgentMiddleware, ModelCallLimitMiddleware
+from langchain.agents.middleware.types import hook_config
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.outputs import ChatResult
 from llm_usage import LLMCallCounter
 
 logger = logging.getLogger(__name__)
@@ -120,24 +125,6 @@ def sanitize_user_message(message: str) -> str:
     if not message:
         return ""
     return _RESERVED_CONTEXT_RE.sub("", message).strip()
-
-
-def _resolve_guardrail_history(
-    history: list[dict[str, str]] | None,
-    checkpointer: Any,
-    thread_id: str | None,
-    db_url: str,
-) -> list[dict[str, str]]:
-    """Return up to the last 3 user + 3 assistant messages for guardrail context."""
-    if history:
-        return trim_guardrail_history(history)
-    if checkpointer is not None and thread_id:
-        try:
-            from copilot_memory import get_thread_messages
-            return trim_guardrail_history(get_thread_messages(thread_id, db_url=db_url))
-        except Exception:
-            return []
-    return []
 
 
 def _iter_product_dicts(value: Any):
@@ -255,6 +242,111 @@ def build_context_block(ctx: ToolContext, session_id: str | None) -> str:
     return "\n\n".join(parts)
 
 
+class CopilotState(AgentState):
+    """Graph state: the agent's messages plus what the copilot adds per turn."""
+
+    # The guardrail verdict for the current turn (``None`` = on-topic). Overwritten every turn.
+    guardrail: NotRequired[str | None]
+
+
+class LLMUnavailable(RuntimeError):  # noqa: N818 - reads better than "...Error" at call sites
+    """Raised when a message reaches the model but no LLM provider is configured."""
+
+
+class _UnavailableChatModel(BaseChatModel):
+    """Stand-in model used when no provider is configured.
+
+    The graph must still be buildable without one: the guardrail is a node, so a greeting
+    can be answered with a canned reply even though no model exists. A message that does
+    reach the model fails with ``LLMUnavailable``, which the turn maps to the same 503 as before.
+    """
+
+    @property
+    def _llm_type(self) -> str:
+        return "unavailable"
+
+    def _generate(self, messages, stop=None, run_manager=None, **kwargs) -> ChatResult:
+        raise LLMUnavailable("no LLM provider is configured")
+
+    def bind_tools(self, tools, **kwargs):  # noqa: ARG002
+        return self
+
+
+def _guardrail_history(messages: list[Any]) -> list[dict[str, str]]:
+    """Recent user/assistant text from the graph state, trimmed for the classifier.
+
+    Same shape the checkpoint reader used to produce: human and assistant messages with text,
+    tool traffic skipped.
+    """
+    history: list[dict[str, str]] = []
+    for m in messages:
+        if isinstance(m, HumanMessage):
+            role = "user"
+        elif isinstance(m, AIMessage):
+            role = "assistant"
+        else:
+            continue
+        text = _chunk_text(m)
+        if text.strip():
+            history.append({"role": role, "content": text})
+    return trim_guardrail_history(history)
+
+
+class GuardrailMiddleware(AgentMiddleware):
+    """First node of the graph: classify the newest message with the existing guardrail.
+
+    Uses the same ``classify`` as before (LLM classifier with regex fallback; nothing here
+    decides anything the old code did not). A label ends the run with the canned reply.
+    """
+
+    state_schema = CopilotState
+
+    def __init__(self, *, use_llm: bool):
+        super().__init__()
+        self._use_llm = use_llm
+
+    def _verdict(self, state: dict[str, Any]) -> dict[str, Any]:
+        messages = state["messages"]
+        label, canned = classify(
+            _chunk_text(messages[-1]),
+            history=_guardrail_history(messages[:-1]),
+            use_llm=self._use_llm,
+        )
+        if label is None:
+            return {"guardrail": None}
+        return {"guardrail": label, "messages": [AIMessage(content=canned)], "jump_to": "end"}
+
+    @hook_config(can_jump_to=["end"])
+    def before_agent(self, state, runtime):  # type: ignore[override]
+        return self._verdict(state)
+
+    @hook_config(can_jump_to=["end"])
+    async def abefore_agent(self, state, runtime):  # type: ignore[override]
+        # classify may make a blocking model call, so keep it off the event loop.
+        return await asyncio.to_thread(self._verdict, state)
+
+
+class RegistrySeedMiddleware(AgentMiddleware):
+    """Restore the shown-products registry from the thread, after the guardrail has passed.
+
+    Runs only for messages that reach the agent, so a greeting never pays for the checkpoint read.
+    """
+
+    def __init__(self, ctx: ToolContext, checkpointer: Any, thread_id: str | None):
+        super().__init__()
+        self._ctx = ctx
+        self._checkpointer = checkpointer
+        self._thread_id = thread_id
+
+    def before_agent(self, state, runtime):  # type: ignore[override]
+        _seed_registry_from_checkpoint(self._ctx, self._checkpointer, self._thread_id)
+        return None
+
+    async def abefore_agent(self, state, runtime):  # type: ignore[override]
+        await asyncio.to_thread(_seed_registry_from_checkpoint, self._ctx, self._checkpointer, self._thread_id)
+        return None
+
+
 class ContextInjectionMiddleware(AgentMiddleware):
     """Prepend the authoritative context block to the system prompt each model call."""
 
@@ -342,13 +434,26 @@ def _catalog_categories(db_url: str) -> list[str]:
         return []
 
 
-def build_agent(ctx: ToolContext, session_id: str | None, *, fake: bool | None = None, checkpointer=None):
-    """Construct a per-request compiled agent."""
+def build_agent(
+    ctx: ToolContext,
+    session_id: str | None,
+    *,
+    fake: bool | None = None,
+    checkpointer=None,
+    thread_id: str | None = None,
+):
+    """Construct a per-request compiled agent. Always returns a graph.
+
+    Without a provider the model is a stand-in that raises ``LLMUnavailable`` when called,
+    so the guardrail node can still answer greetings.
+    """
     model = build_chat_model(temperature=0.2, fake=fake)
     if model is None:
-        return None
+        model = _UnavailableChatModel()
     tools = build_tools(ctx, _catalog_categories(ctx.db_url))
     middleware = [
+        GuardrailMiddleware(use_llm=not bool(fake)),
+        RegistrySeedMiddleware(ctx, checkpointer, thread_id),
         ContextInjectionMiddleware(ctx, session_id),
         TrimHistoryMiddleware(),
         ModelCallLimitMiddleware(run_limit=MAX_MODEL_CALLS, exit_behavior="end"),
@@ -503,15 +608,19 @@ async def _prepare_agent(
         page_asin=page_asin,
         referenced_asins=referenced_asins or [],
     )
-    await asyncio.to_thread(_seed_registry_from_checkpoint, ctx, turn.checkpointer, turn.thread_id)
     agent = await asyncio.to_thread(
-        build_agent, ctx, turn.session_id, fake=turn.fake, checkpointer=turn.checkpointer
+        build_agent,
+        ctx,
+        turn.session_id,
+        fake=turn.fake,
+        checkpointer=turn.checkpointer,
+        thread_id=turn.thread_id,
     )
     return ctx, agent
 
 
 def _turn_input(
-    clean_message: str, message: str, recent_history: list[dict[str, str]], checkpointer: Any
+    clean_message: str, message: str, history: list[dict[str, str]] | None, checkpointer: Any
 ) -> list[Any]:
     """Messages for this turn.
 
@@ -519,8 +628,8 @@ def _turn_input(
     message is passed; otherwise the caller's history is replayed first.
     """
     messages: list[Any] = []
-    if checkpointer is None and recent_history:
-        for h in recent_history:
+    if checkpointer is None and history:
+        for h in trim_guardrail_history(history):
             if h["role"] == "user":
                 messages.append(HumanMessage(content=sanitize_user_message(h["content"])))
             elif h["role"] == "assistant":
@@ -565,26 +674,9 @@ async def run_turn(
         checkpointer=checkpointer,
     )
     clean_message = sanitize_user_message(message)
-    # Both calls do blocking I/O (database read, model HTTP call), so keep them off the event loop.
-    recent_history = await asyncio.to_thread(
-        _resolve_guardrail_history, history, checkpointer, thread_id, db_url
-    )
-    label, canned = await asyncio.to_thread(
-        classify,
-        clean_message or message,
-        history=recent_history,
-        use_llm=not bool(fake),
-        callbacks=[turn.usage],
-    )
-    if label is not None:
-        return _finish_turn(turn, reply=canned, guardrail=label)
-
     ctx, agent = await _prepare_agent(turn, page_asin=page_asin, referenced_asins=referenced_asins)
-    if agent is None:
-        _finish_turn(turn, reply="", error=True)
-        raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL)
 
-    payload = {"messages": _turn_input(clean_message, message, recent_history, checkpointer)}
+    payload = {"messages": _turn_input(clean_message, message, history, checkpointer)}
     config = _run_config(turn)
     try:
         if checkpointer is not None:
@@ -593,13 +685,16 @@ async def run_turn(
             result = await asyncio.to_thread(agent.invoke, payload, config)
         else:
             result = await agent.ainvoke(payload, config=config)
+    except LLMUnavailable:
+        _finish_turn(turn, reply="", error=True)
+        raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL) from None
     except Exception as e:
         logger.error("copilot agent error: %s", e, exc_info=True)
         _finish_turn(turn, reply="", error=True)
         raise HTTPException(status_code=502, detail=_LLM_NETWORK_DETAIL) from None
 
     reply = _extract_reply(result) or _EMPTY_REPLY
-    return _finish_turn(turn, reply=reply, ctx=ctx, result=result)
+    return _finish_turn(turn, reply=reply, ctx=ctx, result=result, guardrail=result.get("guardrail"))
 
 
 def _chunk_text(msg: Any) -> str:
@@ -634,28 +729,9 @@ async def stream_turn(
         checkpointer=checkpointer,
     )
     clean_message = sanitize_user_message(message)
-    recent_history = await asyncio.to_thread(
-        _resolve_guardrail_history, history, checkpointer, thread_id, db_url
-    )
-    label, canned = await asyncio.to_thread(
-        classify,
-        clean_message or message,
-        history=recent_history,
-        use_llm=not bool(fake),
-        callbacks=[turn.usage],
-    )
-    if label is not None:
-        summary = _finish_turn(turn, reply=canned, guardrail=label)
-        yield {"type": "token", "content": canned}
-        yield {"type": "done", "thread_id": thread_id, **summary}
-        return
-
     ctx, agent = await _prepare_agent(turn, page_asin=page_asin, referenced_asins=referenced_asins)
-    if agent is None:
-        _finish_turn(turn, reply="", error=True)
-        raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL)
 
-    payload = {"messages": _turn_input(clean_message, message, recent_history, checkpointer)}
+    payload = {"messages": _turn_input(clean_message, message, history, checkpointer)}
     config = _run_config(turn)
 
     loop = asyncio.get_running_loop()
@@ -682,6 +758,9 @@ async def stream_turn(
         if mode == "__eof__":
             break
         if mode == "__err__":
+            if isinstance(event, LLMUnavailable):
+                _finish_turn(turn, reply="", error=True)
+                raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL)
             logger.error("copilot stream error: %s", event, exc_info=event)
             summary = _finish_turn(turn, reply="".join(streamed_parts) or _STREAM_ERROR_REPLY, error=True)
             if not streamed_parts:
@@ -707,7 +786,7 @@ async def stream_turn(
     if not streamed_parts and reply:
         yield {"type": "token", "content": reply}
 
-    summary = _finish_turn(turn, reply=reply, ctx=ctx, result=final_result)
+    summary = _finish_turn(turn, reply=reply, ctx=ctx, result=final_result, guardrail=final_result.get("guardrail"))
     yield {"type": "done", "thread_id": thread_id, **summary}
 
 
