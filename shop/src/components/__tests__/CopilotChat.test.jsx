@@ -412,6 +412,77 @@ describe("CopilotChat v2", () => {
     expect(queryByText("hi")).toBeNull();
   });
 
+  describe("progress while the agent works", () => {
+    function renderChat() {
+      const view = render(
+        <CartProvider>
+          <CopilotChat />
+        </CartProvider>
+      );
+      openPanel(view.container);
+      return view;
+    }
+
+    function send(view, text) {
+      const input = view.getByLabelText("Ketik pesan untuk Admin Toko Marcell");
+      fireEvent.change(input, { target: { value: text } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    }
+
+    it("shows the server's progress label instead of the generic text, then the answer", async () => {
+      let finish;
+      vi.spyOn(api, "streamCopilotMessage").mockImplementation(async ({ onStatus, onToken }) => {
+        onStatus("Mencari produk…");
+        await new Promise((resolve) => {
+          finish = resolve;
+        });
+        onToken("Ini pilihannya", "Ini pilihannya");
+        return { reply: "Ini pilihannya", thread_id: "t1", products: [], ui_actions: [], guardrail: null, took_ms: 5 };
+      });
+      const view = renderChat();
+
+      send(view, "ada celana chino?");
+
+      await waitFor(() => expect(view.getByText("Mencari produk…")).toBeTruthy());
+      expect(view.queryByText("Sedang berpikir...")).toBeNull();
+
+      await act(async () => finish());
+
+      await waitFor(() => expect(view.getByText("Ini pilihannya")).toBeTruthy());
+      expect(view.queryByText("Mencari produk…")).toBeNull();
+    });
+
+    it("keeps the generic text when the server sends no progress", async () => {
+      let finish;
+      vi.spyOn(api, "streamCopilotMessage").mockImplementation(async () => {
+        await new Promise((resolve) => {
+          finish = resolve;
+        });
+        return { reply: "Halo kak!", thread_id: "t1", products: [], ui_actions: [], guardrail: "greeting", took_ms: 1 };
+      });
+      const view = renderChat();
+
+      send(view, "halo");
+
+      await waitFor(() => expect(view.getByText("Sedang berpikir...")).toBeTruthy());
+      await act(async () => finish());
+      await waitFor(() => expect(view.getByText("Halo kak!")).toBeTruthy());
+    });
+
+    it("clears the label if the request fails", async () => {
+      vi.spyOn(api, "streamCopilotMessage").mockImplementation(async ({ onStatus }) => {
+        onStatus("Mencari produk…");
+        throw new Error("network");
+      });
+      const view = renderChat();
+
+      send(view, "ada celana?");
+
+      await waitFor(() => expect(view.getByText(/kendala koneksi/)).toBeTruthy());
+      expect(view.queryByText("Mencari produk…")).toBeNull();
+    });
+  });
+
   describe("cart confirmation", () => {
     const item = {
       asin: "B01",

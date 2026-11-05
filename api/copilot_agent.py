@@ -630,6 +630,44 @@ def _current_turn(messages: list[Any]) -> list[Any]:
     return messages
 
 
+# What the shopper reads while a tool runs. Display text only: it never influences what the
+# agent does, and a tool without an entry simply shows no label.
+TOOL_STATUS_LABELS: dict[str, str] = {
+    "search_catalog": "Mencari produk…",
+    "get_product_details": "Membuka detail produk…",
+    "recommend_size": "Menghitung ukuran…",
+    "build_outfit": "Menyusun outfit…",
+    "lookup_store_policy": "Membaca info toko…",
+    "add_to_cart": "Menyiapkan keranjang…",
+    "flag_unanswered": "Mencatat pertanyaan kakak…",
+}
+AFTER_TOOLS_LABEL = "Menyusun jawaban…"
+
+
+def _status_events(update: Any) -> list[dict[str, str]]:
+    """Progress events for one ``updates`` chunk of the graph stream.
+
+    A chunk is ``{node_name: state_update}`` and arrives when that node has finished. When the model
+    node finishes with tool calls, those tools are about to run, which is the moment to say which.
+    When the tools node finishes, the model is about to write the answer.
+    """
+    if not isinstance(update, dict):
+        return []
+    events: list[dict[str, str]] = []
+    model_update = update.get("model")
+    if isinstance(model_update, dict):
+        seen: set[str] = set()
+        for message in model_update.get("messages") or []:
+            for call in getattr(message, "tool_calls", None) or []:
+                label = TOOL_STATUS_LABELS.get(call.get("name") or "")
+                if label and label not in seen:
+                    seen.add(label)
+                    events.append({"type": "status", "label": label, "tool": str(call.get("name"))})
+    if "tools" in update:
+        events.append({"type": "status", "label": AFTER_TOOLS_LABEL})
+    return events
+
+
 _LLM_UNAVAILABLE_DETAIL = "Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti."
 _LLM_NETWORK_DETAIL = "Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!"
 _STREAM_ERROR_REPLY = "Maaf kak, asisten AI lagi ada kendala koneksi. Boleh coba kirim lagi ya!"
@@ -1017,7 +1055,7 @@ async def stream_turn(
 
     def _worker():
         try:
-            for mode, chunk in agent.stream(payload, config=config, stream_mode=["messages", "values"]):
+            for mode, chunk in agent.stream(payload, config=config, stream_mode=["messages", "values", "updates"]):
                 loop.call_soon_threadsafe(queue.put_nowait, (mode, chunk))
             loop.call_soon_threadsafe(queue.put_nowait, ("__eof__", None))
         except Exception as exc:
@@ -1059,6 +1097,10 @@ async def stream_turn(
                     yield {"type": "token", "content": txt}
         elif mode == "values" and isinstance(event, dict):
             final_result = event
+        elif mode == "updates":
+            for status in _status_events(event):
+                logger.debug("copilot.stream.status", extra={"thread_id": thread_id, "label": status["label"]})
+                yield status
 
     items = approval_from_result(final_result)
     if items is not None:
