@@ -2,7 +2,7 @@
 
 This document defines the **targets** for Toko Marcell's latency, availability and copilot spend.
 It is a policy document, not a claim that every target is currently met: the committed telemetry
-covers copilot turn latency and cost, while text/image search, the in-process sizing tool and copilot
+covers copilot turn latency and cost, while text search, the in-process sizing tool and copilot
 time-to-first-token still need production instrumentation before an attainment percentage can be
 quoted.
 
@@ -40,13 +40,13 @@ target as a measured result.
 | Signal | Warning | Page / rollback review |
 |---|---|---|
 | Text search p95 | > 80 ms for 15 min | > 150 ms for 15 min |
-| Image search p95 | > 250 ms for 15 min | > 500 ms for 15 min |
 | Sizing p95 (`recommend_size` tool) | > 15 ms for 15 min | > 40 ms for 15 min |
 | Copilot TTFT p95 | > 3.0 s for 15 min | > 6.0 s for 15 min |
 | Copilot total-turn p95 | > 8 s for 15 min | > 15 s for 15 min |
 
 These thresholds are proposed alerting policy; the repository does not include a pager or hosted
-alert backend.
+alert backend. CLIP visual search was retired (`0005_drop_image_embedding`), so there is no image
+search series to alert on.
 
 ## 3. Availability & error budgets
 

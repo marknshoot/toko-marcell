@@ -169,8 +169,7 @@ empty result set once with the deterministic ID→EN query rewriter in
 
 - **Event-level, not session-level.** A popular query repeated by many sessions weighs more.
 - **One event per distinct query.** The catalog logs once per query string per mounted view; page
-  changes, facet changes and retries may not emit a new event. Image search does not emit a `search`
-  event at all.
+  changes, facet changes and retries may not emit a new event.
 - **`results_count` is the API total at event time**, after duplicate-title suppression and any
   department/category facet. Historic rows may predate server-side changes, so compare like with like.
 - **Zero results is not always failure.** It can mean a genuine catalog gap, a typo, an unsupported
@@ -533,7 +532,7 @@ WHERE created_at > now() - make_interval(days => :since_days);
 
 **Status:** Live (policy, phase 13). Targets and alert thresholds are committed in
 [`SLOS.md`](./SLOS.md). **Attainment is not yet computed**: `/events/summary` and `/admin/kpi`
-measure copilot total-turn latency, but text/image search, sizing latency and copilot TTFT are not
+measure copilot total-turn latency, but text search, sizing latency and copilot TTFT are not
 persisted as timing metrics. Do not quote a target as a measured result.
 
 | SLO | Target | Measurement status |
