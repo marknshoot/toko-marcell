@@ -18,6 +18,7 @@ right ``ToolContext``.
 """
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
@@ -26,6 +27,10 @@ from langchain_core.tools import tool
 from pydantic import Field
 
 logger = logging.getLogger(__name__)
+
+# An ASIN is ten letters and digits with at least one of each (``B001A6E4EQ``). A bare number such
+# as "2" or "1234567890" is never one, so list numbers keep working.
+_ASIN_SHAPE = re.compile(r"^(?=.*[A-Za-z])(?=.*\d)[A-Za-z0-9]{10}$")
 
 # Exact English department values the catalog uses. Indonesian input (pria,
 # wanita, anak laki-laki, ...) must be converted by the model before calling.
@@ -124,16 +129,26 @@ class ToolContext:
         ][:limit]
 
     def resolve_ref(self, token: str | int) -> str | None:
-        """Resolve a 'ref' number, ASIN, or page/pinned reference to an ASIN."""
+        """Resolve a 'ref' number, ASIN, or page/pinned reference to an ASIN.
+
+        An ASIN is never read as a list number: ``B001A6E4EQ`` contains the digits "001", which
+        used to resolve to list number 1, and about 30% of the catalog collides with one of the
+        numbers 1 to 10 the same way.
+        """
         if token is None:
             return None
-        # already an ASIN present in the registry or looks like one
         if isinstance(token, str):
             t = token.strip().lower()
+            # 1. exactly an ASIN that is in the registry (any case) -> that product
+            for product in self.registry.values():
+                if str(product.get("asin") or "").lower() == t:
+                    return product["asin"]
             if t in ("ini", "produk ini", "this", "yang ini") and self.page_asin:
                 return self.page_asin
-            # numeric ref like "2" / "nomor 2"
-            import re
+            # 2. shaped like an ASIN (ten letters and digits, both kinds present) -> take it as is
+            if _ASIN_SHAPE.match(token.strip()):
+                return token.strip()
+            # 3. numeric ref like "2" / "nomor 2"
             m = re.search(r"\d+", t)
             if m:
                 ref = int(m.group())
