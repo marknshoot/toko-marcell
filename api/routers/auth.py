@@ -24,7 +24,11 @@ logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/auth", tags=["auth"])
 
 REFRESH_COOKIE = "refresh_token"
-REFRESH_COOKIE_PATH = "/auth"
+# "/" and not "/auth": the browser reaches these endpoints through the storefront
+# origin (shop/src/app/api/auth/[...path]/route.js proxies /api/auth/* here), so the
+# request path is /api/auth/refresh. A "/auth" path never matches that and the
+# browser would silently drop the cookie, ending the session after 15 minutes.
+REFRESH_COOKIE_PATH = "/"
 
 
 class LoginRequest(BaseModel):

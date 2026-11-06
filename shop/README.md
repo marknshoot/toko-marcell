@@ -169,10 +169,16 @@ The dashboard uses two credentials with different lifetimes and different exposu
 | Credential | Lifetime | Storage | Purpose |
 |---|---|---|---|
 | **Access JWT** (`HS256`) | 15 minutes (`ACCESS_TOKEN_EXPIRE_MINUTES`) | In-memory + `sessionStorage` (`toko_admin_access_token`) | `Authorization: Bearer …` on `/admin/kpi` |
-| **Refresh token** | 7 days (`REFRESH_TOKEN_EXPIRE_DAYS`) | **HttpOnly** cookie `refresh_token`, `Path=/auth`, `SameSite=Lax`, `Secure` on HTTPS | Redeeming a fresh access JWT |
+| **Refresh token** | 7 days (`REFRESH_TOKEN_EXPIRE_DAYS`) | **HttpOnly** cookie `refresh_token`, `Path=/`, `SameSite=Lax`, `Secure` on HTTPS | Redeeming a fresh access JWT |
 
 The refresh token is a 48-byte `secrets.token_urlsafe` value. The database stores **only its SHA-256
 digest** in `admin_refresh_tokens.token_hash`, so neither JavaScript nor a database dump can replay it.
+
+Auth calls go through the storefront's own origin: `src/app/api/auth/[...path]/route.js` proxies
+`/api/auth/*` to the API at request time. That keeps the refresh cookie **first-party** — a browser
+drops a `SameSite=Lax` cookie on a cross-site `*.vercel.app` → `*.onrender.com` request, which ended
+every session as soon as the 15-minute access JWT expired. Only `/api/auth/*` is proxied, so chat
+streaming and the rest of the API are unaffected.
 
 ```mermaid
 sequenceDiagram
@@ -199,7 +205,7 @@ sequenceDiagram
 Lifecycle rules enforced server-side:
 
 1. **Login** verifies Argon2id credentials, inserts a refresh-token hash, and returns a 15-minute
-   access JWT. The refresh cookie is set with `HttpOnly`, `SameSite=Lax`, `Path=/auth`, and `Secure`
+   access JWT. The refresh cookie is set with `HttpOnly`, `SameSite=Lax`, `Path=/`, and `Secure`
    whenever the request arrived over HTTPS.
 2. **Every admin request** sends the access JWT as a Bearer token. A `401` triggers exactly one
    silent `POST /auth/refresh` (with `credentials: "include"`); if that fails, the stored session is
@@ -247,7 +253,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8001
 
 ```bash
 npm run dev      # http://localhost:3000
-npm test         # 38 tests across 7 suites
+npm test         # 63 tests across 9 suites
 npm run lint
 npm run build
 ```
@@ -266,6 +272,10 @@ look for a backend on localhost.
 |---|---|---|---|
 | `NEXT_PUBLIC_API_URL` | client + server | `http://localhost:8001` | Public API base URL (**required** in production) |
 | `INTERNAL_API_URL` | server only | falls back to `NEXT_PUBLIC_API_URL` | Container-internal API URL (avoids a round trip through the public host) |
+
+The admin auth proxy (`app/api/auth/[...path]`) resolves `INTERNAL_API_URL || NEXT_PUBLIC_API_URL` per
+request, so it works behind Vercel and inside `docker compose` (where the API is `http://api:8000`)
+without rebuilding the image.
 
 ---
 

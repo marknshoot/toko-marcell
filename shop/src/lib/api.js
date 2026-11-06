@@ -4,6 +4,14 @@ const API_URL =
     ? process.env.INTERNAL_API_URL || process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001"
     : process.env.NEXT_PUBLIC_API_URL || "http://localhost:8001";
 
+// Admin auth calls go through the storefront's own origin (app/api/auth/[...path])
+// instead of straight to the API. That makes the HttpOnly refresh cookie
+// first-party: browsers drop a SameSite=Lax cookie on a cross-site
+// *.vercel.app -> *.onrender.com request, so every session ended at 15 minutes
+// however valid the 7-day refresh token was. Everything else — chat, search,
+// catalog, streaming — keeps calling the API directly.
+const AUTH_URL = typeof window === "undefined" ? API_URL : "/api";
+
 /**
  * Probe API + database availability.
  *
@@ -477,7 +485,7 @@ async function parseAdminError(response, fallback) {
 }
 
 export async function adminLogin({ username, password }) {
-  const response = await fetch(`${API_URL}/auth/login`, {
+  const response = await fetch(`${AUTH_URL}/auth/login`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     credentials: "include",
@@ -493,10 +501,36 @@ export async function adminLogin({ username, password }) {
   return data;
 }
 
+// The refresh token rotates on every use and the server treats a second use of a
+// rotated token as theft: it revokes the whole family. Two callers racing — a boot
+// restore next to a 401 retry, or two tabs — would therefore log the admin out
+// everywhere. Requests in this tab share one in-flight promise, and the Web Locks
+// API serialises them across tabs, so the later caller presents the cookie the
+// earlier one just received.
+const ADMIN_REFRESH_LOCK = "toko-admin-refresh";
+let refreshInFlight = null;
+
 export async function adminRefresh() {
+  if (!refreshInFlight) {
+    refreshInFlight = requestAdminRefreshUnderLock().finally(() => {
+      refreshInFlight = null;
+    });
+  }
+  return refreshInFlight;
+}
+
+function requestAdminRefreshUnderLock() {
+  if (typeof navigator !== "undefined" && navigator.locks?.request) {
+    return navigator.locks.request(ADMIN_REFRESH_LOCK, requestAdminRefresh);
+  }
+  // No Web Locks (older browsers, jsdom): still de-duplicated within the tab.
+  return requestAdminRefresh();
+}
+
+async function requestAdminRefresh() {
   let response;
   try {
-    response = await fetch(`${API_URL}/auth/refresh`, {
+    response = await fetch(`${AUTH_URL}/auth/refresh`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",
@@ -519,7 +553,7 @@ export async function adminRefresh() {
 
 export async function adminLogout() {
   try {
-    await fetch(`${API_URL}/auth/logout`, {
+    await fetch(`${AUTH_URL}/auth/logout`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       credentials: "include",

@@ -392,7 +392,7 @@ The dashboard uses Argon2id passwords plus a dual-token session:
 
 | Endpoint | Purpose |
 |---|---|
-| `POST /auth/login` | Verify `{username, password}`; returns a 15-minute access JWT and sets an HttpOnly `refresh_token` cookie (`Path=/auth`, `SameSite=Lax`, `Secure` over HTTPS). |
+| `POST /auth/login` | Verify `{username, password}`; returns a 15-minute access JWT and sets an HttpOnly `refresh_token` cookie (`Path=/`, `SameSite=Lax`, `Secure` over HTTPS). The storefront proxies `/api/auth/*` to these endpoints from its own origin so the cookie stays first-party. |
 | `POST /auth/refresh` | Rotate the refresh token (old row marked `revoked`) and return a new access JWT. Replaying an already-revoked token revokes every active token for that user. |
 | `POST /auth/logout` | Revoke the presented refresh token and clear the cookie with `Max-Age=0`. |
 | `GET /auth/me` | Return the authenticated admin's database identity (`id`, `username`, `role`). |

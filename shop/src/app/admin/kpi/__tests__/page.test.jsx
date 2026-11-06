@@ -4,6 +4,7 @@ import AdminKpiPage from "../page";
 import {
   adminLogin,
   adminLogout,
+  adminRefresh,
   getAdminKpi,
   getAdminSession,
 } from "@/lib/api";
@@ -120,6 +121,9 @@ describe("AdminKpiPage", () => {
     getAdminSession.mockReturnValue(null);
     adminLogin.mockResolvedValue(SESSION);
     adminLogout.mockResolvedValue({ ok: true });
+    adminRefresh.mockRejectedValue(
+      Object.assign(new Error("Refresh token required"), { status: 401 })
+    );
     getAdminKpi.mockResolvedValue(fixture);
   });
 
@@ -233,6 +237,43 @@ describe("AdminKpiPage", () => {
     expect(
       await findByRole("heading", { name: "Admin Dashboard Login" })
     ).toBeTruthy();
+  });
+
+  it("shows the login gate when the refresh cookie is gone", async () => {
+    const { findByRole } = render(<AdminKpiPage />);
+
+    expect(
+      await findByRole("heading", { name: "Admin Dashboard Login" })
+    ).toBeTruthy();
+    expect(adminRefresh).toHaveBeenCalledTimes(1);
+    expect(getAdminKpi).not.toHaveBeenCalled();
+  });
+
+  it("restores the session from the refresh cookie in a fresh tab", async () => {
+    adminRefresh.mockResolvedValue(SESSION);
+    const { findByText, queryByRole } = render(<AdminKpiPage />);
+
+    await waitFor(() => expect(adminRefresh).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(getAdminKpi).toHaveBeenCalledWith("jwt-token", 30)
+    );
+    expect(await findByText("SYNTHETIC / DEMO DATA")).toBeTruthy();
+    expect(
+      queryByRole("heading", { name: "Admin Dashboard Login" })
+    ).toBeNull();
+  });
+
+  it("does not refresh when the tab already holds an access token", async () => {
+    getAdminSession.mockReturnValue({
+      access_token: "stored-jwt",
+      user: { username: "admin", role: "admin" },
+    });
+    render(<AdminKpiPage />);
+
+    await waitFor(() =>
+      expect(getAdminKpi).toHaveBeenCalledWith("stored-jwt", 30)
+    );
+    expect(adminRefresh).not.toHaveBeenCalled();
   });
 
   it("loads an access token saved for the tab", async () => {

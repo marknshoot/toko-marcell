@@ -56,7 +56,10 @@ def test_login_success_sets_httponly_refresh_cookie(client):
 
     set_cookie = response.headers["set-cookie"]
     assert "HttpOnly" in set_cookie
-    assert "Path=/auth" in set_cookie
+    # Unscoped on purpose: the browser asks for /api/auth/refresh on the storefront
+    # origin, so a "Path=/auth" cookie would never be sent.
+    assert "Path=/;" in set_cookie
+    assert "Path=/auth" not in set_cookie
     assert "Max-Age=604800" in set_cookie
     assert "SameSite=lax" in set_cookie
     assert client.cookies.get("refresh_token")
@@ -140,7 +143,7 @@ def test_logout_revokes_and_clears_cookie(client):
     assert response.status_code == 200
     set_cookie = response.headers["set-cookie"]
     assert "Max-Age=0" in set_cookie
-    assert "Path=/auth" in set_cookie
+    assert "Path=/;" in set_cookie
 
     client.cookies.clear()
     client.cookies.set("refresh_token", raw_token)

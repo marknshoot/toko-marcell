@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import AdminLoginModal from "@/components/AdminLoginModal";
-import { adminLogout, getAdminKpi, getAdminSession } from "@/lib/api";
+import { adminLogout, adminRefresh, getAdminKpi, getAdminSession } from "@/lib/api";
 import { formatRp } from "@/lib/formatRp";
 
 const WINDOWS = [7, 30, 90];
@@ -898,6 +898,7 @@ export default function AdminKpiPage() {
     const params = new URLSearchParams(window.location.search);
     const queryToken = params.get("token");
     const storedSession = queryToken ? null : getAdminSession();
+    let cancelled = false;
 
     if (queryToken) {
       params.delete("token");
@@ -909,14 +910,49 @@ export default function AdminKpiPage() {
       );
     }
 
-    queueMicrotask(() => {
+    async function boot() {
       if (queryToken) {
-        setLegacyToken(queryToken);
-      } else if (storedSession?.access_token) {
-        setSession(storedSession);
+        if (!cancelled) {
+          setLegacyToken(queryToken);
+          setBooted(true);
+        }
+        return;
+      }
+
+      if (storedSession?.access_token) {
+        if (!cancelled) {
+          setSession(storedSession);
+          setBooted(true);
+        }
+        return;
+      }
+
+      // sessionStorage is per-tab, so a new tab starts with no access token even
+      // though the HttpOnly refresh cookie still holds the 7-day session. Trade it
+      // for a fresh access token before asking for a password again.
+      let restored = null;
+      try {
+        const data = await adminRefresh();
+        restored = data?.access_token
+          ? { access_token: data.access_token, user: data.user ?? null }
+          : null;
+      } catch {
+        // No cookie, or it expired / was revoked: the login gate is correct.
+      }
+
+      if (cancelled) {
+        return;
+      }
+      if (restored) {
+        setSession(restored);
       }
       setBooted(true);
-    });
+    }
+
+    boot();
+    return () => {
+      cancelled = true;
+    };
   }, []);
 
   const accessToken = legacyToken || session?.access_token || null;
