@@ -372,6 +372,10 @@ that already ran in this request, so the browser applies them now and each add i
 }
 ```
 
+`items` has one row per product and size. If the model asks for the same product twice (same ASIN and
+size), the card shows one row with the quantities added up (at most 99). The answer still covers every
+call, and the cart receives exactly the quantity the row shows.
+
 - `422` for anything but `thread_id`, `session_id` and `approve` (a client price is rejected, not ignored).
 - `404` for an unknown thread, `409` when nothing is waiting for an answer, `429` with `Retry-After` when
   rate-limited (the resumed run makes model calls, so it counts like a chat message).
