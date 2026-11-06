@@ -871,6 +871,10 @@ def _pause_turn(
 
     No ``copilot_turns`` row is written: the turn is not finished. The request that resumes it
     records one row for the whole turn (the work done so far is saved in the thread state).
+
+    ``ui_actions`` carries the cart adds this request has already run. That is empty for the first
+    question of a turn, but a resumed run can pause again after its approved adds ran, and the
+    browser only learns about those from this response.
     """
     logger.info(
         "copilot.approval.requested",
@@ -887,7 +891,7 @@ def _pause_turn(
     return {
         "reply": reply,
         "products": ctx.turn_products(limit=6),
-        "ui_actions": [],
+        "ui_actions": list(ctx.ui_actions),
         "outfit": ctx.outfit,
         "tool_calls": [],
         "guardrail": None,

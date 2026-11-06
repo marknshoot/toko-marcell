@@ -150,16 +150,28 @@ def approval_from_result(result: dict[str, Any]) -> list[dict[str, Any]] | None:
 
 
 def pending_items(request: dict[str, Any]) -> list[dict[str, Any]]:
-    """The items the shopper is asked about, as stored in the pending request."""
-    items: list[dict[str, Any]] = []
+    """The items the shopper is asked about, as stored in the pending request.
+
+    The same product asked for twice (same ASIN and size) is shown once, with the quantities
+    added up (at most 99), in the order each product first appeared. This only changes what the
+    card lists: the request still holds one action per call, ``approval_decisions`` still answers
+    each of them, and the cart receives the same total the card shows.
+    """
+    rows: dict[tuple[Any, Any], dict[str, Any]] = {}
     for action in request.get("action_requests", []):
         try:
             item = json.loads(action.get("description") or "null")
         except ValueError:
             item = None
-        if isinstance(item, dict):
-            items.append(item)
-    return items
+        if not isinstance(item, dict):
+            continue
+        key = (item.get("asin"), item.get("size"))
+        if key in rows:
+            total = int(rows[key].get("qty") or 1) + int(item.get("qty") or 1)
+            rows[key] = {**rows[key], "qty": min(total, 99)}
+        else:
+            rows[key] = dict(item)
+    return list(rows.values())
 
 
 def approval_decisions(request: dict[str, Any], *, approve: bool) -> list[dict[str, Any]]:

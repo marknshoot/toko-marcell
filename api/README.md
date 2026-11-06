@@ -363,13 +363,18 @@ read back from the saved conversation, so nothing in the request can change what
 
 The response has the same shape as `/copilot/chat`. `ui_actions` holds the validated `add_to_cart`
 action after an approval and is empty after a refusal. The model may ask for another cart add, in which
-case the response again carries `pending_approval`.
+case the response again carries `pending_approval`. That response also carries, in `ui_actions`, every add
+that already ran in this request, so the browser applies them now and each add is delivered exactly once.
 
 ```json
 "pending_approval": {
   "items": [{"asin": "B000ABC123", "title": "...", "priceIdr": 495800, "imageUrl": "...", "qty": 2, "size": "M"}]
 }
 ```
+
+`items` has one row per product and size. If the model asks for the same product twice (same ASIN and
+size), the card shows one row with the quantities added up (at most 99). The answer still covers every
+call, and the cart receives exactly the quantity the row shows.
 
 - `422` for anything but `thread_id`, `session_id` and `approve` (a client price is rejected, not ignored).
 - `404` for an unknown thread, `409` when nothing is waiting for an answer, `429` with `Retry-After` when
