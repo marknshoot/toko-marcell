@@ -12,6 +12,11 @@ const API_URL =
 // catalog, streaming — keeps calling the API directly.
 const AUTH_URL = typeof window === "undefined" ? API_URL : "/api";
 
+// Catalog reads on the server are cacheable. Without an explicit hint, Next 15+
+// treats fetch as no-store, which made /product/[id] render on every request even
+// though the route exports `revalidate = 300` — keep the two values in sync.
+const PRODUCT_REVALIDATE_SECONDS = 300;
+
 /**
  * Probe API + database availability.
  *
@@ -79,7 +84,9 @@ export async function getProducts({ department, limit = 24, offset = 0 } = {}) {
 }
 
 export async function getProduct(id) {
-  const response = await fetch(`${API_URL}/products/${id}`);
+  const response = await fetch(`${API_URL}/products/${id}`, {
+    next: { revalidate: PRODUCT_REVALIDATE_SECONDS },
+  });
 
   if (response.status === 404 || response.status === 422) {
     return null;
@@ -186,7 +193,9 @@ export async function getPopularRecs({ department, limit = 10 } = {}) {
 
 export async function getItemRecs(asin, limit = 4) {
   try {
-    const response = await fetch(`${API_URL}/recs/item/${encodeURIComponent(asin)}?limit=${limit}`);
+    const response = await fetch(`${API_URL}/recs/item/${encodeURIComponent(asin)}?limit=${limit}`, {
+      next: { revalidate: PRODUCT_REVALIDATE_SECONDS },
+    });
     if (!response.ok) {
       return { items: [], count: 0 };
     }
@@ -218,7 +227,9 @@ export async function getSessionRecs(limit = 4) {
 
 export async function getProductReviews(productId, limit = 10) {
   try {
-    const response = await fetch(`${API_URL}/products/${productId}/reviews?limit=${limit}`);
+    const response = await fetch(`${API_URL}/products/${productId}/reviews?limit=${limit}`, {
+      next: { revalidate: PRODUCT_REVALIDATE_SECONDS },
+    });
     if (!response.ok) {
       return null;
     }

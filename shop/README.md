@@ -22,7 +22,8 @@ A recruiter opening this link decides in seconds whether it works. That drove fo
    Components; only the parts that need state (`Catalog`, cart, copilot, wakeup) are client
    components. No JS bundle is needed to see the page.
 2. **Cache aggressively, revalidate in the background.** Product detail pages are ISR-cached at the
-   edge for 5 minutes.
+   edge for 5 minutes and stream their slow sections (reviews, recommendations) behind `Suspense`.
+   A cached product page answers in ~5 ms instead of ~1 s.
 3. **Never show a broken-looking page.** The backend is on a free tier that sleeps; the UI detects
    that and explains it (see the wakeup overlay).
 4. **The client cannot lie about money.** The cart sends `{asin, qty}` only; the server computes the
@@ -96,13 +97,25 @@ the right ASIN and the product starter chips appear. It renders no chat of its o
 - `add_to_cart` funnel events are emitted for **every** entry point (card, PDP, copilot), so the funnel
   cannot miss a path.
 
-### 5. Product detail with ISR (`app/product/[id]/page.js`)
+### 5. Product detail with ISR and streaming (`app/product/[id]/page.js`)
 
-- `export const revalidate = 300` → stale-while-revalidate at Vercel's edge.
-- Breadcrumb, brand, rating, formatted IDR price, feature bullets, description, real customer reviews,
-  and a **"Customers also viewed"** rail fed by `/recs/item/{asin}`.
+- `export const revalidate = 300` **plus** an empty `generateStaticParams()` → the dynamic segment is
+  allowed to be generated on demand and cached. Without the params function Next treats the route as
+  fully dynamic and the `Cache-Control: private, no-store` header never becomes `s-maxage=300`.
+- The three catalog fetches (`getProduct`, `getItemRecs`, `getProductReviews`) pass
+  `next: { revalidate: 300 }`; Next 15+ defaults `fetch` to `no-store`, so a route-level `revalidate`
+  alone does not make the data cacheable.
+- `loading.js` + `ProductPageSkeleton` paint the page shape the moment a product card is clicked, and
+  `useLinkStatus()` inside `ProductCard` shows a per-link spinner until the new route commits.
+- Reviews and the **"Customers also viewed"** rail each sit in their own `Suspense` boundary, so a
+  slow reviews query or an empty rail never delays the product details.
+- `ProductImage` keeps an `animate-pulse` shimmer (honouring `prefers-reduced-motion`) until the
+  image has loaded, and `ProductCard` is one component for both the grid and the Copilot's cards.
 - `generateMetadata` produces a per-product `<title>`/description for sharing.
 - `TrackView` fires a `view_product` event on mount (deduplicated per ASIN).
+- `not-found.js` renders the missing-product page. Because `loading.js` flushes the shell, a missing
+  id is a *soft* 404 (HTTP 200 plus `noindex`); real ids keep their 200. Worth knowing before you
+  rely on the status code.
 
 ### 6. Demo checkout (`app/checkout`, `checkout/qris`, `checkout/confirm/[token]`)
 
@@ -253,7 +266,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8001
 
 ```bash
 npm run dev      # http://localhost:3000
-npm test         # 63 tests across 9 suites
+npm test         # 74 tests across 13 suites
 npm run lint
 npm run build
 ```
@@ -287,7 +300,9 @@ src/
 │   ├── layout.js                 # header, footer, CartProvider, ServerWakeup, FloatingCopilot
 │   ├── page.js                   # home: hero, RecommendationsRail, Catalog (Suspense)
 │   ├── globals.css               # Tailwind v4 theme + design tokens
-│   ├── product/[id]/page.js      # PDP with ISR (revalidate = 300), metadata, recs, reviews
+│   ├── product/[id]/page.js      # PDP: ISR + Suspense-streamed reviews and recs
+│   ├── product/[id]/loading.js   # instant skeleton while the PDP resolves
+│   ├── product/[id]/not-found.js # missing product page
 │   ├── admin/kpi/page.js         # executive KPI dashboard v2 + login gate + refresh/sign-out
 │   ├── cart/page.js              # cart overview
 │   └── checkout/
@@ -297,9 +312,10 @@ src/
 ├── components/
 │   ├── Catalog.js                # grid, search (debounced), department filter, paging
 │   ├── CatalogSkeleton.js        # home Suspense fallback
-│   ├── ProductCard.js            # card used in grid + rec rails
+│   ├── ProductCard.js            # one card for the grid, rec rails and the copilot
 │   ├── ProductCardSkeleton.js    # per-card placeholder
-│   ├── ProductImage.js           # next/image wrapper for Amazon CDN hostnames
+│   ├── ProductPageSkeleton.js    # PDP fallback (hero + details + reviews + recs rail)
+│   ├── ProductImage.js           # next/image wrapper with a load shimmer
 │   ├── AddToCartButton.js        # PDP quantity + add
 │   ├── CartLink.js               # header cart badge/count
 │   ├── CartProvider.js           # cart context + localStorage (toko-cart-v2)
@@ -350,16 +366,23 @@ sequenceDiagram
 npm test
 ```
 
-**36 tests across 6 suites**:
+**74 tests across 13 suites**:
 
 | Suite | Tests | Covers |
 |---|:---:|---|
 | `components/__tests__/CartProvider.test.jsx` | 7 | empty cart, add, duplicate merge, quantity, remove-at-zero, clear, multi-item subtotal |
 | `components/__tests__/AddToCartButton.test.jsx` | 3 | add with quantity, navigate home, existing-quantity display |
 | `components/__tests__/ServerWakeup.test.jsx` | 6 | waking indicator with spinner, ready indicator on healthy check, dual Render/Neon payload from `checkHealth`, 2.5 s polling until the database wakes, error fallback when neither answers, retry from the error state |
-| `components/__tests__/CopilotChat.test.jsx` | 11 | no image-upload or TB/BB form, starter chips only when empty, product-page chips, `copilot:open` event attaches product, paperclip search & attach, pulsing `"Sedang berpikir..."` + streaming markdown, `add_to_cart` ui_action, numbered product cards, dedicated outfit card with add-all-to-cart, thumbs feedback, reset deletes thread |
-| `app/admin/kpi/__tests__/page.test.jsx` | 7 | demo login renders KPIs, manual login, window switch and refresh refetch, sign out, 401 returns to the login gate, tab-restored session, legacy `?token=` consumption |
+| `components/__tests__/CopilotChat.test.jsx` | 21 | no image-upload or TB/BB form, starter chips only when empty, product-page chips, `copilot:open` event attaches product, paperclip search & attach, pulsing `"Sedang berpikir..."` + streaming markdown, `add_to_cart` ui_action, numbered product cards, dedicated outfit card with add-all-to-cart, thumbs feedback, reset deletes thread |
+| `components/__tests__/ProductCard.test.jsx` | 4 | grid link and fields, `useLinkStatus` pending spinner, chat variant badge/actions/navigation, missing-id fallback link |
+| `components/__tests__/ProductImage.test.jsx` | 3 | shimmer until load, placeholder on error, placeholder with no `src` |
+| `components/__tests__/ProductPageSkeleton.test.jsx` | 3 | single loading announcement, hero + reviews + rail placeholders, optional sections |
+| `app/product/[id]/__tests__/loading.test.jsx` | 1 | the route's `loading.js` renders the skeleton |
+| `app/admin/kpi/__tests__/page.test.jsx` | 10 | demo login renders KPIs, manual login, window switch and refresh refetch, sign out, 401 returns to the login gate, tab-restored session, legacy `?token=` consumption |
 | `lib/__tests__/session.test.js` | 2 | id persists in `sessionStorage`, stable across calls |
+| `lib/__tests__/resumeCopilot.test.js` | 4 | posts only thread + session + yes/no, coerces `approve` to a boolean, carries the HTTP status and server message on failure |
+| `lib/__tests__/streamStatus.test.js` | 4 | status labels then tokens then the done payload, unknown event types ignored, no callback and malformed lines tolerated |
+| `lib/__tests__/adminRefresh.test.js` | 6 | same-origin refresh so the cookie stays first-party, token persisted, one request for concurrent callers, no stuck in-flight promise, Web Locks across tabs, session cleared on rejection |
 
 CI also runs `npm run lint` and `npm run build` so the Next build cannot regress silently.
 

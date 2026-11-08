@@ -21,6 +21,7 @@ import {
   saveCopilotMessages,
 } from "../lib/session";
 import { formatRp } from "../lib/formatRp";
+import ProductCard from "./ProductCard";
 import ProductImage from "./ProductImage";
 
 const HOME_CHIPS = [
@@ -665,11 +666,29 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                           {msg.products.map((p) => (
                             <ProductCard
                               key={p.asin}
-                              product={p}
-                              isAttached={attachedProducts.some((a) => a.asin === p.asin)}
-                              onAttach={() => toggleAttachProduct(p)}
-                              onAdd={() => handleAddToCart(p)}
-                            />
+                              variant="chat"
+                              id={p.id}
+                              title={p.title}
+                              priceIdr={p.priceIdr}
+                              brand={p.brand}
+                              imageUrl={p.imageUrl}
+                              refNumber={p.ref}
+                              onNavigate={() =>
+                                postEvent({ eventType: "copilot_product_click", asin: p.asin })
+                              }
+                            >
+                              <CardBtn
+                                onClick={() => toggleAttachProduct(p)}
+                                active={attachedProducts.some((a) => a.asin === p.asin)}
+                              >
+                                {attachedProducts.some((a) => a.asin === p.asin)
+                                  ? "✓ Terlampir"
+                                  : "📎 Lampirkan"}
+                              </CardBtn>
+                              <CardBtn onClick={() => handleAddToCart(p)} primary>
+                                + Keranjang
+                              </CardBtn>
+                            </ProductCard>
                           ))}
                         </div>
                       ) : null}
@@ -922,40 +941,6 @@ function OutfitCard({ outfit, onAddAll }) {
       >
         🛍️ Masukkan 1 Set ke Keranjang
       </button>
-    </div>
-  );
-}
-
-function ProductCard({ product, isAttached, onAttach, onAdd }) {
-  return (
-    <div className="rounded-xl border border-border bg-surface p-2.5 shadow-xs">
-      <div className="flex items-start gap-2.5">
-        <span className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded-full bg-foreground text-[10px] font-bold text-background">
-          {product.ref}
-        </span>
-        <div className="h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-border/80 bg-white">
-          <ProductImage src={product.imageUrl} alt={product.title} padding="p-1" />
-        </div>
-        <div className="min-w-0 flex-1">
-          <Link
-            href={product.id ? `/product/${product.id}` : "#"}
-            className="line-clamp-1 text-xs font-medium text-foreground hover:underline"
-            onClick={() => postEvent({ eventType: "copilot_product_click", asin: product.asin })}
-          >
-            {product.title}
-          </Link>
-          <div className="flex items-center gap-1.5 text-[11px]">
-            <span className="font-semibold text-foreground">{formatRp(product.priceIdr || 0)}</span>
-            {product.brand && <span className="text-muted">· {product.brand}</span>}
-          </div>
-        </div>
-      </div>
-      <div className="mt-2 flex flex-wrap gap-1.5">
-        <CardBtn onClick={onAttach} active={isAttached}>
-          {isAttached ? "✓ Terlampir" : "📎 Lampirkan"}
-        </CardBtn>
-        <CardBtn onClick={onAdd} primary>+ Keranjang</CardBtn>
-      </div>
     </div>
   );
 }
