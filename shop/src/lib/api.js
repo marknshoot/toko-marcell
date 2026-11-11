@@ -17,6 +17,23 @@ const AUTH_URL = typeof window === "undefined" ? API_URL : "/api";
 // though the route exports `revalidate = 300` — keep the two values in sync.
 const PRODUCT_REVALIDATE_SECONDS = 300;
 
+// The home catalog is shared by every visitor too, so browse reads get the same
+// 5-minute Data Cache window. Search stays uncached: `q` is unbounded and its
+// ranking should not be pinned to a cache key nobody else will ever request.
+const CATALOG_REVALIDATE_SECONDS = 300;
+
+// A cold Render/Neon backend can take 30-50 s. Server components stream, so
+// without a deadline a catalog read would hold its Suspense boundary open for
+// the whole cold start. Keep the browser behaviour unchanged: there the
+// ServerWakeup overlay owns the cold-start UX.
+const CATALOG_FETCH_TIMEOUT_MS = 10_000;
+
+function serverTimeoutSignal() {
+  return typeof window === "undefined"
+    ? AbortSignal.timeout(CATALOG_FETCH_TIMEOUT_MS)
+    : undefined;
+}
+
 /**
  * Probe API + database availability.
  *
@@ -76,7 +93,10 @@ export async function getProducts({ department, limit = 24, offset = 0 } = {}) {
     params.set("department", department);
   }
 
-  const response = await fetch(`${API_URL}/products?${params.toString()}`);
+  const response = await fetch(`${API_URL}/products?${params.toString()}`, {
+    next: { revalidate: CATALOG_REVALIDATE_SECONDS },
+    signal: serverTimeoutSignal(),
+  });
   if (!response.ok) {
     throw new Error("Could not load products");
   }
@@ -100,7 +120,10 @@ export async function getProduct(id) {
 }
 
 export async function getCategories() {
-  const response = await fetch(`${API_URL}/categories`);
+  const response = await fetch(`${API_URL}/categories`, {
+    next: { revalidate: CATALOG_REVALIDATE_SECONDS },
+    signal: serverTimeoutSignal(),
+  });
   if (!response.ok) {
     throw new Error("Could not load categories");
   }
@@ -116,7 +139,10 @@ export async function searchProducts({ q, department, limit = 24, offset = 0 } =
     params.set("department", department);
   }
 
-  const response = await fetch(`${API_URL}/search?${params.toString()}`);
+  const response = await fetch(`${API_URL}/search?${params.toString()}`, {
+    cache: "no-store",
+    signal: serverTimeoutSignal(),
+  });
   if (!response.ok) {
     throw new Error("Could not search products");
   }
