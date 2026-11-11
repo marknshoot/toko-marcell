@@ -478,8 +478,76 @@ describe("CopilotChat v2", () => {
 
       send(view, "ada celana?");
 
-      await waitFor(() => expect(view.getByText(/kendala koneksi/)).toBeTruthy());
+      await waitFor(() =>
+        expect(view.getAllByText(/Koneksi ke asisten terputus/).length).toBeGreaterThan(0)
+      );
       expect(view.queryByText("Mencari produk…")).toBeNull();
+      expect(view.getByRole("button", { name: /coba lagi/i })).toBeTruthy();
+    });
+  });
+
+  describe("retry after a failed turn", () => {
+    function renderChat() {
+      const view = render(
+        <CartProvider>
+          <CopilotChat />
+        </CartProvider>
+      );
+      openPanel(view.container);
+      return view;
+    }
+
+    function send(view, text) {
+      const input = view.getByLabelText("Ketik pesan untuk Admin Toko Marcell");
+      fireEvent.change(input, { target: { value: text } });
+      fireEvent.keyDown(input, { key: "Enter" });
+    }
+
+    it("retries in place without adding a second user bubble", async () => {
+      vi.spyOn(api, "streamCopilotMessage").mockImplementation(async ({ onToken }) => {
+        onToken("Halo ka", "Halo ka");
+        return {
+          reply: "Halo ka",
+          thread_id: "t1",
+          products: [],
+          ui_actions: [],
+          guardrail: null,
+          error: true,
+          error_code: "provider_rate_limited",
+          retryable: true,
+          retry_after: 0,
+          partial: true,
+        };
+      });
+      const retrySpy = vi.spyOn(api, "retryCopilotTurn").mockImplementation(async ({ onToken }) => {
+        onToken("Halo kak!", "Halo kak!");
+        return {
+          reply: "Halo kak!",
+          thread_id: "t1",
+          products: [],
+          ui_actions: [],
+          guardrail: null,
+          error: false,
+          error_code: null,
+          retryable: false,
+          retry_after: null,
+        };
+      });
+
+      const view = renderChat();
+      send(view, "halo");
+
+      await waitFor(() => expect(view.getByRole("button", { name: /coba lagi/i })).toBeTruthy());
+      expect(view.getByText("halo")).toBeTruthy();
+
+      await act(async () => {
+        fireEvent.click(view.getByRole("button", { name: /coba lagi/i }));
+      });
+
+      await waitFor(() => expect(view.getByText("Halo kak!")).toBeTruthy());
+      expect(retrySpy).toHaveBeenCalledWith(expect.objectContaining({ threadId: expect.any(String) }));
+      expect(view.getAllByText("halo")).toHaveLength(1);
+      expect(view.queryByRole("button", { name: /coba lagi/i })).toBeNull();
     });
   });
 

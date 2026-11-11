@@ -74,8 +74,10 @@ from copilot_prompts import (  # noqa: F401
 )
 from copilot_state import CopilotState, LLMUnavailable, _UnavailableChatModel  # noqa: F401
 from copilot_tools import ToolContext, build_tools
-from copilot_turn import (
-    _current_turn,  # noqa: F401 - re-exported for tests
+from copilot_turn import (  # noqa: F401 - re-exported for callers/tests
+    Failure,
+    _classify_failure,
+    _current_turn,
     _extract_reply,
     _finish_turn,
     _pause_turn,
@@ -179,6 +181,98 @@ def _run_config(turn: _Turn) -> dict[str, Any]:
     return config
 
 
+# One graph run at a time per thread. Without this, a double-click (or a retry racing a
+# still-running worker after the client disconnected) could resume the same checkpoint twice.
+_ACTIVE_THREADS: set[str] = set()
+_ACTIVE_THREADS_LOCK = threading.Lock()
+
+
+def _begin_thread_run(thread_id: str | None) -> bool:
+    if not thread_id:
+        return True
+    with _ACTIVE_THREADS_LOCK:
+        if thread_id in _ACTIVE_THREADS:
+            return False
+        _ACTIVE_THREADS.add(thread_id)
+        return True
+
+
+def _end_thread_run(thread_id: str | None) -> None:
+    if not thread_id:
+        return
+    with _ACTIVE_THREADS_LOCK:
+        _ACTIVE_THREADS.discard(thread_id)
+
+
+def _retry_block(snapshot: Any) -> tuple[str, str] | None:
+    """Why a retry cannot resume this thread; ``None`` means it can."""
+    if snapshot is None or not getattr(snapshot, "values", None):
+        return (
+            "thread_not_found",
+            "Percakapan ini sudah kedaluwarsa. Silakan mulai percakapan baru.",
+        )
+    if pending_request(snapshot) is not None:
+        return ("approval_pending", "Konfirmasi keranjang masih menunggu jawaban.")
+    return None
+
+
+def _error_summary(
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+    retry_after: int | None = None,
+) -> dict[str, Any]:
+    """A ``done`` payload for a turn that never reached the model."""
+    return {
+        "reply": message,
+        "products": [],
+        "ui_actions": [],
+        "outfit": None,
+        "tool_calls": [],
+        "guardrail": None,
+        "took_ms": 0,
+        "error": True,
+        "error_code": code,
+        "retryable": retryable,
+        "retry_after": retry_after,
+    }
+
+
+def _completed_retry_summary(snapshot: Any) -> dict[str, Any]:
+    """The answer a double-clicked retry should show, without calling the model again."""
+    values = snapshot.values or {}
+    return {
+        "reply": _extract_reply({"messages": values.get("messages", [])}) or _EMPTY_REPLY,
+        "products": [],
+        "ui_actions": [],
+        "outfit": None,
+        "tool_calls": [],
+        "guardrail": values.get("guardrail"),
+        "took_ms": 0,
+        "error": False,
+        "error_code": None,
+        "retryable": False,
+        "retry_after": None,
+    }
+
+
+def _seed_retry_context(snapshot: Any, ctx: ToolContext, turn: _Turn) -> None:
+    """Restore what the before-agent hooks built before the failed model call.
+
+    The resumed run starts at the node that failed, so ``before_agent`` does not run
+    again: the registry (product refs) and the carried totals must come from the
+    checkpoint. ``turn_context`` is untracked, so the router passes the page/product
+    context again when it calls this function.
+    """
+    saved = snapshot.values or {}
+    if saved.get("shown_products") is not None:
+        ctx.seed(saved["shown_products"])
+    elif len(saved.get("messages", [])) > 1:
+        _seed_registry_from_checkpoint(ctx, turn.checkpointer, turn.thread_id)
+    turn.carried = dict(saved.get("turn_carry") or {})
+
+
 async def run_turn(
     message: str,
     *,
@@ -190,11 +284,15 @@ async def run_turn(
     fake: bool | None = None,
     checkpointer=None,
     thread_id: str | None = None,
+    retry: bool = False,
 ) -> dict[str, Any]:
     """Run one copilot v2 turn.
 
     1. Deterministic guardrail → canned reply (zero LLM) if it fires.
     2. Otherwise invoke the create_agent agent with the tools + context middleware.
+
+    ``retry=True`` resumes the thread's last failed node instead of adding another
+    human message, so a retry cannot grow the context or duplicate the prompt.
     """
     turn = _Turn(
         started=time.perf_counter(),
@@ -204,26 +302,53 @@ async def run_turn(
         db_url=db_url,
         fake=fake,
         checkpointer=checkpointer,
+        is_retry=retry,
     )
     clean_message = sanitize_user_message(message)
     ctx, agent = await _prepare_agent(turn, page_asin=page_asin, referenced_asins=referenced_asins)
-
-    payload = {"messages": _turn_input(clean_message, message, history, checkpointer)}
     config = _run_config(turn)
+
+    if retry:
+        snapshot = await asyncio.to_thread(agent.get_state, config)
+        block = _retry_block(snapshot)
+        if block is not None:
+            code, text = block
+            raise HTTPException(
+                status_code=404 if code == "thread_not_found" else 409,
+                detail=text,
+            )
+        if not getattr(snapshot, "next", None):
+            logger.info("copilot.retry.already_completed", extra={"thread_id": thread_id})
+            return _completed_retry_summary(snapshot)
+        _seed_retry_context(snapshot, ctx, turn)
+        payload = None
+    else:
+        payload = {"messages": _turn_input(clean_message, message, history, checkpointer)}
+
+    if not _begin_thread_run(thread_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Permintaan sebelumnya masih diproses. Coba lagi sebentar.",
+        )
+
     try:
-        if checkpointer is not None:
-            # The sync PostgresSaver doesn't implement async methods, so run the
-            # synchronous graph in a worker thread to keep the route async.
-            result = await asyncio.to_thread(agent.invoke, payload, config)
-        else:
-            result = await agent.ainvoke(payload, config=config)
-    except LLMUnavailable:
-        _finish_turn(turn, reply="", error=True)
-        raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL) from None
-    except Exception as e:
-        logger.error("copilot agent error: %s", e, exc_info=True)
-        _finish_turn(turn, reply="", error=True)
-        raise HTTPException(status_code=502, detail=_LLM_NETWORK_DETAIL) from None
+        try:
+            if checkpointer is not None:
+                # The sync PostgresSaver doesn't implement async methods, so run the
+                # synchronous graph in a worker thread to keep the route async.
+                result = await asyncio.to_thread(agent.invoke, payload, config)
+            else:
+                result = await agent.ainvoke(payload, config=config)
+        except LLMUnavailable as e:
+            _finish_turn(turn, reply="", error=True, failure=_classify_failure(e))
+            raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL) from None
+        except Exception as e:
+            failure = _classify_failure(e)
+            logger.error("copilot agent error: %s code=%s", e, failure.code, exc_info=True)
+            _finish_turn(turn, reply="", error=True, failure=failure)
+            raise HTTPException(status_code=502, detail=_LLM_NETWORK_DETAIL) from None
+    finally:
+        _end_thread_run(thread_id)
 
     items = approval_from_result(result)
     if items is not None:
@@ -279,15 +404,24 @@ async def resume_turn(
             "asins": [str(item.get("asin")) for item in pending_items(request)],
         },
     )
+    if not _begin_thread_run(thread_id):
+        raise HTTPException(
+            status_code=409,
+            detail="Permintaan sebelumnya masih diproses. Coba lagi sebentar.",
+        )
     try:
-        result = await asyncio.to_thread(agent.invoke, Command(resume={"decisions": decisions}), config)
-    except LLMUnavailable:
-        _finish_turn(turn, reply="", error=True)
-        raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL) from None
-    except Exception as e:
-        logger.error("copilot resume error: %s", e, exc_info=True)
-        _finish_turn(turn, reply="", error=True)
-        raise HTTPException(status_code=502, detail=_LLM_NETWORK_DETAIL) from None
+        try:
+            result = await asyncio.to_thread(agent.invoke, Command(resume={"decisions": decisions}), config)
+        except LLMUnavailable as e:
+            _finish_turn(turn, reply="", error=True, failure=_classify_failure(e))
+            raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL) from None
+        except Exception as e:
+            failure = _classify_failure(e)
+            logger.error("copilot resume error: %s code=%s", e, failure.code, exc_info=True)
+            _finish_turn(turn, reply="", error=True, failure=failure)
+            raise HTTPException(status_code=502, detail=_LLM_NETWORK_DETAIL) from None
+    finally:
+        _end_thread_run(thread_id)
 
     items = approval_from_result(result)
     if items is not None:  # the model asked for another cart add
@@ -307,6 +441,7 @@ async def stream_turn(
     fake: bool | None = None,
     checkpointer=None,
     thread_id: str | None = None,
+    retry: bool = False,
 ):
     """Stream one copilot v2 turn as event dicts (`token` and `done`)."""
     turn = _Turn(
@@ -317,12 +452,55 @@ async def stream_turn(
         db_url=db_url,
         fake=fake,
         checkpointer=checkpointer,
+        is_retry=retry,
     )
     clean_message = sanitize_user_message(message)
     ctx, agent = await _prepare_agent(turn, page_asin=page_asin, referenced_asins=referenced_asins)
-
-    payload = {"messages": _turn_input(clean_message, message, history, checkpointer)}
     config = _run_config(turn)
+
+    if retry:
+        try:
+            snapshot = await asyncio.to_thread(agent.get_state, config)
+        except Exception as exc:
+            failure = _classify_failure(exc)
+            logger.error("copilot retry preflight error: %s", exc, exc_info=True)
+            yield {
+                "type": "done",
+                "thread_id": thread_id,
+                **_error_summary(
+                    failure.code,
+                    _STREAM_ERROR_REPLY,
+                    retryable=failure.retryable,
+                    retry_after=failure.retry_after,
+                ),
+            }
+            return
+        block = _retry_block(snapshot)
+        if block is not None:
+            code, text = block
+            yield {"type": "done", "thread_id": thread_id, **_error_summary(code, text)}
+            return
+        if not getattr(snapshot, "next", None):
+            logger.info("copilot.retry.already_completed", extra={"thread_id": thread_id})
+            yield {"type": "done", "thread_id": thread_id, **_completed_retry_summary(snapshot)}
+            return
+        _seed_retry_context(snapshot, ctx, turn)
+        payload = None
+    else:
+        payload = {"messages": _turn_input(clean_message, message, history, checkpointer)}
+
+    if not _begin_thread_run(thread_id):
+        yield {
+            "type": "done",
+            "thread_id": thread_id,
+            **_error_summary(
+                "retry_in_progress",
+                "Permintaan sebelumnya masih diproses. Coba lagi sebentar.",
+                retryable=True,
+                retry_after=2,
+            ),
+        }
+        return
 
     loop = asyncio.get_running_loop()
     queue: asyncio.Queue[tuple[str, Any]] = asyncio.Queue()
@@ -334,11 +512,17 @@ async def stream_turn(
             loop.call_soon_threadsafe(queue.put_nowait, ("__eof__", None))
         except Exception as exc:
             loop.call_soon_threadsafe(queue.put_nowait, ("__err__", exc))
+        finally:
+            _end_thread_run(thread_id)
 
     # A plain Thread starts with an empty context, which would drop the request and trace
     # ids from every log line written by tools and model calls during a streamed turn.
     worker_context = contextvars.copy_context()
-    threading.Thread(target=worker_context.run, args=(_worker,), daemon=True).start()
+    try:
+        threading.Thread(target=worker_context.run, args=(_worker,), daemon=True).start()
+    except BaseException:
+        _end_thread_run(thread_id)
+        raise
 
     final_result: dict[str, Any] = {}
     streamed_parts: list[str] = []
@@ -348,11 +532,24 @@ async def stream_turn(
         if mode == "__eof__":
             break
         if mode == "__err__":
+            failure = _classify_failure(event)
             if isinstance(event, LLMUnavailable):
-                _finish_turn(turn, reply="", error=True)
+                _finish_turn(turn, reply="", error=True, failure=failure)
                 raise HTTPException(status_code=503, detail=_LLM_UNAVAILABLE_DETAIL)
-            logger.error("copilot stream error: %s", event, exc_info=event)
-            summary = _finish_turn(turn, reply="".join(streamed_parts) or _STREAM_ERROR_REPLY, error=True)
+            logger.error(
+                "copilot stream error: %s code=%s retry_after=%s",
+                event,
+                failure.code,
+                failure.retry_after,
+                exc_info=event,
+            )
+            summary = _finish_turn(
+                turn,
+                reply="".join(streamed_parts) or _STREAM_ERROR_REPLY,
+                error=True,
+                failure=failure,
+            )
+            summary["partial"] = bool(streamed_parts)
             if not streamed_parts:
                 yield {"type": "token", "content": _STREAM_ERROR_REPLY}
             yield {"type": "done", "thread_id": thread_id, **summary}

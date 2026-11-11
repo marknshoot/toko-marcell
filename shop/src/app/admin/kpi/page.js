@@ -711,6 +711,13 @@ function AssistantCard({ quality = {} }) {
           sub={`${num(quality.thumbs_up)}/${num(quality.thumbs_down)}`}
         />
       </div>
+
+      {Number(quality.retry_turns) > 0 && (
+        <p className="mt-3 border-t border-border pt-3 text-[11.5px] text-muted">
+          Retry: {num(quality.retry_successes)} of {num(quality.retry_turns)} succeeded (
+          {pct(quality.retry_success_rate)}). Retries are counted as separate turns.
+        </p>
+      )}
     </Card>
   );
 }

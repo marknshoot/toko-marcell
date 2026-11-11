@@ -156,6 +156,9 @@ def events_summary(since_days: int = Query(30, ge=1, le=365)):
             "thumbs_up": feedback["thumbs_up"],
             "thumbs_down": feedback["thumbs_down"],
             "thumbs_up_rate": analytics.rate(feedback["thumbs_up"], feedback["thumbs_up"] + feedback["thumbs_down"]),
+            "retry_turns": turn_stats["retry_turns"],
+            "retry_successes": turn_stats["retry_successes"],
+            "retry_success_rate": analytics.rate(turn_stats["retry_successes"], turn_stats["retry_turns"]),
         },
         "caveats": [
             "search_to_pdp is a session-level proxy (search + view_product in one session)",

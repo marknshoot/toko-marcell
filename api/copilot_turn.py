@@ -18,6 +18,7 @@ from copilot_approval import CONFIRM_REPLY
 from copilot_context import sanitize_user_message
 from copilot_metrics import derive_outcome, estimate_cost_usd, extract_token_usage, record_turn
 from copilot_prompts import _LOOP_CAP_MARKER, AFTER_TOOLS_LABEL, TOOL_STATUS_LABELS
+from copilot_state import LLMUnavailable
 from copilot_tools import ToolContext
 from guardrail import trim_guardrail_history
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
@@ -98,6 +99,61 @@ def _status_events(update: Any) -> list[dict[str, str]]:
     return events
 
 
+@dataclass(frozen=True)
+class Failure:
+    """A turn failure in the shape the browser needs to offer a retry."""
+
+    code: str
+    retryable: bool
+    retry_after: int | None = None
+
+
+def _retry_after_seconds(exc: Exception) -> int | None:
+    """``Retry-After`` from a provider error, clamped so a browser countdown stays sane."""
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None)
+    if not headers:
+        return None
+    raw = headers.get("retry-after") or headers.get("Retry-After")
+    if not raw:
+        return None
+    try:
+        return max(1, min(int(float(raw)), 120))
+    except (TypeError, ValueError):
+        return None
+
+
+def _classify_failure(exc: Exception) -> Failure:
+    """Map a turn failure to a stable client-facing code.
+
+    LangChain wraps OpenAI-compatible provider errors in subclasses of the ``openai``
+    exceptions (``OpenAIRateLimitError`` etc.), so one ``isinstance`` check covers
+    OpenRouter, Mistral and the generic fallback. Unknown 5xx/timeouts stay retryable;
+    a 4xx or malformed response does not.
+    """
+    if isinstance(exc, LLMUnavailable):
+        return Failure("llm_unavailable", False)
+    try:
+        import openai
+    except Exception:  # pragma: no cover - openai is a hard dependency of the provider chain
+        openai = None
+    if openai is not None:
+        if isinstance(exc, openai.RateLimitError):
+            return Failure("provider_rate_limited", True, _retry_after_seconds(exc))
+        if isinstance(exc, openai.APITimeoutError):
+            return Failure("provider_timeout", True)
+        if isinstance(exc, openai.APIConnectionError):
+            return Failure("provider_unavailable", True)
+        if isinstance(exc, openai.InternalServerError):
+            return Failure("provider_error", True)
+    status = getattr(exc, "status_code", None)
+    if status == 429:
+        return Failure("provider_rate_limited", True, _retry_after_seconds(exc))
+    if isinstance(status, int) and status >= 500:
+        return Failure("provider_error", True)
+    return Failure("internal_error", False)
+
+
 @dataclass
 class _Turn:
     """Per-turn scope shared by ``run_turn`` and ``stream_turn``."""
@@ -111,6 +167,8 @@ class _Turn:
     checkpointer: Any = None
     # What an earlier request of this same turn used before a cart-approval pause.
     carried: dict[str, Any] = field(default_factory=dict)
+    # True when this request resumes a failed turn instead of starting a new one.
+    is_retry: bool = False
 
     def totals(self) -> dict[str, Any]:
         """Model calls, tokens and active time of the whole turn, earlier requests included."""
@@ -134,6 +192,7 @@ def _finish_turn(
     result: dict[str, Any] | None = None,
     guardrail: str | None = None,
     error: bool = False,
+    failure: Failure | None = None,
 ) -> dict[str, Any]:
     """Record a finished turn once and return the response fields shared by every exit.
 
@@ -141,6 +200,7 @@ def _finish_turn(
     answer) goes through here, so telemetry and the ``copilot.turn.completed`` log line
     cannot drift between the sync and streaming paths.
     """
+    error = error or failure is not None
     turn_model = _turn_model(turn.fake)
     totals = turn.totals()
     input_tokens, output_tokens = totals["input_tokens"], totals["output_tokens"]
@@ -197,6 +257,7 @@ def _finish_turn(
         ),
         route=route,
         llm_calls=totals["llm_calls"],
+        is_retry=turn.is_retry,
     )
 
     # Ids, labels and counts only. Never the shopper's message, tool arguments or the reply:
@@ -212,6 +273,7 @@ def _finish_turn(
             "tool_names": tool_names,
             "latency_ms": took_ms,
             "model": turn_model,
+            "is_retry": turn.is_retry,
         },
     )
 
@@ -233,6 +295,10 @@ def _finish_turn(
         "tool_calls": tool_calls,
         "guardrail": guardrail,
         "took_ms": took_ms,
+        "error": error,
+        "error_code": failure.code if failure is not None else None,
+        "retryable": failure.retryable if failure is not None else False,
+        "retry_after": failure.retry_after if failure is not None else None,
     }
 
 

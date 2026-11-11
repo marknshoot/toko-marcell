@@ -190,6 +190,10 @@ def copilot_turn_stats(cur, since_days: int) -> dict[str, Any]:
             COUNT(*) FILTER (WHERE outcome = 'answered') AS answered_turns,
             COUNT(*) FILTER (WHERE outcome = 'guardrail') AS guardrail_turns,
             COUNT(*) FILTER (WHERE outcome = 'unanswered') AS unanswered_turns,
+            COUNT(*) FILTER (WHERE is_retry) AS retry_turns,
+            COUNT(*) FILTER (
+                WHERE is_retry AND outcome IN ('answered', 'cart')
+            ) AS retry_successes,
             AVG(latency_ms) AS avg_latency_ms,
             percentile_cont(0.5) WITHIN GROUP (ORDER BY latency_ms) AS p50_latency_ms,
             percentile_cont(0.95) WITHIN GROUP (ORDER BY latency_ms) AS p95_latency_ms,
@@ -207,6 +211,8 @@ def copilot_turn_stats(cur, since_days: int) -> dict[str, Any]:
         answered_turns,
         guardrail_turns,
         unanswered_turns,
+        retry_turns,
+        retry_successes,
         avg_latency,
         p50_latency,
         p95_latency,
@@ -219,6 +225,8 @@ def copilot_turn_stats(cur, since_days: int) -> dict[str, Any]:
         "answered_turns": int(answered_turns),
         "guardrail_turns": int(guardrail_turns),
         "unanswered_turns": int(unanswered_turns),
+        "retry_turns": int(retry_turns),
+        "retry_successes": int(retry_successes),
         "total_cost_usd": float(total_cost) if total_cost is not None else None,
         "conversations": int(conversations),
         "resolved_conversations": int(resolved_conversations),

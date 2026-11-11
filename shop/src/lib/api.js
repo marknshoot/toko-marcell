@@ -267,59 +267,61 @@ export async function getProductReviews(productId, limit = 10) {
 
 // ── AI Copilot (Admin Toko Marcell) — v2 contract ────────────────────────────
 
-export async function sendCopilotMessage({ message, threadId, context = null }) {
-  const sessionId = getSessionId();
-  const response = await fetch(`${API_URL}/copilot/chat`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: sessionId,
-      thread_id: threadId,
-      message,
-      context: context
-        ? {
-            page_asin: context.pageAsin ?? null,
-            referenced_asins: context.referencedAsins ?? [],
-          }
-        : null,
-    }),
-  });
-
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.detail || "Could not reach Toko Marcell Copilot");
-  }
-
-  return response.json();
+function copilotContext(context) {
+  return context
+    ? {
+        page_asin: context.pageAsin ?? null,
+        referenced_asins: context.referencedAsins ?? [],
+      }
+    : null;
 }
 
-export async function streamCopilotMessage({ message, threadId, context = null, onToken, onStatus }) {
-  const sessionId = getSessionId();
-  const response = await fetch(`${API_URL}/copilot/chat/stream`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      session_id: sessionId,
-      thread_id: threadId,
-      message,
-      context: context
-        ? {
-            page_asin: context.pageAsin ?? null,
-            referenced_asins: context.referencedAsins ?? [],
-          }
-        : null,
-    }),
+function parseRetryAfter(raw) {
+  if (!raw) return null;
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds)) return Math.max(0, Math.ceil(seconds));
+  const date = Date.parse(raw);
+  if (!Number.isNaN(date)) return Math.max(0, Math.ceil((date - Date.now()) / 1000));
+  return null;
+}
+
+function copilotError(message, { status = null, code = "request_failed", retryable = false, retryAfter = null } = {}) {
+  const error = new Error(message || "Could not reach Toko Marcell Copilot");
+  error.status = status;
+  error.code = code;
+  error.retryable = retryable;
+  error.retryAfter = retryAfter;
+  return error;
+}
+
+async function copilotHttpError(response) {
+  const body = await response.json().catch(() => ({}));
+  const detail = body.detail;
+  const message =
+    typeof detail === "string"
+      ? detail
+      : detail?.message || body.message || body.error || "Could not reach Toko Marcell Copilot";
+  const fallbackCode =
+    response.status === 429
+      ? "client_rate_limited"
+      : response.status === 503
+        ? "llm_unavailable"
+        : response.status >= 500
+          ? "provider_error"
+          : "request_failed";
+  return copilotError(message, {
+    status: response.status,
+    code: body.code || body.error_code || detail?.code || fallbackCode,
+    retryable: body.retryable ?? detail?.retryable ?? (response.status === 429 || response.status >= 500),
+    retryAfter:
+      parseRetryAfter(response.headers?.get?.("Retry-After")) ??
+      body.retry_after ??
+      detail?.retry_after ??
+      null,
   });
+}
 
-  if (!response.ok) {
-    const err = await response.json().catch(() => ({}));
-    throw new Error(err.detail || "Could not reach Toko Marcell Copilot");
-  }
-
-  if (!response.body) {
-    return response.json();
-  }
-
+async function readCopilotStream(response, { threadId, onToken, onStatus } = {}) {
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let buffer = "";
@@ -356,15 +358,81 @@ export async function streamCopilotMessage({ message, threadId, context = null, 
     }
   }
 
-  return (
-    donePayload || {
-      reply: fullReply,
+  if (!donePayload) {
+    // A stream that ends without a done event was cut off (Render restart, proxy timeout).
+    // Treat it as retryable instead of showing a half answer as if it were complete.
+    const error = copilotError("Jawaban terputus. Coba lagi ya kak.", {
+      code: "stream_interrupted",
+      retryable: true,
+    });
+    error.partialText = fullReply;
+    throw error;
+  }
+
+  return donePayload;
+}
+
+export async function sendCopilotMessage({ message, threadId, context = null }) {
+  const sessionId = getSessionId();
+  const response = await fetch(`${API_URL}/copilot/chat`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
       thread_id: threadId,
-      products: [],
-      ui_actions: [],
-      guardrail: null,
-    }
-  );
+      message,
+      context: copilotContext(context),
+    }),
+  });
+
+  if (!response.ok) throw await copilotHttpError(response);
+
+  return response.json();
+}
+
+export async function streamCopilotMessage({ message, threadId, context = null, onToken, onStatus }) {
+  const sessionId = getSessionId();
+  const response = await fetch(`${API_URL}/copilot/chat/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      thread_id: threadId,
+      message,
+      context: copilotContext(context),
+    }),
+  });
+
+  if (!response.ok) throw await copilotHttpError(response);
+
+  if (!response.body) {
+    return response.json();
+  }
+
+  return readCopilotStream(response, { threadId, onToken, onStatus });
+}
+
+// Resume the failed turn from its LangGraph checkpoint. No message is sent: the server
+// reads the prompt back from the saved thread, so retrying cannot duplicate history.
+export async function retryCopilotTurn({ threadId, context = null, onToken, onStatus }) {
+  const sessionId = getSessionId();
+  const response = await fetch(`${API_URL}/copilot/chat/retry/stream`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      session_id: sessionId,
+      thread_id: threadId,
+      context: copilotContext(context),
+    }),
+  });
+
+  if (!response.ok) throw await copilotHttpError(response);
+
+  if (!response.body) {
+    return response.json();
+  }
+
+  return readCopilotStream(response, { threadId, onToken, onStatus });
 }
 
 // Answer a pending cart confirmation. Only yes or no is sent: the server reads the item back from

@@ -187,7 +187,8 @@ class TestRecordTurnUnanswered:
         )
 
         assert "unanswered_question" in captured["sql"]
-        assert captured["params"][-1] == "q" * 300
+        assert captured["params"][-2] == "q" * 300
+        assert captured["params"][-1] is False
 
     def test_blank_question_is_stored_as_null(self, monkeypatch):
         import contextlib
@@ -226,7 +227,8 @@ class TestRecordTurnUnanswered:
             unanswered_question="   ",
         )
 
-        assert captured["params"][-1] is None
+        assert captured["params"][-2] is None
+        assert captured["params"][-1] is False
 
 
 class TestRecordTurnCost:

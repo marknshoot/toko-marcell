@@ -110,7 +110,21 @@ def test_stream_route_without_llm_answers_greeting_and_503s_a_question(no_llm, m
 
 # ── (2) Exact stream events for a guardrail turn ─────────────────────────────
 
-DONE_KEYS = {"type", "reply", "thread_id", "products", "ui_actions", "outfit", "tool_calls", "guardrail", "took_ms"}
+DONE_KEYS = {
+    "type",
+    "reply",
+    "thread_id",
+    "products",
+    "ui_actions",
+    "outfit",
+    "tool_calls",
+    "guardrail",
+    "took_ms",
+    "error",
+    "error_code",
+    "retryable",
+    "retry_after",
+}
 
 
 @pytest.mark.parametrize(
@@ -143,6 +157,8 @@ def test_guardrail_turn_streams_one_token_then_done(migrated_db, message, label)
     assert events[0]["content"] == done["reply"]
     assert done["products"] == [] and done["ui_actions"] == [] and done["tool_calls"] == []
     assert done["outfit"] is None
+    assert done["error"] is False and done["error_code"] is None
+    assert done["retryable"] is False and done["retry_after"] is None
 
 
 # ── (3) Checkpointed follow-up resolves "yang kedua" from the registry ───────

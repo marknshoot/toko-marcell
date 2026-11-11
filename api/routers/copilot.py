@@ -10,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Path, Request
 from fastapi.responses import StreamingResponse
 from memory_trim import trim_memory
 from rate_limiter import check_copilot_rate_limit, check_write_rate_limit
-from schemas import CopilotChatV2In, CopilotFeedbackIn, CopilotResumeIn
+from schemas import CopilotChatV2In, CopilotFeedbackIn, CopilotResumeIn, CopilotRetryIn
 from web import COPILOT_BUSY_MESSAGE, client_ip, rate_limit_error, rate_limited
 
 logger = logging.getLogger(__name__)
@@ -152,6 +152,116 @@ async def copilot_chat_stream(payload: CopilotChatV2In, request: Request):
                 thread_id=payload.thread_id,
                 checkpointer=checkpointer,
                 fake=fake,
+            ):
+                yield f"data: {json.dumps(evt)}\n\n"
+        finally:
+            trim_memory()
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
+
+
+@router.post("/copilot/chat/retry")
+async def copilot_chat_retry(payload: CopilotRetryIn, request: Request):
+    """Resume the last failed turn without adding another human message."""
+    limited = _copilot_rate_limit(request)
+    if limited is not None:
+        return limited
+
+    from copilot_agent import is_llm_available, run_turn
+    from copilot_memory import get_checkpointer
+
+    settings = get_settings()
+    ctx = payload.context
+    fake = os.environ.get("COPILOT_FAKE_LLM") == "1"
+    if not fake and not is_llm_available():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Layanan asisten AI sedang tidak tersedia sementara waktu.",
+                "code": "llm_unavailable",
+                "retryable": False,
+            },
+        )
+
+    checkpointer = None if fake else get_checkpointer()
+    if checkpointer is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Percakapan tersimpan sedang tidak tersedia. Coba lagi sebentar.",
+                "code": "checkpoint_unavailable",
+                "retryable": True,
+                "retry_after": 5,
+            },
+        )
+
+    result = await run_turn(
+        "",
+        db_url=settings.DATABASE_URL,
+        session_id=payload.session_id,
+        page_asin=ctx.page_asin if ctx else None,
+        referenced_asins=ctx.referenced_asins if ctx else [],
+        thread_id=payload.thread_id,
+        checkpointer=checkpointer,
+        fake=fake,
+        retry=True,
+    )
+    result["thread_id"] = payload.thread_id
+    trim_memory()
+    return result
+
+
+@router.post("/copilot/chat/retry/stream")
+async def copilot_chat_retry_stream(payload: CopilotRetryIn, request: Request):
+    """Stream the resumed turn as Server-Sent Events (`token` and `done`)."""
+    limited = _copilot_rate_limit(request)
+    if limited is not None:
+        return limited
+
+    from copilot_agent import is_llm_available, stream_turn
+    from copilot_memory import get_checkpointer
+
+    settings = get_settings()
+    ctx = payload.context
+    fake = os.environ.get("COPILOT_FAKE_LLM") == "1"
+    if not fake and not is_llm_available():
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Layanan asisten AI sedang tidak tersedia sementara waktu.",
+                "code": "llm_unavailable",
+                "retryable": False,
+            },
+        )
+
+    checkpointer = None if fake else get_checkpointer()
+    if checkpointer is None:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Percakapan tersimpan sedang tidak tersedia. Coba lagi sebentar.",
+                "code": "checkpoint_unavailable",
+                "retryable": True,
+                "retry_after": 5,
+            },
+        )
+
+    async def event_generator():
+        try:
+            async for evt in stream_turn(
+                "",
+                db_url=settings.DATABASE_URL,
+                session_id=payload.session_id,
+                page_asin=ctx.page_asin if ctx else None,
+                referenced_asins=ctx.referenced_asins if ctx else [],
+                thread_id=payload.thread_id,
+                checkpointer=checkpointer,
+                fake=fake,
+                retry=True,
             ):
                 yield f"data: {json.dumps(evt)}\n\n"
         finally:

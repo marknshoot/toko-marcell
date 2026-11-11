@@ -7,6 +7,7 @@ import remarkGfm from "remark-gfm";
 import { CartContext } from "./CartProvider";
 import {
   streamCopilotMessage,
+  retryCopilotTurn,
   deleteCopilotThread,
   searchProducts,
   getProducts,
@@ -57,6 +58,81 @@ const OUTFIT_SLOT_LABELS = {
   bawahan: "Bawahan",
   sepatu: "Sepatu",
 };
+
+const MAX_RETRIES = 3;
+
+const RETRY_COPY = {
+  provider_rate_limited: "Asisten AI lagi ramai. Coba lagi sebentar ya kak.",
+  provider_timeout: "Jawaban kepotong karena koneksi ke AI lambat.",
+  provider_unavailable: "Asisten AI lagi nggak bisa dihubungi.",
+  provider_error: "Asisten AI sedang bermasalah.",
+  client_rate_limited: "Terlalu banyak permintaan. Tunggu sebentar ya.",
+  network: "Koneksi ke asisten terputus.",
+  stream_interrupted: "Jawaban terputus di tengah jalan.",
+  retry_in_progress: "Permintaan sebelumnya masih diproses.",
+  internal_error: "Jawaban ini belum selesai.",
+  llm_unavailable: "Asisten AI sedang tidak tersedia. Coba beberapa saat lagi.",
+  thread_not_found: "Percakapan ini sudah kedaluwarsa. Silakan mulai percakapan baru.",
+  approval_pending: "Konfirmasi keranjang masih menunggu jawaban.",
+  checkpoint_unavailable: "Percakapan tersimpan sedang tidak tersedia.",
+  default: "Jawaban ini belum selesai.",
+};
+
+function retryCopy(code) {
+  return RETRY_COPY[code] || RETRY_COPY.default;
+}
+
+function retryMeta(failure, attempts = 0) {
+  const retryAfter = failure.retryAfter ?? null;
+  return {
+    code: failure.code || "internal_error",
+    retryable: Boolean(failure.retryable),
+    retryAfter,
+    retryAt: retryAfter ? Date.now() + retryAfter * 1000 : null,
+    attempts,
+  };
+}
+
+function errorAssistantMessage(content, failure, retryContext) {
+  return {
+    role: "assistant",
+    content: content || retryCopy(failure.code),
+    products: [],
+    outfit: null,
+    uiActions: [],
+    guardrail: null,
+    feedback: null,
+    error: retryMeta(failure),
+    retryContext,
+  };
+}
+
+function failureFromDone(res) {
+  return {
+    code: res.error_code || "internal_error",
+    retryable: res.retryable !== false,
+    retryAfter: res.retry_after ?? null,
+  };
+}
+
+function failureFromError(err) {
+  const status = err?.status;
+  const fallbackCode =
+    status === 429
+      ? "client_rate_limited"
+      : status === 503
+        ? "llm_unavailable"
+        : status === 404
+          ? "thread_not_found"
+          : status >= 500
+            ? "provider_error"
+            : "network";
+  return {
+    code: err?.code || fallbackCode,
+    retryable: err?.retryable ?? !(status === 400 || status === 404 || status === 409 || status === 422),
+    retryAfter: err?.retryAfter ?? null,
+  };
+}
 
 const markdownComponents = {
   p: ({ children }) => <p className="mb-2 last:mb-0 leading-relaxed">{children}</p>,
@@ -118,6 +194,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
   const [isLoading, setIsLoading] = useState(false);
   const [statusLabel, setStatusLabel] = useState(null);
   const [isThinking, setIsThinking] = useState(false);
+  const [retryingIndex, setRetryingIndex] = useState(null);
   const [threadId, setThreadId] = useState(() => getCopilotThreadId());
   const [attachedProducts, setAttachedProducts] = useState(() =>
     pageAsin && pageTitle ? [{ asin: pageAsin, title: pageTitle, priceIdr: null }] : []
@@ -263,7 +340,8 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
       content: query,
       attached: attachedProducts.map((p) => ({ asin: p.asin, title: p.title })),
     };
-    setMessages((prev) => [...prev.map(expirePendingApproval), userMsg]);
+    const retryContext = buildContext();
+    setMessages((prev) => [...prev.map(expireRetry).map(expirePendingApproval), userMsg]);
     setInputValue("");
     setShowAttachMenu(false);
     setIsLoading(true);
@@ -277,7 +355,7 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
       const res = await streamCopilotMessage({
         message: query,
         threadId,
-        context: buildContext(),
+        context: retryContext,
         onStatus: (label) => {
           // Progress from the server ("Mencari produk…"). It replaces the generic text and stays
           // until the next token arrives, even if a first part of the reply is already on screen.
@@ -306,6 +384,22 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
         },
       });
 
+      if (res.error) {
+        // The turn failed but the stream still finished cleanly: keep the bubble in place and
+        // attach a retry action instead of showing a dead end.
+        const failure = failureFromDone(res);
+        const content = res.partial ? res.reply : retryCopy(failure.code);
+        setMessages((prev) => {
+          const copy = [...prev];
+          if (streamingInserted && copy[copy.length - 1]?.role === "assistant") {
+            copy[copy.length - 1] = errorAssistantMessage(content, failure, retryContext);
+            return copy;
+          }
+          return [...prev, errorAssistantMessage(content, failure, retryContext)];
+        });
+        return;
+      }
+
       const finalMsg = {
         role: "assistant",
         content: res.reply,
@@ -327,21 +421,112 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
       });
 
       executeUiActions(res.ui_actions || []);
-    } catch {
-      setMessages((prev) => [
-        ...prev,
-        {
-          role: "assistant",
-          content:
-            "Maaf kak, asisten AI lagi ada kendala koneksi. Boleh coba kirim lagi ya!",
-          products: [],
-          outfit: null,
-        },
-      ]);
+    } catch (err) {
+      const failure = failureFromError(err);
+      setMessages((prev) => {
+        const copy = [...prev];
+        const last = copy[copy.length - 1];
+        const content =
+          err?.partialText ||
+          (streamingInserted && last?.role === "assistant" ? last.content : "");
+        const message = errorAssistantMessage(content, failure, retryContext);
+        if (streamingInserted && last?.role === "assistant") {
+          copy[copy.length - 1] = message;
+        } else {
+          copy.push(message);
+        }
+        return copy;
+      });
     } finally {
       setStatusLabel(null);
       setIsThinking(false);
       setIsLoading(false);
+    }
+  }
+
+  async function handleRetry(index) {
+    const target = messages[index];
+    if (
+      !target ||
+      target.role !== "assistant" ||
+      !target.error?.retryable ||
+      isLoading ||
+      !threadId
+    ) {
+      return;
+    }
+    if (target.error.retryAt && target.error.retryAt > Date.now()) return;
+
+    setRetryingIndex(index);
+    setIsLoading(true);
+    setIsThinking(true);
+    setStatusLabel(null);
+
+    let receivedToken = false;
+
+    try {
+      const res = await retryCopilotTurn({
+        threadId,
+        context: target.retryContext || null,
+        onStatus: (label) => {
+          setStatusLabel(label);
+          setIsThinking(true);
+        },
+        onToken: (_chunk, fullText) => {
+          receivedToken = true;
+          setStatusLabel(null);
+          setIsThinking(false);
+          setMessages((prev) =>
+            prev.map((m, i) =>
+              i === index
+                ? { ...m, content: fullText, error: null, products: [], outfit: null, uiActions: [] }
+                : m
+            )
+          );
+        },
+      });
+
+      if (res.error) {
+        const failure = failureFromDone(res);
+        throw Object.assign(new Error(res.reply || retryCopy(failure.code)), failure);
+      }
+
+      setMessages((prev) =>
+        prev.map((m, i) =>
+          i === index
+            ? {
+                role: "assistant",
+                content: res.reply,
+                products: res.products || [],
+                outfit: res.outfit || null,
+                uiActions: res.ui_actions || [],
+                guardrail: res.guardrail || null,
+                feedback: null,
+                ...approvalFields(res),
+              }
+            : m
+        )
+      );
+      executeUiActions(res.ui_actions || []);
+    } catch (err) {
+      const failure = failureFromError(err);
+      setMessages((prev) =>
+        prev.map((m, i) => {
+          if (i !== index) return m;
+          const attempts = (m.error?.attempts || 0) + 1;
+          const retryable = Boolean(failure.retryable) && attempts < MAX_RETRIES;
+          return {
+            ...m,
+            content: receivedToken ? m.content : retryCopy(failure.code),
+            error: { ...retryMeta(failure, attempts), retryable },
+          };
+        })
+      );
+    } finally {
+      setStatusLabel(null);
+      setIsThinking(false);
+      setIsLoading(false);
+      setRetryingIndex(null);
     }
   }
 
@@ -617,6 +802,16 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                         </ReactMarkdown>
                       </div>
 
+                      {msg.error && (
+                        <RetryNotice
+                          error={msg.error}
+                          retrying={retryingIndex === index}
+                          disabled={isLoading}
+                          onRetry={() => handleRetry(index)}
+                          onReset={handleReset}
+                        />
+                      )}
+
                       {msg.pendingApproval?.items?.length > 0 && (
                         <ApprovalCard
                           items={msg.pendingApproval.items}
@@ -628,7 +823,8 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                         />
                       )}
 
-                      <div className="flex items-center gap-1 pl-0.5">
+                      {!msg.error && (
+                        <div className="flex items-center gap-1 pl-0.5">
                         <button
                           type="button"
                           aria-label="Jawaban membantu"
@@ -657,7 +853,8 @@ export default function CopilotChat({ embedded = false, pageAsin = null, pageTit
                         >
                           👎
                         </button>
-                      </div>
+                        </div>
+                      )}
 
                       {outfitSlots(msg.outfit).length > 0 ? (
                         <OutfitCard outfit={msg.outfit} onAddAll={handleAddOutfit} />
@@ -1016,6 +1213,84 @@ function approvalFields(res) {
 // A card still waiting for an answer is dropped when the shopper moves on (the server does the same).
 function expirePendingApproval(message) {
   return message.approvalState === "pending" ? { ...message, approvalState: "expired" } : message;
+}
+
+function RetryNotice({ error, retrying, disabled, onRetry, onReset }) {
+  const [, setTick] = useState(0);
+
+  useEffect(() => {
+    if (!error.retryAt || Date.now() >= error.retryAt) return undefined;
+    const timer = setInterval(() => {
+      setTick((n) => n + 1);
+      if (Date.now() >= error.retryAt) clearInterval(timer);
+    }, 250);
+    return () => clearInterval(timer);
+  }, [error.retryAt]);
+
+  // Derived on every render (the tick above only forces one while the countdown runs).
+  const secondsLeft = secondsUntil(error.retryAt);
+
+  if (!error.retryable) {
+    return (
+      <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-[11px] text-amber-900">
+        <p>{retryCopy(error.code)}</p>
+        <button
+          type="button"
+          onClick={onReset}
+          className="mt-1.5 font-semibold underline underline-offset-2"
+        >
+          Mulai percakapan baru
+        </button>
+      </div>
+    );
+  }
+
+  const exhausted = error.attempts >= MAX_RETRIES;
+  const waiting = secondsLeft > 0;
+
+  return (
+    <div className="flex flex-wrap items-center gap-2 rounded-xl border border-border bg-muted/10 px-3 py-2 text-[11px] text-muted">
+      <span>
+        {exhausted
+          ? "Sudah 3 kali dicoba. Mulai percakapan baru biar makin lancar."
+          : retryCopy(error.code)}
+      </span>
+      {!exhausted && (
+        <button
+          type="button"
+          onClick={onRetry}
+          disabled={disabled || retrying || waiting}
+          className="rounded-lg border border-border px-2 py-0.5 font-semibold text-foreground transition hover:bg-muted/15 disabled:opacity-60"
+        >
+          {retrying
+            ? "Mencoba…"
+            : waiting
+              ? `Coba lagi (${secondsLeft}s)`
+              : `Coba lagi${error.attempts ? ` (${error.attempts + 1}/${MAX_RETRIES})` : ""}`}
+        </button>
+      )}
+      {exhausted && (
+        <button
+          type="button"
+          onClick={onReset}
+          className="rounded-lg border border-border px-2 py-0.5 font-semibold text-foreground transition hover:bg-muted/15"
+        >
+          Mulai percakapan baru
+        </button>
+      )}
+    </div>
+  );
+}
+
+function secondsUntil(retryAt) {
+  if (!retryAt) return 0;
+  return Math.max(0, Math.ceil((retryAt - Date.now()) / 1000));
+}
+
+function expireRetry(message) {
+  return message.error?.retryable
+    ? { ...message, error: { ...message.error, retryable: false } }
+    : message;
 }
 
 function CardBtn({ children, onClick, primary = false, active = false }) {

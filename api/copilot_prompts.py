@@ -61,6 +61,6 @@ TOOL_STATUS_LABELS: dict[str, str] = {
 AFTER_TOOLS_LABEL = "Menyusun jawaban…"
 
 _LLM_UNAVAILABLE_DETAIL = "Layanan asisten AI sedang tidak tersedia sementara waktu. Silakan coba kembali nanti."
-_LLM_NETWORK_DETAIL = "Asisten AI sedang mengalami kendala jaringan. Silakan coba beberapa saat lagi ya!"
-_STREAM_ERROR_REPLY = "Maaf kak, asisten AI lagi ada kendala koneksi. Boleh coba kirim lagi ya!"
+_LLM_NETWORK_DETAIL = "Asisten AI sedang mengalami kendala. Silakan coba beberapa saat lagi ya!"
+_STREAM_ERROR_REPLY = "Maaf kak, asisten AI lagi ada kendala. Boleh coba lagi ya!"
 _EMPTY_REPLY = "Maaf kak, mimin belum nemu jawabannya. Boleh ulangi ya?"
