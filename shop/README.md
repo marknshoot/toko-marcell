@@ -51,8 +51,8 @@ A recruiter opening this link decides in seconds whether it works. That drove fo
   the link that was clicked (`useLinkStatus`), never a page-wide overlay.
 - **Cache contract:** browse reads (`/products`, `/categories`) pass `next: { revalidate: 300 }` and
   are shared by every visitor. Search is `cache: "no-store"` because its URL is unbounded. Server
-  reads have a 10 s deadline, so a Render/Neon cold start fails into the retry state instead of
-  holding the stream open forever.
+  reads have a 55 s deadline, matching the cold-start window the wakeup overlay waits for, so a
+  Render/Neon cold start resolves into products instead of erroring at 10 s.
 - Search-result URLs (`?q=`) are `noindex, follow`; browse pages stay indexable.
 - A stale `?page=999` redirects to the last real page, and `q` is clamped to the API's 100-character
   limit before the request.
