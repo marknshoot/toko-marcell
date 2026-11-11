@@ -1,15 +1,6 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-// useLinkStatus() reports the navigation owned by the enclosing <Link>. Mock only
-// that hook so the card can be tested in both states without a router.
-const linkState = vi.hoisted(() => ({ pending: false }));
-
-vi.mock("next/link", async (importOriginal) => {
-  const actual = await importOriginal();
-  return { ...actual, useLinkStatus: () => ({ pending: linkState.pending }) };
-});
-
 import ProductCard from "../ProductCard";
 
 const PRODUCT = {
@@ -23,7 +14,6 @@ const PRODUCT = {
 
 describe("ProductCard", () => {
   beforeEach(() => {
-    linkState.pending = false;
     window.localStorage.clear();
   });
 
@@ -34,21 +24,6 @@ describe("ProductCard", () => {
     expect(screen.getByText("Running Shoes")).toBeTruthy();
     expect(screen.getByText("Rp 750.000")).toBeTruthy();
     expect(screen.getByText("Adidas · Shoes")).toBeTruthy();
-  });
-
-  it("shows a pending indicator only while the navigation is in flight", () => {
-    const { container, rerender } = render(<ProductCard {...PRODUCT} />);
-    expect(screen.queryByRole("status")).toBeNull();
-
-    linkState.pending = true;
-    rerender(<ProductCard {...PRODUCT} />);
-
-    expect(screen.getByRole("status").textContent).toMatch(/Opening product/);
-    expect(container.querySelector(".animate-spin")).not.toBeNull();
-
-    linkState.pending = false;
-    rerender(<ProductCard {...PRODUCT} />);
-    expect(screen.queryByRole("status")).toBeNull();
   });
 
   it("renders the chat variant with its reference badge and action buttons", () => {

@@ -6,9 +6,9 @@
 [![Vitest](https://img.shields.io/badge/Vitest-Unit%20Tests-FCC72B?style=for-the-badge&logo=vitest&logoColor=black)](https://vitest.dev)
 [![Vercel](https://img.shields.io/badge/Deployed-Vercel%20Edge-000000?style=for-the-badge&logo=vercel&logoColor=white)](https://toko-marcell.vercel.app)
 
-The client-facing storefront. It renders the catalog, runs client-side search/filter
-UX, keeps the cart in `localStorage`, and talks to the FastAPI backend over HTTP. It never touches a
-database and never decides a price.
+The client-facing storefront. It renders the catalog and product pages on the server, keeps the
+search/filter state in the URL, keeps the cart in `localStorage`, and talks to the FastAPI backend
+over HTTP. It never touches a database and never decides a price.
 
 🌐 **Live:** [https://toko-marcell.vercel.app](https://toko-marcell.vercel.app)
 
@@ -18,9 +18,9 @@ database and never decides a price.
 
 A recruiter opening this link decides in seconds whether it works. That drove four deliberate choices:
 
-1. **Server-render first paint, hydrate interaction.** Home and product pages are React Server
-   Components; only the parts that need state (`Catalog`, cart, copilot, wakeup) are client
-   components. No JS bundle is needed to see the page.
+1. **Server-render first paint, hydrate interaction.** Home, catalog results and product pages are
+   React Server Components; only the parts that need state (search box, filter-link pending state,
+   cart, copilot, wakeup) are client components. No JS bundle is needed to see the page.
 2. **Cache aggressively, revalidate in the background.** Product detail pages are ISR-cached at the
    edge for 5 minutes and stream their slow sections (reviews, recommendations) behind `Suspense`.
    A cached product page answers in ~5 ms instead of ~1 s.
@@ -33,15 +33,29 @@ A recruiter opening this link decides in seconds whether it works. That drove fo
 
 ## Feature tour
 
-### 1. Catalog (`components/Catalog.js`)
+### 1. Server-rendered catalog (`app/page.js` + `CatalogResults`)
 
-- Product grid with **24-per-page** pagination and skeleton placeholders while loading.
-- **Department filter chips** from the live `/categories` facets.
-- **Debounced text search** (250 ms) that calls the backend `/search` endpoint, so ranking is
-  server-side (BM25 + dense vectors + RRF) rather than a client filter.
-- URL-driven state (`?department=`, `?page=`, `?q=`), so filtered/search views are shareable and the
-  back button behaves.
-- A visible "taking longer than usual" state after 1 s so a cold backend never looks frozen.
+- `page.js` reads `searchParams` (`?department=`, `?page=`, `?q=`) and renders `CatalogResults` inside
+  a `Suspense` boundary. The grid, result count and pager arrive in the streamed HTML — the shopper
+  sees the real 24-card page, not a client fetch.
+- `CatalogFilters` (facets from `/categories`) and `CatalogResults` are sibling Suspense boundaries,
+  so both fetches start together and a slow facet query never delays the products.
+- `CatalogResultsSkeleton` matches the real `grid-cols-2 gap-3 sm:grid-cols-4` grid, so streaming in
+  the cards does not reflow the page.
+- **Debounced text search** (250 ms) updates the URL with `router.replace`; the input lives outside
+  the Suspense boundary, so it never loses focus while the new grid renders. Typed-ahead text is
+  protected from an older in-flight query landing late. Ranking still happens server-side
+  (BM25 + dense vectors + RRF) via `/search`.
+- **Filter pills and pagination are real `<a href>` links** (`scroll={false}`), so they work without
+  JavaScript, are prefetchable and can be opened in a new tab. Pending state is a small spinner on
+  the link that was clicked (`useLinkStatus`), never a page-wide overlay.
+- **Cache contract:** browse reads (`/products`, `/categories`) pass `next: { revalidate: 300 }` and
+  are shared by every visitor. Search is `cache: "no-store"` because its URL is unbounded. Server
+  reads have a 55 s deadline, matching the cold-start window the wakeup overlay waits for, so a
+  Render/Neon cold start resolves into products instead of erroring at 10 s.
+- Search-result URLs (`?q=`) are `noindex, follow`; browse pages stay indexable.
+- A stale `?page=999` redirects to the last real page, and `q` is clamped to the API's 100-character
+  limit before the request.
 
 ### 2. Cold-start wakeup overlay (`components/ServerWakeup.js`)
 
@@ -66,8 +80,8 @@ shield, because a false "down" is worse than a heavier probe.
   `POST /copilot/chat/stream` (SSE `token` + `done` events), showing a pulsing `"Sedang berpikir..."`
   indicator while waiting for the first token and rendering GitHub Flavored Markdown (including tables)
   via `react-markdown` and `remark-gfm`. Conversation history lives server-side in the LangGraph
-  checkpointer, not in the request. **There is no image upload** — photo search is a separate storefront
-  feature (see Catalog, below).
+  checkpointer, not in the request. **There is no image upload** — product lookup uses the paperclip
+  text search below.
 - **Starter chips only on a new conversation** (`messages.length === 0`), dynamically adapting between
   store-wide prompts, single-product prompts, and multi-product comparison prompts.
 - **Paperclip product search & attach (`📎`)** lets shoppers search the catalog inside the chat bar and
@@ -105,8 +119,8 @@ the right ASIN and the product starter chips appear. It renders no chat of its o
 - The three catalog fetches (`getProduct`, `getItemRecs`, `getProductReviews`) pass
   `next: { revalidate: 300 }`; Next 15+ defaults `fetch` to `no-store`, so a route-level `revalidate`
   alone does not make the data cacheable.
-- `loading.js` + `ProductPageSkeleton` paint the page shape the moment a product card is clicked, and
-  `useLinkStatus()` inside `ProductCard` shows a per-link spinner until the new route commits.
+- `loading.js` + `ProductPageSkeleton` paint the page shape the moment a product card is clicked;
+  the card itself stays inert so the shopper lands on the PDP skeleton rather than a spinner overlay.
 - Reviews and the **"Customers also viewed"** rail each sit in their own `Suspense` boundary, so a
   slow reviews query or an empty rail never delays the product details.
 - `ProductImage` keeps an `animate-pulse` shimmer (honouring `prefers-reduced-motion`) until the
@@ -266,7 +280,7 @@ NEXT_PUBLIC_API_URL=http://localhost:8001
 
 ```bash
 npm run dev      # http://localhost:3000
-npm test         # 74 tests across 13 suites
+npm test         # 108 tests across 20 suites
 npm run lint
 npm run build
 ```
@@ -298,7 +312,7 @@ without rebuilding the image.
 src/
 ├── app/
 │   ├── layout.js                 # header, footer, CartProvider, ServerWakeup, FloatingCopilot
-│   ├── page.js                   # home: hero, RecommendationsRail, Catalog (Suspense)
+│   ├── page.js                   # home: hero, RecommendationsRail, server-rendered catalog + Suspense
 │   ├── globals.css               # Tailwind v4 theme + design tokens
 │   ├── product/[id]/page.js      # PDP: ISR + Suspense-streamed reviews and recs
 │   ├── product/[id]/loading.js   # instant skeleton while the PDP resolves
@@ -310,8 +324,15 @@ src/
 │       ├── qris/page.js          # QRIS simulation → server-confirmed order
 │       └── confirm/[token]/page.js   # server-fetched receipt; 404 on bad token
 ├── components/
-│   ├── Catalog.js                # grid, search (debounced), department filter, paging
-│   ├── CatalogSkeleton.js        # home Suspense fallback
+│   ├── CatalogSearch.js          # debounced search box, GET-form fallback, pending status
+│   ├── CatalogFilters.js         # async facet pills from /categories
+│   ├── FilterLink.js             # department pill with per-link pending state
+│   ├── CatalogResults.js         # async products/search grid, count, empty/error, pager
+│   ├── CatalogPagination.js      # Prev/Next links + scroll-to-catalog
+│   ├── CatalogResultsSkeleton.js # results Suspense fallback (matches the real grid)
+│   ├── CatalogFiltersSkeleton.js # facet pill-row fallback
+│   ├── RetryButton.js            # router.refresh() after a failed catalog read
+│   ├── SearchAnalytics.js        # fires the search event once per committed query
 │   ├── ProductCard.js            # one card for the grid, rec rails and the copilot
 │   ├── ProductCardSkeleton.js    # per-card placeholder
 │   ├── ProductPageSkeleton.js    # PDP fallback (hero + details + reviews + recs rail)
@@ -330,6 +351,7 @@ src/
 │   └── FloatingCopilot.js        # lazy, client-only mount for the copilot
 └── lib/
     ├── api.js                    # the ONLY place that knows the API URL; all fetches
+    ├── catalogParams.js          # PAGE_SIZE + parse/build the ?department/?page/?q contract
     ├── formatRp.js               # IDR currency formatting
     └── session.js                # anonymous session id + copilot thread id/messages (local storage)
 ```
@@ -342,6 +364,12 @@ sequenceDiagram
     participant N as Next.js (server)
     participant A as FastAPI
     participant P as Postgres/pgvector
+    B->>N: GET /?department=Women&page=2
+    N->>A: GET /products?department=… (5 min Data Cache)
+    A->>P: SQL
+    P-->>A: rows
+    A-->>N: JSON
+    N-->>B: streamed HTML (shell first, then the catalog grid)
     B->>N: GET /product/1
     N->>A: GET /products/1 (+ recs, reviews)
     A->>P: SQL
@@ -366,7 +394,7 @@ sequenceDiagram
 npm test
 ```
 
-**74 tests across 13 suites**:
+**108 tests across 20 suites**:
 
 | Suite | Tests | Covers |
 |---|:---:|---|
@@ -374,7 +402,14 @@ npm test
 | `components/__tests__/AddToCartButton.test.jsx` | 3 | add with quantity, navigate home, existing-quantity display |
 | `components/__tests__/ServerWakeup.test.jsx` | 6 | waking indicator with spinner, ready indicator on healthy check, dual Render/Neon payload from `checkHealth`, 2.5 s polling until the database wakes, error fallback when neither answers, retry from the error state |
 | `components/__tests__/CopilotChat.test.jsx` | 21 | no image-upload or TB/BB form, starter chips only when empty, product-page chips, `copilot:open` event attaches product, paperclip search & attach, pulsing `"Sedang berpikir..."` + streaming markdown, `add_to_cart` ui_action, numbered product cards, dedicated outfit card with add-all-to-cart, thumbs feedback, reset deletes thread |
-| `components/__tests__/ProductCard.test.jsx` | 4 | grid link and fields, `useLinkStatus` pending spinner, chat variant badge/actions/navigation, missing-id fallback link |
+| `components/__tests__/ProductCard.test.jsx` | 3 | grid link and fields, chat variant badge/actions/navigation, missing-id fallback link |
+| `components/__tests__/CatalogSearch.test.jsx` | 8 | debounce → one replace, department preserved, no-op for a matching query, external q adoption, typing-race guard, clear, form submit, no-JS hidden department |
+| `components/__tests__/CatalogResults.test.jsx` | 6 | browse fetch/grid/count, search endpoint + analytics, both empty states, error + retry, out-of-range redirect |
+| `components/__tests__/CatalogPagination.test.jsx` | 4 | next/prev hrefs, disabled bounds, department/query preservation, hidden for zero results |
+| `components/__tests__/CatalogFilters.test.jsx` | 2 | pills preserve the query and mark the active one, facet-failure fallback |
+| `components/__tests__/CatalogSkeletons.test.jsx` | 2 | 24-card grid + single status, aria-hidden pill row |
+| `components/__tests__/SearchAnalytics.test.jsx` | 2 | one event per query, empty query ignored |
+| `lib/__tests__/catalogParams.test.js` | 11 | param parsing (arrays, invalid pages, whitespace, 100-char clamp), URL building/encoding, total pages |
 | `components/__tests__/ProductImage.test.jsx` | 3 | shimmer until load, placeholder on error, placeholder with no `src` |
 | `components/__tests__/ProductPageSkeleton.test.jsx` | 3 | single loading announcement, hero + reviews + rail placeholders, optional sections |
 | `app/product/[id]/__tests__/loading.test.jsx` | 1 | the route's `loading.js` renders the skeleton |
@@ -406,8 +441,9 @@ CI also runs `npm run lint` and `npm run build` so the Next build cannot regress
 
 ## Known limitations
 
-- Department filtering is applied server-side on the catalog; the search `results_count` event still
-  reflects the loaded page, not the full catalog (tracked as a backend gap).
+- The catalog route is dynamically rendered because it reads `searchParams`. `/products` and
+  `/categories` are cached in the Data Cache for 5 minutes, so the database work is amortised, but the
+  HTML itself is not a static CDN artifact. PPR/Cache Components is the next step if that matters.
 - The QRIS screen is an explicit simulation and charges nothing; it exists to exercise the
   server-authoritative checkout path.
 - The copilot's inline product cards depend on the backend's response schema; if a tool returns no

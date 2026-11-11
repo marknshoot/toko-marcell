@@ -1,34 +1,10 @@
 "use client";
 
 import { useContext } from "react";
-import Link, { useLinkStatus } from "next/link";
+import Link from "next/link";
 import { formatRp } from "../lib/formatRp";
 import ProductImage from "./ProductImage";
 import { CartContext } from "./CartProvider";
-
-// Rendered *inside* the <Link> on purpose: useLinkStatus() only reports the
-// navigation it belongs to, so the card the shopper clicked is the one that
-// reacts while the product page is being fetched.
-function LinkPending() {
-  const { pending } = useLinkStatus();
-  if (!pending) {
-    return null;
-  }
-
-  return (
-    <>
-      <span role="status" className="sr-only">
-        Opening product…
-      </span>
-      <span
-        aria-hidden="true"
-        className="pointer-events-none absolute inset-0 grid place-items-center bg-surface/60 backdrop-blur-[1px]"
-      >
-        <span className="h-4 w-4 animate-spin rounded-full border-2 border-border border-t-foreground motion-reduce:animate-none" />
-      </span>
-    </>
-  );
-}
 
 /**
  * The one product card used by the catalog, both recommendation rails and the
@@ -68,7 +44,6 @@ export default function ProductCard({
           ) : null}
           <div className="relative h-12 w-12 shrink-0 overflow-hidden rounded-lg border border-border/80 bg-white">
             <ProductImage src={imageUrl} alt={title} padding="p-1" />
-            <LinkPending />
           </div>
           <div className="min-w-0 flex-1">
             <p className="line-clamp-1 text-xs font-medium text-foreground group-hover:underline">
@@ -93,7 +68,6 @@ export default function ProductCard({
       <Link href={`/product/${id}`} className="block no-underline">
         <div className="relative">
           <ProductImage src={imageUrl} alt={title} />
-          <LinkPending />
           {inCartQty > 0 ? (
             <span className="absolute top-2 right-2 inline-flex items-center gap-1 rounded-full bg-cta px-2 py-0.5 text-[11px] font-semibold text-white shadow-sm">
               <svg className="h-3 w-3" fill="none" viewBox="0 0 24 24" stroke="currentColor">
