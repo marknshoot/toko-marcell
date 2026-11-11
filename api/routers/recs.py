@@ -1,43 +1,50 @@
-"""Recommendation endpoints: popular, item-to-item, session-based."""
+"""Recommendation endpoints: popular, item-to-item, session-based.
 
-import logging
+The recommendation *strategy* lives here; reading products and turning rows into
+the storefront shape lives in :mod:`catalog_repo`.
+"""
 
-from db import get_conn
+import catalog_repo
 from fastapi import APIRouter, Query
 from psycopg import sql
 
-from routers.catalog import PRODUCT_COLUMNS, row_to_product
-
-logger = logging.getLogger(__name__)
-
 router = APIRouter()
+
+_POPULAR_ORDER = sql.SQL(" ORDER BY rating_count DESC, avg_rating DESC")
+
+
+def _popular(cur, *, limit: int, department: str | None = None, exclude: list[str] | None = None):
+    """Best-rated products, optionally scoped to one department and ASIN blacklist."""
+    where: sql.Composable | None = None
+    params: list = []
+    if department and department != "All":
+        where = sql.SQL("department = %s")
+        params.append(department)
+    if exclude:
+        clause = sql.SQL("asin <> ALL(%s)")
+        where = clause if where is None else where + sql.SQL(" AND ") + clause
+        params.append(exclude)
+
+    cur.execute(
+        catalog_repo.select_products(where=where) + _POPULAR_ORDER + sql.SQL(" LIMIT %s"),
+        [*params, limit],
+    )
+    return [catalog_repo.product_from_row(row) for row in cur.fetchall()]
+
+
+def _hydrate_in_order(cur, asins: list[str]) -> list[dict]:
+    """Products for ``asins`` in the order given, skipping missing ones."""
+    by_asin = catalog_repo.fetch_by_asins(cur, asins)
+    return [by_asin[asin] for asin in asins if asin in by_asin]
 
 
 @router.get("/recs/popular")
-def recs_popular(
-    department: str | None = None,
-    limit: int = Query(10, ge=1, le=24),
-):
+def recs_popular(department: str | None = None, limit: int = Query(10, ge=1, le=24)):
     """Bestselling / popular products baseline."""
-    with get_conn() as conn:
+    with catalog_repo.get_conn() as conn:
         with conn.cursor() as cur:
-            if department and department != "All":
-                cur.execute(
-                    sql.SQL("SELECT {} FROM products WHERE department = %s ORDER BY rating_count DESC, avg_rating DESC LIMIT %s").format(
-                        sql.SQL(PRODUCT_COLUMNS)
-                    ),
-                    (department, limit),
-                )
-            else:
-                cur.execute(
-                    sql.SQL("SELECT {} FROM products ORDER BY rating_count DESC, avg_rating DESC LIMIT %s").format(
-                        sql.SQL(PRODUCT_COLUMNS)
-                    ),
-                    (limit,),
-                )
-            rows = cur.fetchall()
+            items = _popular(cur, limit=limit, department=department)
 
-    items = [row_to_product(row) for row in rows]
     return {
         "items": items,
         "count": len(items),
@@ -47,65 +54,40 @@ def recs_popular(
 
 
 @router.get("/recs/item/{asin}")
-def recs_item(
-    asin: str,
-    limit: int = Query(6, ge=1, le=24),
-):
+def recs_item(asin: str, limit: int = Query(6, ge=1, le=24)):
     """Item-to-item recommendations for PDP & Cart."""
-    with get_conn() as conn:
+    with catalog_repo.get_conn() as conn:
         with conn.cursor() as cur:
-            cur.execute(
-                "SELECT recs FROM item_recommendations WHERE asin = %s",
-                (asin,),
-            )
+            cur.execute("SELECT recs FROM item_recommendations WHERE asin = %s", (asin,))
             row = cur.fetchone()
-            rec_asins = row[0] if row and row[0] else []
+            rec_asins = (row[0] if row and row[0] else [])[:limit]
 
+            items = _hydrate_in_order(cur, rec_asins)
             strategy = "item_cf"
-            items = []
-
-            if rec_asins:
-                target_asins = rec_asins[:limit]
-                cur.execute(
-                    sql.SQL("SELECT {} FROM products WHERE asin = ANY(%s)").format(
-                        sql.SQL(PRODUCT_COLUMNS)
-                    ),
-                    (target_asins,),
-                )
-                rows = cur.fetchall()
-                by_asin = {r[1]: row_to_product(r) for r in rows}
-                for a in target_asins:
-                    prod = by_asin.get(a)
-                    if prod:
-                        items.append(prod)
 
             if len(items) < limit:
-                cur.execute(
-                    "SELECT department, category FROM products WHERE asin = %s",
-                    (asin,),
-                )
-                source_prod = cur.fetchone()
-                dept = source_prod[0] if source_prod else "Men"
-                cat = source_prod[1] if source_prod else ""
+                # Collaborative filtering ran dry: fall back to the same category,
+                # then the same department, skipping what we already have.
+                cur.execute("SELECT department, category FROM products WHERE asin = %s", (asin,))
+                source = cur.fetchone()
+                department = source[0] if source else "Men"
+                category = source[1] if source else ""
 
                 cur.execute(
-                    sql.SQL(
-                        "SELECT {} FROM products"
-                        " WHERE asin != %s AND (category = %s OR department = %s)"
-                        " ORDER BY rating_count DESC, avg_rating DESC LIMIT %s"
-                    ).format(sql.SQL(PRODUCT_COLUMNS)),
-                    (asin, cat, dept, limit),
+                    catalog_repo.select_products(where=sql.SQL("asin != %s AND (category = %s OR department = %s)"))
+                    + _POPULAR_ORDER
+                    + sql.SQL(" LIMIT %s"),
+                    (asin, category, department, limit),
                 )
-                fb_rows = cur.fetchall()
-                seen = {item["asin"] for item in items}
-                seen.add(asin)
-                for r in fb_rows:
-                    fb_prod = row_to_product(r)
-                    if fb_prod["asin"] not in seen:
-                        items.append(fb_prod)
-                        seen.add(fb_prod["asin"])
-                        if len(items) >= limit:
-                            break
+                seen = {asin} | {item["asin"] for item in items}
+                for row in cur.fetchall():
+                    product = catalog_repo.product_from_row(row)
+                    if product["asin"] in seen:
+                        continue
+                    seen.add(product["asin"])
+                    items.append(product)
+                    if len(items) >= limit:
+                        break
                 if not rec_asins:
                     strategy = "category_popularity_fallback"
 
@@ -122,8 +104,8 @@ def recs_session(
     session_id: str = Query(min_length=1, max_length=128),
     limit: int = Query(6, ge=1, le=24),
 ):
-    """Session-based recommendations."""
-    with get_conn() as conn:
+    """Session-based recommendations from the products this session looked at."""
+    with catalog_repo.get_conn() as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -136,16 +118,10 @@ def recs_session(
                 """,
                 (session_id,),
             )
-            seen_asins = [r[0] for r in cur.fetchall()]
+            seen_asins = [row[0] for row in cur.fetchall()]
 
             if not seen_asins:
-                cur.execute(
-                    sql.SQL(
-                        "SELECT {} FROM products ORDER BY rating_count DESC, avg_rating DESC LIMIT %s"
-                    ).format(sql.SQL(PRODUCT_COLUMNS)),
-                    (limit,),
-                )
-                items = [row_to_product(r) for r in cur.fetchall()]
+                items = _popular(cur, limit=limit)
                 return {
                     "session_id": session_id,
                     "items": items,
@@ -154,66 +130,27 @@ def recs_session(
                 }
 
             cur.execute(
-                """
-                SELECT asin, recs FROM item_recommendations
-                WHERE asin = ANY(%s)
-                """,
+                "SELECT asin, recs FROM item_recommendations WHERE asin = ANY(%s)",
                 (seen_asins,),
             )
-            recs_by_asin = {r[0]: r[1] for r in cur.fetchall()}
+            recs_by_asin = {row[0]: row[1] or [] for row in cur.fetchall()}
 
-            seen_set = set(seen_asins)
+            excluded = set(seen_asins)
             candidate_asins: list[str] = []
-            cand_seen: set[str] = set()
-
             for viewed in seen_asins:
                 for target in recs_by_asin.get(viewed, []):
-                    if target not in seen_set and target not in cand_seen:
+                    if target not in excluded:
+                        excluded.add(target)
                         candidate_asins.append(target)
-                        cand_seen.add(target)
                         if len(candidate_asins) >= limit * 3:
                             break
                 if len(candidate_asins) >= limit * 3:
                     break
 
-            cur.execute(
-                sql.SQL("SELECT {} FROM products WHERE asin = ANY(%s)").format(
-                    sql.SQL(PRODUCT_COLUMNS)
-                ),
-                (candidate_asins,) if candidate_asins else ([],),
-            )
-            rows = cur.fetchall()
-            by_asin = {r[1]: row_to_product(r) for r in rows}
-            items = [by_asin[a] for a in candidate_asins if a in by_asin][:limit]
+            items = _hydrate_in_order(cur, candidate_asins)[:limit]
 
             if len(items) < limit:
-                exclude = list(seen_set.union(cand_seen).union(it["asin"] for it in items))
-                cur.execute(
-                    """
-                    SELECT asin FROM products
-                    WHERE asin != ALL(%s)
-                    ORDER BY rating_count DESC
-                    LIMIT %s
-                    """,
-                    (exclude, limit - len(items)),
-                )
-                for r in cur.fetchall():
-                    candidate_asins.append(r[0])
-
-                backfill_asins = [a for a in candidate_asins if a not in by_asin]
-                if backfill_asins:
-                    cur.execute(
-                        sql.SQL("SELECT {} FROM products WHERE asin = ANY(%s)").format(
-                            sql.SQL(PRODUCT_COLUMNS)
-                        ),
-                        (backfill_asins,),
-                    )
-                    for row in cur.fetchall():
-                        p = row_to_product(row)
-                        if p["asin"] not in {it["asin"] for it in items}:
-                            items.append(p)
-                            if len(items) >= limit:
-                                break
+                items += _popular(cur, limit=limit - len(items), exclude=sorted(excluded))
 
     return {
         "session_id": session_id,

@@ -70,6 +70,27 @@ def get_conn() -> Generator[psycopg.Connection, None, None]:
             yield conn
 
 
+def default_db_url() -> str:
+    """The URL the process is configured with (pool connection string)."""
+    return get_settings().DATABASE_URL
+
+
+@contextlib.contextmanager
+def connect(db_url: str | None = None) -> Generator[psycopg.Connection, None, None]:
+    """Yield a connection for an explicit URL, or the pooled one when it matches.
+
+    Services accept an optional ``db_url`` so they can run standalone (pipeline
+    scripts, tests) outside the server process.  A URL that differs from the
+    configured one cannot come from the pool, so it gets a one-shot connection.
+    """
+    if not db_url or db_url == default_db_url():
+        with get_conn() as conn:
+            yield conn
+    else:
+        with psycopg.connect(db_url) as conn:
+            yield conn
+
+
 def get_conn_dep() -> Generator[psycopg.Connection, None, None]:
     """FastAPI ``Depends``-compatible wrapper around ``get_conn()``."""
     with get_conn() as conn:

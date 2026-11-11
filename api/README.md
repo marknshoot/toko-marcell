@@ -36,12 +36,15 @@ sales copilot, and the operations KPI dashboard.
 ```mermaid
 flowchart TB
     FE[Next.js storefront] -->|HTTP / JSON| API[FastAPI]
-    API --> SEARCH[search.py<br/>BM25 + fastembed + RRF]
+    API --> SEARCH[retrieval.py + search.py<br/>BM25 + fastembed + RRF]
     API --> SIZING[sizing.py<br/>deterministic charts]
     API --> RECS[routers/recs.py]
     API --> AGENT[copilot_agent.py<br/>LangGraph]
     AGENT --> TOOLS[copilot_tools.py<br/>7 deterministic tools]
     AGENT --> RAG[knowledge_seed.py<br/>store knowledge retrieval]
+    SEARCH --> REPO[catalog_repo.py<br/>product reads + row mapping]
+    AGENT --> REPO
+    REPO --> PG
     SEARCH --> PG[(PostgreSQL 16<br/>pgvector)]
     SIZING --> PG
     RECS --> PG
@@ -62,6 +65,10 @@ Design rules:
   `/search/reindex` with `503`; empty denominator → `null` in metrics rather than a fabricated `0.0`.
 - **Startup is self-healing.** `init_db()` runs `alembic upgrade head` and seeds the knowledge base
   when it is empty or stale. Idempotent revisions adopt pre-Alembic databases without a manual stamp.
+- **One layer per concern.** Imports point downward only: `config`/`db` → `catalog_repo` →
+  `retrieval`/`agent_tools`/`analytics` → `copilot_*` → `routers`. A service never imports a router;
+  product SQL lives in `catalog_repo`, KPI SQL in `analytics`, ranking in `retrieval`, and HTTP
+  concerns (status codes, cache headers, client IP, rate-limit responses) in `routers/` + `web.py`.
 
 ---
 
@@ -85,23 +92,32 @@ Design rules:
 |---|---|
 | `main.py` | App factory, lifespan, CORS, router registration |
 | `config.py` | Cached `Settings` (pydantic-settings), all environment variables |
-| `db.py` | Connection pool and dependency helpers |
+| `db.py` | Connection pool, `get_conn()`, and `connect(db_url)` for standalone use |
+| `web.py` | HTTP helpers shared by routers: client IP, `429` responses |
 | `memory_trim.py` | `gc.collect()` + `malloc_trim(0)` anti-creep helper, called at the end of heavy request paths |
 | `migrate.py` | Alembic programmatic runner |
+| `catalog_repo.py` | Product schema, row → storefront JSON mapping, product/facet reads (the only place that knows the `products` columns) |
 | `search.py` | BM25 index, multilingual embeddings, RRF, ID→EN query rewrite |
+| `retrieval.py` | Filter → lexical → dense → fusion pipeline shared by `/search` and the `search_catalog` tool |
+| `analytics.py` | KPI SQL shared by `/events/summary` and `/admin/kpi` (search health, copilot quality, unit economics, cohorts) |
 | `sizing.py` | Category → size-kind resolution and deterministic size advice, served through the `recommend_size` tool |
 | `reranker.py` | Optional cross-encoder stage-2 reranker |
 | `schemas.py` | Pydantic request/response contracts |
-| `agent_tools.py` | Copilot-facing catalog search and sizing adapters |
-| `copilot_agent.py` | LangGraph state machine, prompt, turn recording |
+| `agent_tools.py` | Copilot-facing catalog search, product details, store-policy RAG and sizing adapters |
+| `copilot_agent.py` | Graph assembly (`build_agent`) and the turn entry points (`run_turn`, `resume_turn`, `stream_turn`) |
+| `copilot_prompts.py` | System prompt and every shopper-facing string |
+| `copilot_state.py` | Graph state schema and the no-provider fallback model |
+| `copilot_context.py` | `<store_context>` block (page product, registry, browsing) and input sanitizing |
+| `copilot_middleware.py` | The six graph hooks: guardrail, registry, context, history trim, turn carry, loop cap |
+| `copilot_turn.py` | Per-turn token/time accounting, telemetry, approval pause, response shaping |
 | `copilot_llm.py` | Provider chain (OpenRouter → generic fallback → Gemini) |
 | `copilot_memory.py` | `PostgresSaver` checkpointer and thread TTL cleanup |
-| `copilot_tools.py` | Seven deterministic LangChain tools |
+| `copilot_tools.py` | Seven deterministic LangChain tools and the per-turn `ToolContext` |
 | `copilot_metrics.py` | Token/cost estimation and turn telemetry |
 | `guardrail.py` | Regex + LLM classification: greeting, off-topic, injection, on-topic |
 | `knowledge_seed.py` | Knowledge chunking, hypothetical questions, embedding cache, seeding |
 | `rate_limiter.py` | Per-IP copilot limits and write limits |
-| `routers/` | HTTP endpoints grouped by domain |
+| `routers/` | HTTP endpoints grouped by domain; `ROUTERS` there is the registration order |
 
 ---
 

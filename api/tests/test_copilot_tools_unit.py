@@ -241,7 +241,7 @@ class TestSqlAndPoolHardening:
     def test_catalog_categories_uses_ttl_cache(self, monkeypatch):
         import contextlib
 
-        import copilot_agent
+        import catalog_repo
 
         calls = []
 
@@ -263,13 +263,13 @@ class TestSqlAndPoolHardening:
                 return _FakeCur()
 
         @contextlib.contextmanager
-        def _fake_connect(_url):
+        def _fake_get_conn():
             yield _FakeConn()
 
-        copilot_agent._CATEGORIES_CACHE.clear()
-        monkeypatch.setattr(copilot_agent, "_connect", _fake_connect)
-        c1 = copilot_agent._catalog_categories("postgresql://cache-test")
-        c2 = copilot_agent._catalog_categories("postgresql://cache-test")
+        catalog_repo.invalidate_cache()
+        monkeypatch.setattr(catalog_repo, "get_conn", _fake_get_conn)
+        c1 = catalog_repo.category_names()
+        c2 = catalog_repo.category_names()
         assert c1 == ["Pants", "Shirts"]
         assert c2 == ["Pants", "Shirts"]
         assert len(calls) == 1

@@ -481,20 +481,22 @@ class _FakeIndex:
 @pytest.mark.parametrize("mode", ["dense", "hybrid"])
 def test_search_endpoint_falls_back_to_bm25_when_dense_disabled(monkeypatch, mode):
     """With ENABLE_DENSE_SEARCH=false, /search still answers from the BM25 index."""
+    import catalog_repo
+    import retrieval
     import routers.search as search_router
     from fastapi import FastAPI
     from fastapi.testclient import TestClient
 
     monkeypatch.setattr(search_router, "get_settings", lambda: _settings_with_dense(False))
     fake_index = _FakeIndex()
-    monkeypatch.setattr(search_router, "get_index", lambda builder=None: fake_index)
+    monkeypatch.setattr(retrieval, "get_index", lambda builder=None: fake_index)
     monkeypatch.setattr(search_router, "get_conn", lambda: _FakeConn())
-    monkeypatch.setattr(search_router, "row_to_product", lambda row: {"id": row[0]})
+    monkeypatch.setattr(catalog_repo, "product_from_row", lambda row: {"id": row[0]})
 
     def _must_not_embed(*args, **kwargs):
         raise AssertionError("embed_query() must not run when ENABLE_DENSE_SEARCH=false")
 
-    monkeypatch.setattr(search_router, "embed_query", _must_not_embed)
+    monkeypatch.setattr(retrieval, "embed_query", _must_not_embed)
 
     app = FastAPI()
     app.include_router(search_router.router)

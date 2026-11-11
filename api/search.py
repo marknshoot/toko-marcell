@@ -316,27 +316,9 @@ _INDEX_LOCK = threading.Lock()
 
 def build_search_index(db_url: str | None = None) -> BM25Index:
     """Read the catalog from PostgreSQL and build the in-process BM25 index."""
-    import contextlib
+    from db import connect
 
-    import psycopg
-
-    def _conn_cm():
-        if not db_url:
-            try:
-                from db import get_conn
-                return get_conn()
-            except Exception:
-                pass
-        url = db_url
-        if not url:
-            try:
-                from config import get_settings
-                url = get_settings().DATABASE_URL
-            except Exception:
-                url = os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
-        return contextlib.contextmanager(lambda: (yield psycopg.connect(url)))()
-
-    with _conn_cm() as conn:
+    with connect(db_url) as conn:
         with conn.cursor() as cur:
             cur.execute(
                 """

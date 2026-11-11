@@ -160,7 +160,7 @@ zero_result_rate = COUNT(search events WHERE results_count = 0)
 **Source:** `events` (`event_type='search'`, `results_count`), written by the catalog after a search
 response in [`shop/src/components/Catalog.js`](../shop/src/components/Catalog.js); aggregated in
 [`api/routers/events.py`](../api/routers/events.py) and
-[`api/routers/search.py`](../api/routers/search.py). `GET /search/insights` also returns the top 20
+[`api/analytics.py`](../api/analytics.py). `GET /search/insights` also returns the top 20
 zero-result queries and the top 20 queries with a `zero_result` flag. `GET /search` now retries an
 empty result set once with the deterministic ID→EN query rewriter in
 [`api/search.py`](../api/search.py).
@@ -197,7 +197,7 @@ search_to_pdp = |sessions(event_type='search') ∩ sessions(event_type='view_pro
 
 **Source:** `events` (distinct `session_id` intersection), implemented in
 [`api/routers/events.py`](../api/routers/events.py) and
-[`api/routers/search.py`](../api/routers/search.py); served by both endpoints.
+[`api/analytics.py`](../api/analytics.py); served by both endpoints.
 
 **Caveats:**
 

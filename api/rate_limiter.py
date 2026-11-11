@@ -5,28 +5,12 @@ Two windows per client IP for copilot: per-minute and per-day, configurable via
 env / Settings. Includes automatic bucket pruning so memory stays bounded.
 """
 
-import os
 import threading
 import time
 
+from config import get_settings
+
 MAX_TRACKED_KEYS = 1000
-
-
-def _env_int(key: str, default: int) -> int:
-    raw = os.environ.get(key, "")
-    if raw:
-        try:
-            return int(raw)
-        except (ValueError, TypeError):
-            pass
-    try:
-        from config import get_settings
-        val = getattr(get_settings(), key, None)
-        if val is not None:
-            return int(val)
-    except Exception:
-        pass
-    return default
 
 
 class SlidingWindowLimiter:
@@ -56,6 +40,16 @@ class SlidingWindowLimiter:
 
         Returns (allowed, remaining, retry_after_seconds).
         """
+        allowed, remaining, retry_after, _ = self.admit(key)
+        return allowed, remaining, retry_after
+
+    def admit(self, key: str) -> tuple[bool, int, int, float | None]:
+        """Like ``is_allowed``, plus the timestamp recorded for an admitted request.
+
+        The timestamp lets a caller undo *its own* admission when a second
+        limiter rejects the same request (see ``release``), without reading or
+        locking this limiter's internals.
+        """
         now = time.time()
         cutoff = now - self.window
         with self._lock:
@@ -72,10 +66,10 @@ class SlidingWindowLimiter:
             if timestamps is not None and len(timestamps) >= self.limit:
                 oldest = timestamps[0] if timestamps else now
                 retry_after = int(oldest + self.window - now) + 1
-                return False, 0, max(retry_after, 1)
+                return False, 0, max(retry_after, 1), None
 
             if self.limit <= 0:
-                return False, 0, self.window
+                return False, 0, self.window, None
 
             if timestamps is None:
                 timestamps = [now]
@@ -83,7 +77,19 @@ class SlidingWindowLimiter:
             else:
                 timestamps.append(now)
             remaining = self.limit - len(timestamps)
-            return True, remaining, 0
+            return True, remaining, 0, now
+
+    def release(self, key: str, admitted_at: float | None) -> None:
+        """Undo one admission made at ``admitted_at`` (no-op if it is already gone)."""
+        if admitted_at is None:
+            return
+        with self._lock:
+            timestamps = self._buckets.get(key)
+            if not timestamps or timestamps[-1] != admitted_at:
+                return
+            timestamps.pop()
+            if not timestamps:
+                del self._buckets[key]
 
 
 # Global limiters — created lazily, reading env / Settings.
@@ -97,16 +103,17 @@ def _ensure_limiters() -> tuple[SlidingWindowLimiter, SlidingWindowLimiter]:
     global _minute_limiter, _day_limiter
     if _minute_limiter is not None and _day_limiter is not None:
         return _minute_limiter, _day_limiter
+    settings = get_settings()
     with _init_lock:
         if _minute_limiter is None:
             _minute_limiter = SlidingWindowLimiter(
                 window_seconds=60,
-                max_requests=_env_int("COPILOT_RATE_LIMIT_PER_MIN", 10),
+                max_requests=settings.COPILOT_RATE_LIMIT_PER_MIN,
             )
         if _day_limiter is None:
             _day_limiter = SlidingWindowLimiter(
                 window_seconds=86400,
-                max_requests=_env_int("COPILOT_RATE_LIMIT_PER_DAY", 100),
+                max_requests=settings.COPILOT_RATE_LIMIT_PER_DAY,
             )
         return _minute_limiter, _day_limiter
 
@@ -119,7 +126,7 @@ def _ensure_write_limiter() -> SlidingWindowLimiter:
         if _write_limiter is None:
             _write_limiter = SlidingWindowLimiter(
                 window_seconds=60,
-                max_requests=_env_int("WRITE_RATE_LIMIT_PER_MIN", 120),
+                max_requests=get_settings().WRITE_RATE_LIMIT_PER_MIN,
             )
         return _write_limiter
 
@@ -140,19 +147,14 @@ def check_copilot_rate_limit(client_ip: str) -> tuple[bool, int, str]:
     """
     minute_lim, day_lim = _ensure_limiters()
 
-    allowed_min, _, retry_min = minute_lim.is_allowed(client_ip)
-    if not allowed_min:
-        return False, retry_min, "per_minute"
+    allowed_minute, _, retry_minute, admitted_at = minute_lim.admit(client_ip)
+    if not allowed_minute:
+        return False, retry_minute, "per_minute"
 
     allowed_day, _, retry_day = day_lim.is_allowed(client_ip)
     if not allowed_day:
-        now = time.time()
-        with minute_lim._lock:
-            ts = minute_lim._buckets.get(client_ip)
-            if ts and abs(ts[-1] - now) < 0.1:
-                ts.pop()
-                if not ts:
-                    del minute_lim._buckets[client_ip]
+        # The day window rejected the request: give back the minute slot it used.
+        minute_lim.release(client_ip, admitted_at)
         return False, retry_day, "per_day"
 
     return True, 0, ""

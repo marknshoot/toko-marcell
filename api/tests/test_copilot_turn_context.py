@@ -10,6 +10,7 @@ API_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API_DIR))
 
 import copilot_agent
+import copilot_context
 import psycopg
 import pytest
 from copilot_agent import ADMIN_SYSTEM_PROMPT, build_context_block
@@ -81,9 +82,9 @@ def _setup(monkeypatch, ctx, replies):
 
 
 def _count_connects(monkeypatch) -> list[str]:
-    """Count database connections opened through copilot_agent._connect."""
+    """Count database connections opened through copilot_context._connect."""
     opened: list[str] = []
-    real = copilot_agent._connect
+    real = copilot_context._connect
 
     @contextlib.contextmanager
     def counting(db_url):
@@ -91,7 +92,7 @@ def _count_connects(monkeypatch) -> list[str]:
         with real(db_url) as conn:
             yield conn
 
-    monkeypatch.setattr(copilot_agent, "_connect", counting)
+    monkeypatch.setattr(copilot_context, "_connect", counting)
     return opened
 
 

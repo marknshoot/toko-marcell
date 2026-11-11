@@ -35,13 +35,13 @@ def test_diagram_shows_the_structure_the_docs_describe():
 def test_diagram_generation_needs_no_database():
     """It runs in CI and on a laptop without Postgres, so it must not open a connection."""
     dump_graph = _load_dump_graph()
-    import copilot_agent
+    import catalog_repo
 
     opened = []
-    real = copilot_agent._connect
-    copilot_agent._connect = lambda *a, **k: opened.append(1) or real(*a, **k)
+    real = catalog_repo.get_conn
+    catalog_repo.get_conn = lambda *a, **k: opened.append(1) or real(*a, **k)
     try:
         dump_graph.render()
     finally:
-        copilot_agent._connect = real
+        catalog_repo.get_conn = real
     assert opened == []

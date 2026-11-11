@@ -17,7 +17,7 @@ from auth import (
 from config import get_settings
 from db import get_conn
 from fastapi import APIRouter, Body, Depends, HTTPException, Request, Response, status
-from pydantic import BaseModel
+from schemas import LoginRequest, RefreshRequest
 
 logger = logging.getLogger(__name__)
 
@@ -29,15 +29,6 @@ REFRESH_COOKIE = "refresh_token"
 # request path is /api/auth/refresh. A "/auth" path never matches that and the
 # browser would silently drop the cookie, ending the session after 15 minutes.
 REFRESH_COOKIE_PATH = "/"
-
-
-class LoginRequest(BaseModel):
-    username: str
-    password: str
-
-
-class RefreshRequest(BaseModel):
-    refresh_token: str | None = None
 
 
 def _is_https(request: Request) -> bool:

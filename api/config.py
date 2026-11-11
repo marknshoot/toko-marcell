@@ -96,6 +96,7 @@ class Settings(BaseSettings):
     # ── Rate limiting ───────────────────────────────────────────────────────
     COPILOT_RATE_LIMIT_PER_MIN: int = 10
     COPILOT_RATE_LIMIT_PER_DAY: int = 100
+    WRITE_RATE_LIMIT_PER_MIN: int = 120
 
     # ── Logging ─────────────────────────────────────────────────────────────
     LOG_LEVEL: str = "INFO"

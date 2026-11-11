@@ -388,5 +388,6 @@ if __name__ == "__main__":
     if "--write-cache" in sys.argv:
         write_seed_cache()
 
-    db_url = os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
-    seed_knowledge(db_url, force_reload=True)
+    from config import get_settings
+
+    seed_knowledge(get_settings().DATABASE_URL, force_reload=True)

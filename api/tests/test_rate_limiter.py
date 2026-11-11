@@ -53,7 +53,21 @@ def test_sliding_window_sweeps_expired_buckets():
 
 
 def test_write_rate_limit_enforces_cap(monkeypatch):
-    monkeypatch.setenv("WRITE_RATE_LIMIT_PER_MIN", "2")
+    # Settings are read once at startup, so the test patches the settings object
+    # the limiter reads instead of relying on a runtime env change.
+    from types import SimpleNamespace
+
+    import rate_limiter
+
+    monkeypatch.setattr(
+        rate_limiter,
+        "get_settings",
+        lambda: SimpleNamespace(
+            WRITE_RATE_LIMIT_PER_MIN=2,
+            COPILOT_RATE_LIMIT_PER_MIN=10,
+            COPILOT_RATE_LIMIT_PER_DAY=100,
+        ),
+    )
     reset_limiters()
     try:
         assert check_write_rate_limit("writer-ip")[0] is True

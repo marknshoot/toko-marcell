@@ -17,6 +17,7 @@ sys.path.insert(0, str(API_DIR))
 import copilot_agent
 import copilot_llm
 import copilot_memory
+import copilot_middleware
 import guardrail
 import psycopg
 import pytest
@@ -138,7 +139,7 @@ def test_classifier_sees_the_previous_turns_from_the_thread(saver, monkeypatch):
         seen.append(list(history or []))
         return real_classify(message, history=history, **kwargs)
 
-    monkeypatch.setattr(copilot_agent, "classify", spy)
+    monkeypatch.setattr(copilot_middleware, "classify", spy)
     _scripted(monkeypatch, [AIMessage(content="Ini pilihan celana kak.")], [AIMessage(content="Siap kak.")])
 
     thread_id = _thread_id()
@@ -169,7 +170,7 @@ def test_explicit_history_without_a_checkpointer_reaches_the_classifier(monkeypa
         seen.append(list(history or []))
         return real_classify(message, history=history, **kwargs)
 
-    monkeypatch.setattr(copilot_agent, "classify", spy)
+    monkeypatch.setattr(copilot_middleware, "classify", spy)
     history = [{"role": "user", "content": "ada kemeja?"}, {"role": "assistant", "content": "Ada kak."}]
     asyncio.run(copilot_agent.run_turn("yang putih ada?", db_url=DB_URL, fake=True, history=history))
 
@@ -206,13 +207,13 @@ def test_classifier_and_agent_calls_both_count(migrated_db, monkeypatch):
 
 def test_a_greeting_does_not_read_the_checkpoint_for_the_registry(saver, monkeypatch):
     reads: list[str] = []
-    real_seed = copilot_agent._seed_registry_from_checkpoint
+    real_seed = copilot_middleware._seed_registry_from_checkpoint
 
     def counting_seed(ctx, checkpointer, thread_id):
         reads.append(thread_id)
         return real_seed(ctx, checkpointer, thread_id)
 
-    monkeypatch.setattr(copilot_agent, "_seed_registry_from_checkpoint", counting_seed)
+    monkeypatch.setattr(copilot_middleware, "_seed_registry_from_checkpoint", counting_seed)
     thread_id = _thread_id()
     try:
         asyncio.run(

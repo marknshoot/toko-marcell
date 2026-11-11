@@ -8,6 +8,7 @@ and configuration in ``config.py``.
 Startup: ``uvicorn main:app --host 0.0.0.0 --port 8000``
 """
 
+import asyncio
 import logging
 import secrets
 import time
@@ -20,6 +21,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from logging_config import setup_logging
 from logging_context import ctx_request_id, ctx_span_id, ctx_trace_id
 from migrate import run_migrations
+from routers import ROUTERS
 
 logger = logging.getLogger(__name__)
 
@@ -53,8 +55,6 @@ async def lifespan(app: FastAPI):
     # Copilot thread TTL cleanup: once on startup, then daily in the background.
     cleanup_task = None
     try:
-        import asyncio
-
         from copilot_memory import cleanup_expired_threads, ensure_activity_table
 
         ensure_activity_table()
@@ -201,15 +201,5 @@ async def request_context_middleware(request: Request, call_next):
 
 # ── Include routers ──────────────────────────────────────────────────────────
 
-from routers import admin, auth, catalog, checkout, copilot, events, health, recs, reviews, search  # noqa: E402
-
-app.include_router(health.router)
-app.include_router(auth.router)
-app.include_router(admin.router)
-app.include_router(catalog.router)
-app.include_router(search.router)
-app.include_router(recs.router)
-app.include_router(reviews.router)
-app.include_router(events.router)
-app.include_router(checkout.router)
-app.include_router(copilot.router)
+for router in ROUTERS:
+    app.include_router(router)

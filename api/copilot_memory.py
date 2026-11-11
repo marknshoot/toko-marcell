@@ -17,8 +17,8 @@ copilot_agent when a checkpointer is present).
 import logging
 import threading
 
-from agent_tools import _connect
 from config import get_settings
+from db import connect as _connect
 
 logger = logging.getLogger(__name__)
 

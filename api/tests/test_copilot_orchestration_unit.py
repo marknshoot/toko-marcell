@@ -10,6 +10,7 @@ API_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API_DIR))
 
 import copilot_agent
+import copilot_middleware
 import guardrail
 from fastapi.testclient import TestClient
 from main import app
@@ -70,7 +71,7 @@ def test_run_turn_classifies_off_the_event_loop(monkeypatch):
         seen["off_loop"] = threading.current_thread() is not loop_thread["id"]
         return ("greeting", "halo")
 
-    monkeypatch.setattr(copilot_agent, "classify", spy_classify)
+    monkeypatch.setattr(copilot_middleware, "classify", spy_classify)
 
     async def go():
         loop_thread["id"] = threading.current_thread()

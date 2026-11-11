@@ -176,3 +176,16 @@ class CopilotThreadMessageV2(BaseModel):
 class CopilotThreadV2Out(BaseModel):
     thread_id: str
     messages: list[CopilotThreadMessageV2] = Field(default_factory=list)
+
+
+# ── Admin auth ───────────────────────────────────────────────────────────────
+
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+
+class RefreshRequest(BaseModel):
+    """A refresh token may travel in the body for non-browser clients."""
+
+    refresh_token: str | None = None

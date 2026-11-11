@@ -165,7 +165,7 @@ class ToolContext:
         return str(token)
 
 
-def _slim(product: dict) -> dict:
+def slim_product(product: dict) -> dict:
     """Compact product projection for registry + response cards."""
     return {
         "id": product.get("id"),
@@ -183,6 +183,10 @@ def _slim(product: dict) -> dict:
 
 # Real catalog category enum is injected into the tool description at build time
 # (design §5: category = enum of real catalog categories).
+
+# Historical name kept as an alias (pipelines/tests may import it).
+_slim = slim_product
+
 
 def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
     """Construct the per-request LangChain tools bound to *ctx*."""
@@ -254,8 +258,8 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
         )
         out = []
         for p in results:
-            ref = ctx.register(_slim(p))
-            out.append({"ref": ref, **_slim(p)})
+            ref = ctx.register(slim_product(p))
+            out.append({"ref": ref, **slim_product(p)})
         return out
 
     @tool
@@ -284,7 +288,7 @@ def build_tools(ctx: ToolContext, category_enum: list[str] | None = None):
             if hits:
                 res = agent_tools.get_product_details(hits[0]["asin"], db_url=ctx.db_url)
         if isinstance(res, dict) and res.get("asin"):
-            ref = ctx.register(_slim(res))
+            ref = ctx.register(slim_product(res))
             res["ref"] = ref
         return res
 
@@ -530,8 +534,8 @@ def _build_outfit_impl(ctx: ToolContext, query: str, budget_idr: int, department
                 pick = h
                 break
         if pick:
-            ref = ctx.register(_slim(pick))
-            chosen[slot] = {"ref": ref, **_slim(pick)}
+            ref = ctx.register(slim_product(pick))
+            chosen[slot] = {"ref": ref, **slim_product(pick)}
             total += pick.get("priceIdr") or 0
 
     within = total <= budget_idr and len(chosen) >= 2

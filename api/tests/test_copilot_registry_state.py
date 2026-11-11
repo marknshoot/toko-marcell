@@ -10,6 +10,7 @@ API_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(API_DIR))
 
 import copilot_agent
+import copilot_middleware
 from copilot_llm import fake_tool_calling_model
 from copilot_tools import MAX_REGISTRY, ToolContext
 from langchain.agents import create_agent
@@ -102,9 +103,9 @@ def test_registry_is_saved_in_the_state_after_a_turn(monkeypatch):
 def test_next_turn_restores_the_registry_without_replaying_the_thread(monkeypatch):
     saver = InMemorySaver()
     replays: list[str | None] = []
-    real_replay = copilot_agent._seed_registry_from_checkpoint
+    real_replay = copilot_middleware._seed_registry_from_checkpoint
     monkeypatch.setattr(
-        copilot_agent,
+        copilot_middleware,
         "_seed_registry_from_checkpoint",
         lambda ctx, cp, tid: (replays.append(tid), real_replay(ctx, cp, tid))[1],
     )
@@ -185,7 +186,7 @@ def test_a_legacy_thread_is_replayed_once_and_then_saved(monkeypatch):
 
 def test_a_brand_new_thread_does_not_read_the_checkpoint(monkeypatch):
     reads: list[str | None] = []
-    monkeypatch.setattr(copilot_agent, "_seed_registry_from_checkpoint", lambda ctx, cp, tid: reads.append(tid))
+    monkeypatch.setattr(copilot_middleware, "_seed_registry_from_checkpoint", lambda ctx, cp, tid: reads.append(tid))
     ctx = ToolContext(db_url=DB_URL)
     agent = _agent_with_registering_tool(
         monkeypatch, ctx, InMemorySaver(), f"new-{uuid.uuid4().hex[:6]}", [[AIMessage(content="Halo.")]]

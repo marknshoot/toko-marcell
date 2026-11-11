@@ -5,29 +5,21 @@ All tools access authoritative database tables (products, store_knowledge)
 with zero hallucination, strict price handling (IDR), and robust error handling.
 
 Tools accept an optional ``db_url`` parameter for standalone use (pipeline tests);
-when called from within the server process, ``db.get_conn()`` uses the pool.
+``db.connect`` uses the pool when the URL is the configured one and a one-shot
+connection otherwise.
 """
 
 import logging
-import os
 import re
 import threading
 import time
 from collections import OrderedDict
 from typing import Any
 
-import psycopg
-from psycopg import sql
-from reranker import rerank
-from routers.catalog import PRODUCT_COLUMNS as PRODUCT_COLS
-from routers.catalog import row_to_product as _row_to_dict
-from search import (
-    embed_query,
-    get_index,
-    reciprocal_rank_fusion,
-    rewrite_id_to_en,
-    tokenize,
-)
+import catalog_repo
+import retrieval
+from db import connect as _connect
+from search import embed_query, reciprocal_rank_fusion, rewrite_id_to_en
 
 logger = logging.getLogger(__name__)
 
@@ -76,29 +68,6 @@ def _policy_cache_set(key: tuple[str, int], results: list[dict[str, Any]]) -> No
             _policy_cache.popitem(last=False)
 
 
-def _default_db_url() -> str:
-    try:
-        from config import get_settings
-        return get_settings().DATABASE_URL
-    except Exception:
-        return os.environ.get("DATABASE_URL", "postgresql://toko:toko@localhost:5432/toko")
-
-
-def _connect(db_url: str | None):
-    """Get a connection: use pool when available, direct connect otherwise."""
-    try:
-        import contextlib
-
-        from db import get_conn
-        # If db_url is custom (not the default), don't use pool
-        if db_url and db_url != _default_db_url():
-            return contextlib.contextmanager(lambda: (yield psycopg.connect(db_url)))()
-        return get_conn()
-    except Exception:
-        url = db_url or _default_db_url()
-        return psycopg.connect(url)
-
-
 def _search_catalog_once(
     query: str,
     category: str | None = None,
@@ -108,85 +77,32 @@ def _search_catalog_once(
     db_url: str | None = None,
 ) -> list[dict[str, Any]]:
     """One hybrid BM25 + pgvector search, optionally reranked."""
-    clean_tokens = tokenize(query)
-    if not clean_tokens:
-        return []
-
-    filters, params = [], []
-    if department and department != "All":
-        filters.append("department = %s")
-        params.append(department)
-    if category:
-        escaped_cat = category.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-        filters.append("category ILIKE %s ESCAPE '\\'")
-        params.append(f"%{escaped_cat}%")
-    if price_max and price_max > 0:
-        filters.append("price_idr <= %s")
-        params.append(price_max)
-
-    candidate_ids: list[int] = []
+    filters = retrieval.ProductFilters(
+        department=department,
+        category=category,
+        price_max=price_max,
+        # The model may pass a partial category ("Dresses" vs "Dresses & Gowns"),
+        # so the tool keeps its substring match.
+        category_match="contains",
+    )
+    options = retrieval.RankOptions(
+        mode="hybrid",
+        lexical_limit=40,
+        dense_limit=40,
+        fusion_limit=20,
+        dedupe=False,
+    )
     with _connect(db_url) as conn:
         with conn.cursor() as cur:
-            allowed_ids = None
-            if filters:
-                cur.execute(
-                    f"SELECT id FROM products WHERE {' AND '.join(filters)}",
-                    params,
-                )
-                allowed_ids = {row[0] for row in cur.fetchall()}
-                if not allowed_ids:
-                    return []
-
-            bm25_index = get_index()
-            bm25_ranked = bm25_index.rank(query, allowed=allowed_ids, dedupe=False)
-
-            vector_ranked = []
-            q_vec = embed_query(query)
-            if q_vec is not None:
-                try:
-                    from config import get_settings
-                    embed_col = get_settings().TEXT_EMBED_COLUMN
-                except Exception:
-                    embed_col = os.environ.get("TEXT_EMBED_COLUMN", "embedding_ml")
-                vec_str = "[" + ",".join(f"{x:.6f}" for x in q_vec) + "]"
-                vec_where: list[sql.Composable] = [
-                    sql.SQL("{} IS NOT NULL").format(sql.Identifier(embed_col)),
-                    *(sql.SQL(f) for f in filters),
-                ]
-                vec_params: list[Any] = [vec_str, *params, vec_str]
-
-                cur.execute(
-                    sql.SQL(
-                        "SELECT id, 1 - ({col} <=> %s::vector) AS similarity"
-                        " FROM products WHERE "
-                    ).format(col=sql.Identifier(embed_col))
-                    + sql.SQL(" AND ").join(vec_where)
-                    + sql.SQL(" ORDER BY {col} <=> %s::vector ASC LIMIT 40").format(
-                        col=sql.Identifier(embed_col)
-                    ),
-                    vec_params,
-                )
-                vector_ranked = [(row[0], float(row[1])) for row in cur.fetchall()]
-
-            if bm25_ranked and vector_ranked:
-                fused = reciprocal_rank_fusion([bm25_ranked[:40], vector_ranked[:40]], k=60)
-                candidate_ids = [doc_id for doc_id, _ in fused[:20]]
-            elif vector_ranked:
-                candidate_ids = [doc_id for doc_id, _ in vector_ranked[:20]]
-            elif bm25_ranked:
-                candidate_ids = [doc_id for doc_id, _ in bm25_ranked[:20]]
-            else:
-                return []
-
-            cur.execute(
-                f"SELECT {PRODUCT_COLS} FROM products WHERE id = ANY(%s)",
-                (candidate_ids,),
+            return retrieval.search_products(
+                cur,
+                query,
+                filters=filters,
+                options=options,
+                rerank=True,
+                rerank_window=20,
+                limit=limit,
             )
-            by_id = {r[0]: _row_to_dict(r) for r in cur.fetchall()}
-
-    candidates = [by_id[cid] for cid in candidate_ids if cid in by_id]
-    reranked = rerank(query=query, candidates=candidates, text_key="title", limit=limit)
-    return reranked
 
 
 def search_catalog(
@@ -231,14 +147,10 @@ def get_product_details(asin_or_id: str | int, db_url: str | None = None) -> dic
     """Retrieve full catalog specifications by ASIN or product ID."""
     with _connect(db_url) as conn:
         with conn.cursor() as cur:
-            if isinstance(asin_or_id, int) or (isinstance(asin_or_id, str) and asin_or_id.isdigit()):
-                cur.execute(f"SELECT {PRODUCT_COLS} FROM products WHERE id = %s", (int(asin_or_id),))
-            else:
-                cur.execute(f"SELECT {PRODUCT_COLS} FROM products WHERE asin = %s", (str(asin_or_id),))
-            row = cur.fetchone()
-            if not row:
-                return {"error": f"Product '{asin_or_id}' not found in catalog."}
-            return _row_to_dict(row)
+            product = catalog_repo.fetch_by_id_or_asin(cur, asin_or_id)
+    if product is None:
+        return {"error": f"Product '{asin_or_id}' not found in catalog."}
+    return product
 
 
 _POLICY_STOPWORDS = frozenset(
@@ -411,17 +323,6 @@ def _lookup_store_policy_uncached(
 # Sizing recommender (design §3 — 3 layers, never a certainty)
 # ---------------------------------------------------------------------------
 
-def _infer_garment_kind(
-    department: str | None,
-    category: str | None,
-    title: str | None = None,
-) -> str:
-    """Return the explicit category-aware size kind (never a tops default)."""
-    from sizing import size_kind_for
-
-    return size_kind_for(department, category, title)
-
-
 def recommend_size(
     height_cm: float | None = None,
     weight_kg: float | None = None,
@@ -452,14 +353,13 @@ def recommend_size(
     if asin:
         with _connect(db_url) as conn:
             with conn.cursor() as cur:
-                cur.execute(
-                    "SELECT asin, title, brand, department, category FROM products WHERE asin = %s",
-                    (str(asin),),
-                )
-                row = cur.fetchone()
-                if not row:
-                    return {"error": f"Produk dengan ASIN {asin} tidak ditemukan."}
-                matched_title, product_brand, product_department, product_category = row[1], row[2], row[3], row[4]
+                product = catalog_repo.fetch_by_asin(cur, str(asin))
+        if product is None:
+            return {"error": f"Produk dengan ASIN {asin} tidak ditemukan."}
+        matched_title = product["title"]
+        product_brand = product["brand"]
+        product_department = product["department"]
+        product_category = product["category"]
     else:
         matched_title = product_brand = product_department = product_category = None
 
